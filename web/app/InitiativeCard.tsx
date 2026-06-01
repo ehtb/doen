@@ -1,15 +1,16 @@
 import Link from "next/link";
-import { ArrowRight, Check, GitBranch } from "lucide-react";
+import { ArrowRight, Check, GitBranch, ClipboardCheck } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { Initiative, InitiativeAttention } from "@/lib/types";
 
-// The three inferred lifecycle states (0011), in order — Draft -> Building -> Complete.
-export const STATES = ["draft", "building", "complete"];
+// Active states (draft/building/learning) + terminal state (complete). BD-7: learning is active.
+export const STATES = ["draft", "building", "learning", "complete"];
 
 const STATE_STYLE: Record<string, string> = {
   draft: "text-ink-soft",
   building: "text-accent-deep",
+  learning: "text-accent-deep",
   complete: "text-confirmed-foreground",
 };
 
@@ -74,7 +75,7 @@ export function InitiativeCard({
   href?: string;
 }) {
   const total = attention
-    ? attention.proposed_items + attention.open_decisions
+    ? attention.proposed_items + attention.open_decisions + (attention.criteria_to_verify ?? 0)
     : 0;
   return (
     <Link
@@ -112,6 +113,12 @@ export function InitiativeCard({
                 icon={GitBranch}
                 n={attention.open_decisions}
                 label="to decide"
+                urgent
+              />
+              <AttentionChip
+                icon={ClipboardCheck}
+                n={attention.criteria_to_verify ?? 0}
+                label="to verify"
                 urgent
               />
               <AttentionChip icon={Check} n={attention.proposed_items} label="to confirm" />

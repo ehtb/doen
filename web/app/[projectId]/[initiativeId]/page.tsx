@@ -12,10 +12,31 @@ import { SpecProvider } from "./spec-context";
 import SteeringRail from "./SteeringRail";
 const STATES = ["draft", "building", "learning", "complete"];
 
+const RAIL_INTRO: Record<string, string> = {
+  draft:
+    "Shape this spec with the Advisor — describe what you want to build, challenge what's here, ask it to propose constraints or acceptance criteria, or request a full first draft.",
+  building:
+    "Steer the build — ask whether something is in scope, question an implementation approach, check whether evidence covers a criterion, or ask the Advisor to flag risks.",
+  learning:
+    "Reflect on the build with the Advisor — what matched the spec, what surprised you, what to carry forward. It can help you draft the retrospective or surface patterns from past initiatives.",
+  complete:
+    "This initiative is closed. Ask the Advisor what was learned here and how those outcomes should inform the next piece of work.",
+};
+
+const RAIL_HINT: Record<string, string | undefined> = {
+  draft: "shape this initiative: [your idea]",
+  building: "is [X] covered by the acceptance criteria?",
+  learning: "draft the retrospective",
+  complete: undefined,
+};
+
 function StateStepper({ state }: { state: string }) {
   const current = Math.max(0, STATES.indexOf(state));
   return (
-    <nav aria-label="lifecycle" className="flex flex-wrap items-center gap-x-1 gap-y-2">
+    <nav
+      aria-label="lifecycle"
+      className="flex flex-wrap items-center gap-x-1 gap-y-2"
+    >
       {STATES.map((s, i) => {
         const done = i < current;
         const active = i === current;
@@ -70,7 +91,7 @@ export default async function SpecPage({
       {/* Doen -> Project -> this initiative; the persistent header renders the trail */}
       <SetBreadcrumb
         crumbs={[
-          { label: project?.name ?? projectId, href: `/projects/${projectId}` },
+          { label: project?.name ?? projectId, href: `/${projectId}` },
           { label: spec.short_id ?? spec.title },
         ]}
       />
@@ -82,7 +103,9 @@ export default async function SpecPage({
           <span className="flex items-center gap-2 font-mono text-[11px]">
             <span className="size-[7px] rounded-full bg-confirmed animate-live" />
             {spec.short_id && (
-              <span className="font-semibold tracking-wide text-accent-deep">{spec.short_id}</span>
+              <span className="font-semibold tracking-wide text-accent-deep">
+                {spec.short_id}
+              </span>
             )}
             <span className="text-ink-faint">{spec.initiative_id}</span>
           </span>
@@ -92,9 +115,9 @@ export default async function SpecPage({
         </h1>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3.5">
           <StateStepper state={spec.state} />
-          <span className="font-mono text-[10px] tracking-wide text-ink-faint lowercase">
+          {/* <span className="font-mono text-[10px] tracking-wide text-ink-faint lowercase">
             state follows the work — no manual advance
-          </span>
+          </span> */}
         </div>
       </header>
 
@@ -105,7 +128,9 @@ export default async function SpecPage({
         <div className="mt-7 flex flex-wrap items-start gap-7">
           <section className="min-w-80 flex-[1_1_560px]">
             <SpecDocument />
-            {(spec.state === "building" || spec.state === "learning" || spec.state === "complete") && (
+            {(spec.state === "building" ||
+              spec.state === "learning" ||
+              spec.state === "complete") && (
               <CriteriaVerification initiativeId={spec.initiative_id} />
             )}
             {(spec.state === "learning" || spec.state === "complete") && (
@@ -122,8 +147,8 @@ export default async function SpecPage({
               scope={{ initiativeId: spec.initiative_id }}
               advisorUrl={`/api/initiatives/${spec.initiative_id}/advisor`}
               mode={stateMode(spec.state)}
-              intro="Talk to the Advisor — it knows this spec, where it stands, and what past initiatives learned."
-              shapeHint={spec.state === "draft"}
+              intro={RAIL_INTRO[spec.state] ?? RAIL_INTRO.draft}
+              hintPrompt={RAIL_HINT[spec.state]}
               specId={spec.initiative_id}
               review={<GuidedReview />}
             />

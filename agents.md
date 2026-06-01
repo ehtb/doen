@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-05-30 after spec BD-14 -->
+<!-- last-reviewed: 2026-05-31 after spec BD-6 -->
 # Doen — Project Context for Claude Code
 
 > Read this first, every session. It is the constitution. A spec governs the work;
@@ -40,8 +40,9 @@ in @docs/design-principles.md.
    specs.
 5. **`version` is an optimistic lock.** Never bypass the stale-version check on write.
 6. **No estimation anywhere** — no story points, no hours, no velocity. Ever.
-7. **State is derived, not stored.** Initiative lifecycle (draft / building / complete) is
-   computed from work units + the learn record. There is no manual advance.
+7. **State is derived, not manually set.** Initiative lifecycle (draft / building / learning /
+   complete) is inferred from criteria verification status + the learn record, and stored by
+   the backend when either changes. There is no manual transition.
 8. **You never self-approve work.** Verification is queued for the human; only they issue a
    verdict. The same applies to confirming your own proposed unit.
 
@@ -58,11 +59,10 @@ in @docs/design-principles.md.
 - **Governing principle:** act within the constraints, decide freely within the discretion,
   **escalate everything else that is a product or intent call.** Do not guess on intent.
 - **Surfacing a decision:** when you hit a call outside constraints + discretion, call
-  `raise_decision` (optionally with `unit_id` to park the unit on it). Then STOP. Resolving an
-  intent question in code is the one unforgivable move.
-- **Self-verify before handing off.** Check each acceptance criterion explicitly and report
-  pass / fail / needs-judgment with evidence via `submit_for_verification`. The human judges
-  intent-alignment, not your diff line-by-line.
+  `raise_decision`. Then STOP. Resolving an intent question in code is the one unforgivable
+  move.
+- **Self-verify before handing off.** Check each acceptance criterion explicitly and submit
+  evidence via `submit_evidence`. The human judges intent-alignment, not your diff line-by-line.
 - **Small commits.** One work unit per commit; reference the unit in the message.
 
 ## Keeping these docs current
@@ -78,22 +78,25 @@ the codebase — and to surface proposed updates back to a human for confirmatio
 ## Current state — volatile; expect drift fastest here
 
 ### Lifecycle (initiative state)
-Three derived states, computed by `derive_state()` in `backend/app/models.py`:
-- **draft** — no units yet, or all units are still `proposed` / `ready`. The spec can still be
-  reshaped freely.
-- **building** — at least one unit is `in_progress`, `blocked_on_decision`, `in_verification`,
-  or `done`. Reshaping is constrained: you're past the bet.
-- **complete** — every unit is `done` AND a learn record exists. The flywheel can pull from it.
+Four states inferred from criteria verification status + the learn record by
+`SpecStore._recompute_state()` in `backend/app/store.py`, then stored on the initiative row
+and spec JSONB:
+- **draft** — no acceptance criteria, or no criterion has had evidence submitted yet. The spec
+  can still be reshaped freely.
+- **building** — at least one criterion has evidence submitted (`verification_status` is
+  `evidence_submitted`, `verified`, or `changes_requested`).
+- **learning** — every criterion is `verified` but no learn record exists yet. The spec is
+  frozen; the human writes the retrospective to close it.
+- **complete** — every criterion is `verified` AND a learn record exists. The flywheel can
+  pull from it.
 
-State is never stored — it is recomputed on every read. There is no manual transition.
+State is stored in the DB but never advanced by hand — it is recomputed whenever criteria or
+the learn record change.
 
-### MCP tool surface (13 tools in `backend/app/mcp_server.py`)
-- **Ground yourself:** `get_spec`, `get_conversation_summary`, `get_context`, `list_units`,
-  `get_guidance`
-- **Build the work:** `claim_unit`, `report_progress`, `submit_for_verification`,
-  `get_verification`
+### MCP tool surface (7 tools in `backend/app/mcp_server.py`)
+- **Ground yourself:** `get_spec`, `get_conversation_summary`, `get_context`
+- **Track criteria:** `submit_evidence`, `get_criteria_status`
 - **Escalate:** `raise_decision`, `resolve_decision`, `wait_for_decision`
-- **Decompose:** `propose_unit` — you propose; a human confirms (you cannot confirm your own).
 
 Full signatures and the operating loop are in `docs/spec-contract.md`.
 
@@ -108,13 +111,13 @@ doen/
 ├── backend/app/
 │   ├── main.py               # app factory: lifespan, exception handlers, routers
 │   ├── config.py / database.py   # settings; shared pool/redis + FastAPI deps
-│   ├── models.py             # domain models (the spec contract as Pydantic) + derive_state()
+│   ├── models.py             # domain models (the spec contract as Pydantic)
 │   ├── schemas.py            # API request/response models — separate from the domain
 │   ├── exceptions.py         # domain errors + the HTTP error-mapping handlers
 │   ├── store.py              # SpecStore — the only place that touches Postgres / Redis
 │   ├── services/             # business logic: shaping, authoring, conversation, learn, decisions
 │   ├── providers/            # external integrations: llm, embeddings (pluggable)
-│   ├── routers/              # thin APIRouters per domain (specs, units, decisions, projects,
+│   ├── routers/              # thin APIRouters per domain (specs, decisions, projects,
 │   │                         #   initiatives, conversation, learn, shaping)
 │   ├── mcp_server.py         # the executor-facing MCP tools (stdio)
 │   └── migrate.py / backfill_embeddings.py   # ops
@@ -126,8 +129,9 @@ doen/
   `archived_at` / `archived_reason` (soft delete).
 - `specs` — one JSONB document per initiative. Holds intent, constraints, discretion,
   acceptance, references, memory_links.
-- `work_units` — separate table. Status: `proposed` → `ready` → `in_progress` →
-  `in_verification` → `done` (or `blocked_on_decision`).
+- acceptance criteria — tracked as fields inside the `specs` JSONB document. Each criterion
+  carries `verification_status` (`pending` → `evidence_submitted` → `verified`), `evidence`,
+  `verdict`, and `feedback` directly on the criterion object. No separate table.
 - `decisions` — separate table, append-only.
 - conversation history — NOT a table (dropped in spec uvama). It lives in the browser's
   IndexedDB, keyed per initiative/project; the backend never reads or writes it. Each Advisor

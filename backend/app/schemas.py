@@ -67,6 +67,16 @@ class ProjectDashboard(BaseModel):
     initiatives: list[Initiative]
     open_decisions: int  # open escalations across every initiative in the project
     attention: dict[str, InitiativeAttention] = {}
+    onboarding_prompt: str = ""  # BD-9: the setup prompt from server config (empty = not set)
+
+
+# --- onboarding (BD-9) ---------------------------------------------------------------
+class OnboardingStatus(BaseModel):
+    """Returned by GET /projects/{id}/onboarding: whether the hint is dismissed and the
+    copyable prompt the executor should paste to trigger setup_project."""
+
+    dismissed: bool
+    prompt: str  # the setup prompt to copy into the executor
 
 
 # --- steering rail -------------------------------------------------------------------

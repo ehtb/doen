@@ -75,14 +75,16 @@ issuer, so self-hosters are never forced onto WorkOS. (Captured in specs/0007.)
 
 ## Lifecycle is inferred, not authored
 
-Initiatives have three states — **draft**, **building**, **complete** — and the state is
-*derived* from work units + the learn record on every read, never stored. A spec is `draft`
-until a unit moves past `ready`; `building` while any unit is in motion; `complete` when every
-unit is `done` AND the human has written a learn record. The reason: the human's job is
-intent, not status-keeping. A status field invites status games (drag from "todo" to "in
-progress" to feel productive); a derived state can't be gamed because it just reads the work.
-This also makes "what stage are we at?" deterministic — there is no race between the lifecycle
-column and reality.
+Initiatives have four states — **draft**, **building**, **learning**, **complete** — inferred
+from criteria verification status + the learn record by `SpecStore._recompute_state()` and
+stored in the DB when either changes. A spec is `draft` until any criterion receives evidence;
+`building` while criteria are being verified; `learning` once every criterion is verified but
+the learn record is not yet written; `complete` when every criterion is verified AND the human
+has written a learn record. The reason: the human's job is intent, not status-keeping. A
+status field invites status games (drag from "todo" to "in progress" to feel productive); a
+derived state can't be gamed because it just reads the work. State is stored so the project
+screen can group cheaply without recomputing every initiative on every render — storing the
+output of a pure derivation is a cache, not a source of truth.
 
 ## The Advisor — one voice, two rails
 
@@ -147,9 +149,11 @@ UI is intentionally crude and read-only). Realise it later, in its own UI spec.
 - **Redis as the sole durable store.** Tempting for speed, but it trades away the durable,
   queryable history that is the moat. Redis is the hot path; Postgres is the truth.
 - **A 7-stage manual lifecycle** (discover → shape → bet → decompose → implement → verify →
-  learn). Replaced in spec 0011 by the 3-state inferred model (draft / building / complete).
+  learn). Replaced in spec 0011 by a 3-state inferred model (draft / building / complete).
   The 7-stage model put the human in the role of status-keeper and invited drift between the
-  field and reality. The inferred model can't lie because it just reads the units.
+  field and reality. The inferred model can't lie because it just reads the work. BD-5 later
+  added a 4th state, `learning` (every criterion verified, learn record not yet written),
+  preserving the inferred principle while making the verification-vs-retrospective gap explicit.
 - **Conversation storage in the browser only.** First rejected (BD-14) for fear of losing
   cross-device continuity and the durable transcript — then **adopted** in spec uvama
   (Conversations Worth Having). The reversal: raw messages were pre-auth shared state with no
@@ -172,3 +176,10 @@ UI is intentionally crude and read-only). Realise it later, in its own UI spec.
 - **Self-confirming work units.** An executor proposing a unit and then immediately claiming
   it would collapse the human's role at decomposition. Confirmation is the human's signal
   that the decomposition matches their head; preserve it.
+- **Work units as the tracking primitive.** BD-5 replaced unit-level tracking (claim /
+  report_progress / submit_for_verification / get_verification per unit) with criteria-level
+  tracking (submit_evidence against acceptance criteria, human verdict per criterion). The unit
+  model added indirection between "what was built" and "does it satisfy the spec" — criteria
+  are the actual acceptance gate, so tracking belongs there. Units also required decomposition
+  confirmation (a human step) before build could start, which became a bottleneck once
+  criteria-level coverage was the goal. The `work_units` table was dropped in migration 0013.

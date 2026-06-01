@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, ChevronDown, ChevronRight, RotateCcw, ShieldCheck } from "lucide-react";
 import type { AcceptanceCriterion } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -172,6 +172,11 @@ export default function CriteriaVerification({
   const criteria = spec.acceptance;
   const isPostBuild = spec.state === "learning" || spec.state === "complete";
   const [collapsed, setCollapsed] = useState(isPostBuild);
+  // Collapse when state transitions into learning/complete on a live page (SWR update
+  // doesn't remount client components, so the useState initialiser won't re-run).
+  useEffect(() => {
+    if (isPostBuild) setCollapsed(true);
+  }, [isPostBuild]);
 
   if (criteria.length === 0) return null;
 

@@ -1,16 +1,10 @@
 "use client";
 
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import useSWR from "swr";
 import type { Spec } from "@/lib/types";
 
-// States that make new sections appear in the server-rendered page layout.
-const ADVANCING_STATES = new Set(["learning", "complete"]);
-
-// One shared spec for the whole spec page (0012 u3, a6). The document surface and the rail's
-// guided review both read and write through this, so confirming or rejecting an item in the rail
-// updates the document — and the progress indicator — in real time, with no reload. Every write
-// goes through the optimistic lock at the version the page last saw.
 type SpecContextValue = {
   spec: Spec;
   setSpec: (s: Spec) => void;
@@ -18,9 +12,10 @@ type SpecContextValue = {
   error: string | null;
   setError: (e: string | null) => void;
   mutate: (path: string, method: string, body: object) => Promise<boolean>;
-  // 0013 u3: a one-shot hand-off from the document's kickoff surface to the rail. The kickoff
-  // sets a prompt (a work-unit decomposition request); the rail picks it up, sends it to the
-  // Advisor, and clears it — so the Advisor's suggestion appears in the rail, human-confirmed.
+  // Force an immediate SWR revalidation — call this after raw-fetch state transitions
+  // (start-building, revert-to-draft) so the context updates without waiting for the poll.
+  refreshSpec: () => Promise<void>;
+  // 0013 u3: a one-shot hand-off from the document's kickoff surface to the rail.
   railPrompt: string | null;
   requestRailPrompt: (text: string) => void;
   clearRailPrompt: () => void;
@@ -40,6 +35,8 @@ export function useSpecOptional(): SpecContextValue | null {
   return useContext(SpecCtx);
 }
 
+const specFetcher = (url: string) => fetch(url, { cache: "no-store" }).then((r) => r.json());
+
 export function SpecProvider({
   initialSpec,
   children,
@@ -52,6 +49,57 @@ export function SpecProvider({
   const [error, setError] = useState<string | null>(null);
   const [railPrompt, setRailPrompt] = useState<string | null>(null);
   const router = useRouter();
+
+  const specRef = useRef(spec);
+  specRef.current = spec;
+
+  const { data: freshSpec, mutate: revalidateSpec } = useSWR<Spec>(
+    `/api/specs/${initialSpec.initiative_id}`,
+    specFetcher,
+    { refreshInterval: 5000, fallbackData: initialSpec, revalidateOnFocus: false, dedupingInterval: 4000 },
+  );
+
+  // State transitions (start-building, revert-to-draft) update doc.state via jsonb_set without
+  // incrementing version — so we check for EITHER a newer version OR a state change at same version.
+  function isNewer(incoming: Spec, current: Spec) {
+    return incoming.version > current.version || incoming.state !== current.state;
+  }
+
+  // Sync from RSC-delivered prop after router.refresh() — useState ignores prop changes after mount.
+  useEffect(() => {
+    if (isNewer(initialSpec, specRef.current)) {
+      setSpec(initialSpec);
+    }
+  }, [initialSpec]);
+
+  // Apply external changes arriving via the SWR poll (MCP submissions, other sessions).
+  useEffect(() => {
+    if (!freshSpec || !isNewer(freshSpec, specRef.current)) return;
+    setSpec(freshSpec);
+    // Any state change needs an RSC re-render: CriteriaVerification and LearnStage render
+    // conditionally per state, and the ConversationRail receives mode/intro as server props.
+    if (freshSpec.state !== specRef.current.state) {
+      router.refresh();
+    }
+  }, [freshSpec, router]);
+
+  // Directly fetch and apply fresh spec — used after raw-fetch state transitions (start-building,
+  // revert-to-draft) where the context must update in the same async tick, not after the SWR
+  // effect cycle. Also primes the SWR cache so the next poll doesn't re-apply stale data.
+  // No version guard here — it's explicitly called after a known state change.
+  const refreshSpec = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/specs/${initialSpec.initiative_id}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const fresh: Spec = await res.json();
+      if (fresh) {
+        setSpec(fresh);
+        revalidateSpec(fresh, { revalidate: false });
+      }
+    } catch {
+      // Transient — fall back to the next SWR poll.
+    }
+  }, [initialSpec.initiative_id, revalidateSpec]);
 
   async function mutate(path: string, method: string, body: object): Promise<boolean> {
     setBusy(true);
@@ -73,9 +121,8 @@ export function SpecProvider({
       }
       const updated: Spec = await res.json();
       setSpec(updated);
-      // When the lifecycle advances to a state that reveals new page sections (learning,
-      // complete), refresh the server component so those sections render immediately.
-      if (ADVANCING_STATES.has(updated.state) && !ADVANCING_STATES.has(spec.state)) {
+      // Any state change needs an RSC re-render for sections to appear/disappear.
+      if (updated.state !== spec.state) {
         router.refresh();
       }
       return true;
@@ -96,6 +143,7 @@ export function SpecProvider({
         error,
         setError,
         mutate,
+        refreshSpec,
         railPrompt,
         requestRailPrompt: setRailPrompt,
         clearRailPrompt: () => setRailPrompt(null),

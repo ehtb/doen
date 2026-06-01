@@ -11,10 +11,10 @@ import { useBreadcrumb, type Crumb } from "./breadcrumb";
 function fallbackCrumbs(pathname: string): Crumb[] {
   const parts = pathname.split("/").filter(Boolean);
   const crumbs: Crumb[] = [];
-  if (parts[0] === "projects" && parts[1]) {
-    crumbs.push({ label: parts[1], href: `/projects/${parts[1]}` });
-    if (parts[2] === "specs" && parts[3]) {
-      crumbs.push({ label: decodeURIComponent(parts[3]) });
+  if (parts[0] && parts[0] !== "api") {
+    crumbs.push({ label: parts[0], href: `/${parts[0]}` });
+    if (parts[1]) {
+      crumbs.push({ label: decodeURIComponent(parts[1]) });
     }
   }
   return crumbs;

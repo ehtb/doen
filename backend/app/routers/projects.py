@@ -13,11 +13,13 @@ from fastapi import APIRouter, Depends
 from app.database import get_store
 from app.exceptions import NotFoundError, ValidationError
 from app.models import Initiative, Message, Project, short_id, short_slug
+from app.onboarding_config import SETUP_PROMPT
 from app.schemas import (
     AdvisorReply,
     AdvisorRequest,
     AssignProject,
     CreateProject,
+    OnboardingStatus,
     ProjectDashboard,
     ShapeWithAI,
     UpdateProject,
@@ -78,7 +80,8 @@ async def list_project_initiatives(project_id: str, store: _Store) -> list[Initi
 @router.get("/projects/{project_id}/dashboard")
 async def project_dashboard(project_id: str, store: _Store) -> ProjectDashboard:
     """The project dashboard (0010 a2): the project + its grouped initiatives + the count of
-    open decisions across all of them, in one read."""
+    open decisions across all of them, in one read. Includes the onboarding prompt (BD-9) so
+    the hint has everything it needs without a second round-trip."""
     project = await store.get_project(project_id)
     if project is None:
         raise NotFoundError(f"no project {project_id}")
@@ -87,6 +90,7 @@ async def project_dashboard(project_id: str, store: _Store) -> ProjectDashboard:
         initiatives=await store.list_project_initiatives(project_id),
         open_decisions=await store.count_open_decisions(project_id),
         attention=await store.get_project_attention(project_id),
+        onboarding_prompt=SETUP_PROMPT,
     )
 
 
@@ -132,6 +136,32 @@ async def assign_to_project(
     """Move an initiative to a (different) project — there is no detach (no orphan specs).
     A missing initiative or project -> 404."""
     return await store.assign_initiative_to_project(initiative_id, body.project_id)
+
+
+# --- onboarding (BD-9): hint state + dismissal, re-triggerable at any time ---------------
+@router.get("/projects/{project_id}/onboarding")
+async def get_onboarding_status(project_id: str, store: _Store) -> OnboardingStatus:
+    """Return whether the onboarding hint has been dismissed and the copyable setup prompt."""
+    project = await store.get_project(project_id)
+    if project is None:
+        raise NotFoundError(f"no project {project_id}")
+    return OnboardingStatus(dismissed=project.onboarding_dismissed, prompt=SETUP_PROMPT)
+
+
+@router.post("/projects/{project_id}/onboarding/dismiss", status_code=200)
+async def dismiss_onboarding(project_id: str, store: _Store) -> OnboardingStatus:
+    """Persist the hint dismissal server-side (constraint item_b8b031fbfe0f). Safe to call
+    repeatedly — idempotent. The hint will not reappear on reload or a different session."""
+    project = await store.dismiss_project_onboarding(project_id)
+    return OnboardingStatus(dismissed=project.onboarding_dismissed, prompt=SETUP_PROMPT)
+
+
+@router.post("/projects/{project_id}/onboarding/reset", status_code=200)
+async def reset_onboarding(project_id: str, store: _Store) -> OnboardingStatus:
+    """Re-enable the onboarding hint (constraint item_97b5c68fb7bd — flow must be re-triggerable
+    at any time without resetting project state)."""
+    project = await store.reset_project_onboarding(project_id)
+    return OnboardingStatus(dismissed=project.onboarding_dismissed, prompt=SETUP_PROMPT)
 
 
 # --- the project-level conversation rail (0010 u5; spec uvama): Advisor scoped to the project ---

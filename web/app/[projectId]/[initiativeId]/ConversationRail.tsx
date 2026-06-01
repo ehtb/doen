@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
 import {
   ArrowUp,
   Check,
@@ -45,7 +44,7 @@ export default function ConversationRail({
   mode,
   intro,
   subtitle = "how you author & steer it — your thinking partner",
-  shapeHint = false,
+  hintPrompt,
   specId,
   review,
 }: {
@@ -54,12 +53,11 @@ export default function ConversationRail({
   mode: string;
   intro: string;
   subtitle?: string;
-  shapeHint?: boolean;
+  hintPrompt?: string;
   specId?: string;
   // 0012 u3: an optional guided-review panel pinned at the top of the thread (initiative rail only).
   review?: ReactNode;
 }) {
-  const router = useRouter();
   const specCtx = useSpecOptional();
   // The parent passes a fresh scope object each render; pin it to a stable identity keyed by the
   // owning id so the load effect doesn't re-fire every render.
@@ -216,7 +214,7 @@ export default function ConversationRail({
       }
       if (!res.ok) throw new Error(`couldn't add the item (${res.status})`);
       setCards((c) => ({ ...c, [key]: "accepted" }));
-      router.refresh(); // nudge the server tree; the spec list itself shows it on reload
+      await specCtx?.refreshSpec(); // pull the updated spec into the context immediately
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -307,16 +305,15 @@ export default function ConversationRail({
         {error && <p className="font-mono text-xs text-proposed">{error}</p>}
 
         {empty && !error && (
-          <div className="py-2 text-sm leading-relaxed text-rail-muted">
+          <div className="pt-2 text-sm leading-relaxed text-rail-muted">
             {intro}
-            {shapeHint && (
+            {hintPrompt && (
               <>
-                {" "}
-                Try{" "}
+                {" "}Try{" "}
                 <code className="rounded bg-rail-card px-1 py-0.5 font-mono text-[11px] text-rail-foreground">
-                  shape this initiative: …
-                </code>{" "}
-                for a full first draft.
+                  {hintPrompt}
+                </code>
+                .
               </>
             )}
           </div>

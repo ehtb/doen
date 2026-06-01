@@ -80,6 +80,7 @@ export default function SpecDocument() {
   // Shared spec + writes (0012 u3): the rail's guided review mutates the same spec, so accepting
   // or rejecting there updates this document and the progress bar live (a6).
   const { spec, busy, error, mutate } = useSpec();
+  const isDraft = spec.state === "draft";
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [adding, setAdding] = useState<Section | null>(null);
@@ -210,7 +211,7 @@ export default function SpecDocument() {
                 </span>
               )}
             </p>
-            {it.status === "proposed" && (
+            {it.status === "proposed" && isDraft && (
               // a6: Accept / Reject are prominent on every proposed item — not buried in a menu.
               // Confirming makes it governing; rejecting removes it (and logs to the rail).
               <div className="mt-2.5 flex flex-wrap items-center gap-2">
@@ -245,7 +246,7 @@ export default function SpecDocument() {
                 </Button>
               </div>
             )}
-            {it.status === "confirmed" && (
+            {it.status === "confirmed" && isDraft && (
               <div className="mt-2.5 flex gap-1 opacity-70 transition-opacity group-hover:opacity-100">
                 <Button
                   size="sm"
@@ -278,7 +279,7 @@ export default function SpecDocument() {
 
   function renderAdd(section: Section) {
     if (adding !== section)
-      return (
+      return isDraft ? (
         <Button
           variant="ghost"
           size="sm"
@@ -290,7 +291,7 @@ export default function SpecDocument() {
         >
           <Plus /> add {section === "acceptance" ? "criterion" : "item"}
         </Button>
-      );
+      ) : null;
     return (
       <div className="mt-2 rounded-md border border-l-[3px] border-l-primary border-dashed [border-left-style:solid] bg-card/60 px-3.5 py-3">
         <Textarea
@@ -472,7 +473,7 @@ export default function SpecDocument() {
             </button>
             {open && (
               <div className="mt-3">
-                {pending > 0 && (
+                {pending > 0 && isDraft && (
                   <Button
                     size="sm"
                     variant="outline"

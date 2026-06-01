@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 import asyncpg
 from mcp.server.fastmcp import Context, FastMCP
@@ -27,6 +28,7 @@ from redis import asyncio as aioredis
 from app.config import DATABASE_URL, REDIS_URL
 from app.exceptions import DecisionTimeout, NotFoundError
 from app.models import Decision
+from app.onboarding_config import DOCUMENTS
 from app.services.conversation import spec_enrichment, summarize_conversation
 from app.store import SpecStore
 
@@ -181,6 +183,52 @@ async def get_context(initiative_id: str, query: str, ctx: Context, limit: int =
         "project_id": project_id,
         "query": query,
         "hits": [h.model_dump() for h in hits],
+    }
+
+
+# --- BD-9: project onboarding — write setup documents into the user's working directory ----
+@mcp.tool()
+async def setup_project(project_path: str, ctx: Context) -> dict:
+    """Install the Doen onboarding documents into the given project directory (BD-9).
+
+    Writes CLAUDE.md, agents.md, and docs/doen-setup.md from the server-side document
+    manifest (app.onboarding_config.DOCUMENTS). Safe to re-run at any time — existing
+    files are overwritten with the latest version (constraint item_97b5c68fb7bd: the flow
+    must be re-triggerable without resetting project state).
+
+    `project_path` is the absolute or relative path to the project root directory where
+    files should be written. Pass "." to use the current working directory.
+
+    Validates that the target directory exists before writing anything. If it does not
+    exist, returns a descriptive error and writes no files (constraint item_06a45f4ca0ac).
+    """
+    root = Path(project_path).expanduser().resolve()
+    if not root.exists():
+        raise ValueError(
+            f"project_path {str(root)!r} does not exist — "
+            "pass an absolute path to an existing directory"
+        )
+    if not root.is_dir():
+        raise ValueError(
+            f"project_path {str(root)!r} is not a directory — "
+            "pass the path to the project root folder, not a file"
+        )
+
+    written: list[str] = []
+    for doc in DOCUMENTS:
+        dest = root / doc.path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(doc.content, encoding="utf-8")
+        written.append(str(dest.relative_to(root)))
+
+    return {
+        "status": "ok",
+        "project_path": str(root),
+        "files_written": written,
+        "message": (
+            f"Installed {len(written)} file(s) into {str(root)!r}. "
+            "You can re-run setup_project at any time to install updated docs."
+        ),
     }
 
 

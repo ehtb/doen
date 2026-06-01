@@ -55,6 +55,7 @@ export interface Project {
   name: string;
   prefix: string; // 0012 u5: the short handle for this project's initiatives (BD -> BD-7)
   intent: string;
+  onboarding_dismissed: boolean; // BD-9: server-side dismissal state for the onboarding hint
   created_at: string;
   updated_at: string;
 }
@@ -64,6 +65,7 @@ export interface Project {
 export interface InitiativeAttention {
   proposed_items: number;
   open_decisions: number;
+  criteria_to_verify: number; // BD-7: acceptance criteria with evidence submitted awaiting verdict
 }
 
 // The project dashboard payload (backend ProjectDashboard, schemas.py).
@@ -72,6 +74,7 @@ export interface ProjectDashboard {
   initiatives: Initiative[];
   open_decisions: number;
   attention: Record<string, InitiativeAttention>;
+  onboarding_prompt: string; // BD-9: setup prompt from server config for the onboarding hint
 }
 
 // An append-only record the Learn stage writes (backend Memory, store.py).

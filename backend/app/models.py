@@ -162,6 +162,7 @@ class Project(BaseModel):
     name: str
     prefix: str = ""  # short handle for the project's initiatives (0012 u5): 'BD' -> BD-7
     intent: str = ""  # the strategic goal, prose
+    onboarding_dismissed: bool = False  # BD-9: server-side dismissal of the onboarding hint
     created_at: str = Field(default_factory=_now)
     updated_at: str = Field(default_factory=_now)
 
@@ -264,10 +265,11 @@ class InitiativeAttention(BaseModel):
 
     proposed_items: int = 0      # ai_proposed spec items awaiting confirm / reject
     open_decisions: int = 0      # escalations awaiting a verdict
+    criteria_to_verify: int = 0  # acceptance criteria with evidence_submitted awaiting verdict (BD-7)
 
     @property
     def total(self) -> int:
-        return self.proposed_items + self.open_decisions
+        return self.proposed_items + self.open_decisions + self.criteria_to_verify
 
 
 class ConversationContext(BaseModel):

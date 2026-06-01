@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 function ProjectCard({ project, count }: { project: Project; count: number }) {
   return (
     <Link
-      href={`/projects/${project.id}`}
+      href={`/${project.id}`}
       className="group block rounded-lg border border-border bg-card/60 px-5 py-4 transition-colors hover:bg-card"
     >
       <div className="flex items-start justify-between gap-4">

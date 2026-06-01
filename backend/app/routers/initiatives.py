@@ -43,6 +43,16 @@ async def start_building(
     return await store.transition_to_building(initiative_id)
 
 
+@router.post("/initiatives/{initiative_id}/revert-to-draft", status_code=200)
+async def revert_to_draft(
+    initiative_id: str,
+    store: Annotated[SpecStore, Depends(get_store)],
+) -> Initiative:
+    """Move a building initiative back to draft so its spec can be reshaped.
+    Constraints, acceptance criteria, and discretion become editable again."""
+    return await store.revert_to_draft(initiative_id)
+
+
 @router.post("/initiatives/{initiative_id}/complete-without-learnings", status_code=200)
 async def complete_without_learnings(
     initiative_id: str,

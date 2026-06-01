@@ -1,16 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import useSWR from "swr";
 import { BookOpen, Check, GitBranch, Loader2, Sparkles } from "lucide-react";
 
 import type { AcceptanceCriterion, LearnReview } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-
-// Keep the review fresh so a verdict that lands while the page is open is reflected here
-// (the "2 of 5 not yet verified" warning was stale otherwise).
-const POLL_MS = 3000;
 
 // Pre-populate the outcome as a draft the human corrects (discretion: correction over
 // authoring). Seeded from the intent + acceptance criteria — the human edits it into
@@ -35,7 +32,6 @@ export default function LearnStage({
   intent: string;
   acceptance: AcceptanceCriterion[];
 }) {
-  const [review, setReview] = useState<LearnReview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState(() => buildDraft(intent, acceptance));
   const [busy, setBusy] = useState(false);
@@ -47,27 +43,19 @@ export default function LearnStage({
   const [initializedForm, setInitializedForm] = useState(false);
   const router = useRouter();
 
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/initiatives/${initiativeId}/learn`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`couldn't load the review (${res.status})`);
-      setReview(await res.json());
-      setError(null);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, [initiativeId]);
-
-  useEffect(() => {
-    load();
-    const t = setInterval(load, POLL_MS);
-    return () => clearInterval(t);
-  }, [load]);
+  const { data: review, mutate: refreshReview } = useSWR<LearnReview>(
+    `/api/initiatives/${initiativeId}/learn`,
+    (url: string) => fetch(url, { cache: "no-store" }).then((r) => {
+      if (!r.ok) throw new Error(`couldn't load the review (${r.status})`);
+      return r.json();
+    }),
+    { refreshInterval: 3000, dedupingInterval: 2500, revalidateOnFocus: false },
+  );
 
   // On first review load, close the form if a memory already exists (revisiting a spec that has
   // captured learn). Subsequent review updates (the poll) don't reopen it.
   useEffect(() => {
-    if (!initializedForm && review !== null) {
+    if (!initializedForm && review !== undefined) {
       setShowForm(review.memory.length === 0);
       setInitializedForm(true);
     }
@@ -101,7 +89,7 @@ export default function LearnStage({
         body: JSON.stringify({ summary, learnings: null }),
       });
       if (!res.ok) throw new Error(`couldn't save the outcome (${res.status})`);
-      setReview(await res.json());
+      await refreshReview(await res.json(), { revalidate: false });
       // close the form so the captured memory above reads as the resting state, and clear the
       // field so a stray re-open isn't pre-populated with the prior reflection.
       setSummary("");

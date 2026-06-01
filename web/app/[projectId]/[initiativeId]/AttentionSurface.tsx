@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
+import useSWR from "swr";
 import { ArrowDownRight, Check, GitBranch, X } from "lucide-react";
 
 import type { Decision, Spec, SpecItem } from "@/lib/types";
@@ -9,10 +10,13 @@ import { cn } from "@/lib/utils";
 
 // The spec page leads with what needs YOU (0011 C4/a5): a pinned surface above the full spec.
 // Priority is decisions > verifications > confirmations (the author's ranking — a blocked agent
-// outranks a proposal awaiting review). Decisions + units are fetched here (and short-polled, so
-// out-of-band executor changes show up); proposed spec items come from the spec the parent owns,
+// outranks a proposal awaiting review). Decisions are fetched via SWR (shared key with
+// SteeringRail — one request serves both); proposed spec items come from the spec the parent owns,
 // so accept/reject stays consistent with the document below and the count updates live (a5).
-const POLL_MS = 3000;
+
+const DECISIONS_SWR_KEY = (id: string) => `/api/initiatives/${id}/decisions`;
+const decisionsFetcher = (url: string) =>
+  fetch(url, { cache: "no-store" }).then((r) => (r.ok ? r.json() : []));
 
 type Section = "constraints" | "discretion" | "acceptance";
 const SECTIONS: Section[] = ["constraints", "discretion", "acceptance"];
@@ -21,6 +25,8 @@ const ITEM_LABEL: Record<Section, string> = {
   discretion: "discretion",
   acceptance: "criterion",
 };
+
+export { DECISIONS_SWR_KEY, decisionsFetcher };
 
 export default function AttentionSurface({
   spec,
@@ -35,24 +41,11 @@ export default function AttentionSurface({
   onRejectItem: (it: SpecItem) => void;
   busy: boolean;
 }) {
-  const [decisions, setDecisions] = useState<Decision[]>([]);
-
-  const load = useCallback(async () => {
-    try {
-      const d = await fetch(`/api/initiatives/${initiativeId}/decisions`, { cache: "no-store" }).then((r) =>
-        r.ok ? r.json() : [],
-      );
-      setDecisions(d);
-    } catch {
-      /* transient — the next poll retries */
-    }
-  }, [initiativeId]);
-
-  useEffect(() => {
-    load();
-    const t = setInterval(load, POLL_MS);
-    return () => clearInterval(t);
-  }, [load]);
+  const { data: decisions = [] } = useSWR<Decision[]>(
+    DECISIONS_SWR_KEY(initiativeId),
+    decisionsFetcher,
+    { refreshInterval: 3000, dedupingInterval: 2500, revalidateOnFocus: false },
+  );
 
   const proposedItems: { section: Section; it: SpecItem }[] = SECTIONS.flatMap((s) =>
     (spec[s] as SpecItem[]).filter((i) => i.status === "proposed").map((it) => ({ section: s, it })),

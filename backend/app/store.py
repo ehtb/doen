@@ -84,6 +84,7 @@ def _initiative_from_row(row: asyncpg.Record) -> Initiative:
 def _project_from_row(row: asyncpg.Record) -> Project:
     return Project(
         id=row["id"], name=row["name"], prefix=row["prefix"], intent=row["intent"],
+        onboarding_dismissed=row["onboarding_dismissed"],
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
     )
@@ -399,15 +400,39 @@ class SpecStore:
                VALUES ($1, $2, $3, $4, now(), now())""",
             proj.id, proj.name, proj.prefix, proj.intent,
         )
-        return proj
+        return proj  # onboarding_dismissed defaults to False on new projects
 
     async def update_project(self, project_id: str, *, intent: str) -> Project:
         """Edit a project's intent inline from the dashboard (0013 u2). Raises if it's gone."""
         row = await self.pg.fetchrow(
             """UPDATE projects SET intent = $2, updated_at = now()
                WHERE id = $1
-               RETURNING id, name, prefix, intent, created_at, updated_at""",
+               RETURNING id, name, prefix, intent, onboarding_dismissed, created_at, updated_at""",
             project_id, intent,
+        )
+        if row is None:
+            raise NotFoundError(f"no project {project_id}")
+        return _project_from_row(row)
+
+    async def dismiss_project_onboarding(self, project_id: str) -> Project:
+        """Mark the onboarding hint as dismissed for this project (BD-9, item_b8b031fbfe0f)."""
+        row = await self.pg.fetchrow(
+            """UPDATE projects SET onboarding_dismissed = TRUE, updated_at = now()
+               WHERE id = $1
+               RETURNING id, name, prefix, intent, onboarding_dismissed, created_at, updated_at""",
+            project_id,
+        )
+        if row is None:
+            raise NotFoundError(f"no project {project_id}")
+        return _project_from_row(row)
+
+    async def reset_project_onboarding(self, project_id: str) -> Project:
+        """Re-enable the onboarding hint (BD-9, item_97b5c68fb7bd — flow must be re-triggerable)."""
+        row = await self.pg.fetchrow(
+            """UPDATE projects SET onboarding_dismissed = FALSE, updated_at = now()
+               WHERE id = $1
+               RETURNING id, name, prefix, intent, onboarding_dismissed, created_at, updated_at""",
+            project_id,
         )
         if row is None:
             raise NotFoundError(f"no project {project_id}")
@@ -415,7 +440,7 @@ class SpecStore:
 
     async def get_project(self, project_id: str) -> Project | None:
         row = await self.pg.fetchrow(
-            "SELECT id, name, prefix, intent, created_at, updated_at FROM projects WHERE id = $1",
+            "SELECT id, name, prefix, intent, onboarding_dismissed, created_at, updated_at FROM projects WHERE id = $1",
             project_id,
         )
         return _project_from_row(row) if row else None
@@ -423,7 +448,7 @@ class SpecStore:
     async def list_projects(self) -> list[Project]:
         """Every project, newest first — the level above the dashboard (0010 a2)."""
         rows = await self.pg.fetch(
-            """SELECT id, name, prefix, intent, created_at, updated_at
+            """SELECT id, name, prefix, intent, onboarding_dismissed, created_at, updated_at
                FROM projects ORDER BY created_at DESC, id"""
         )
         return [_project_from_row(r) for r in rows]
@@ -526,11 +551,23 @@ class SpecStore:
                GROUP BY d.initiative_id""",
             project_id,
         )
+        # BD-7: count acceptance criteria with evidence_submitted awaiting human verdict.
+        crit_rows = await self.pg.fetch(
+            """SELECT i.id,
+                      (SELECT count(*) FROM jsonb_array_elements(s.doc->'acceptance') e
+                         WHERE e->>'verification_status' = 'evidence_submitted') AS criteria_to_verify
+               FROM initiatives i
+               JOIN specs s ON s.initiative_id = i.id
+               WHERE i.project_id = $1 AND i.archived_at IS NULL""",
+            project_id,
+        )
         decisions = {r["id"]: r["n"] for r in dec_rows}
+        crits = {r["id"]: r["criteria_to_verify"] for r in crit_rows}
         return {
             r["id"]: InitiativeAttention(
                 proposed_items=r["proposed_items"],
                 open_decisions=decisions.get(r["id"], 0),
+                criteria_to_verify=crits.get(r["id"], 0),
             )
             for r in item_rows
         }
@@ -867,6 +904,30 @@ class SpecStore:
         )
         await self.pg.execute(
             """UPDATE specs SET doc = jsonb_set(doc, '{state}', to_jsonb('building'::text)),
+               updated_at = now() WHERE initiative_id = $1""",
+            initiative_id,
+        )
+        doc = await self.pg.fetchval("SELECT doc FROM specs WHERE initiative_id = $1", initiative_id)
+        if doc:
+            await self.redis.set(f"spec:{initiative_id}", doc, ex=SPEC_CACHE_TTL)
+        return (await self.get_initiative(initiative_id)) or init
+
+    async def revert_to_draft(self, initiative_id: str) -> Initiative:
+        """Move a building initiative back to draft so the spec can be reshaped.
+        Only valid from building — other states are rejected to avoid confusion.
+        Criteria verification statuses are preserved; _recompute_state will push the
+        initiative back to building the next time evidence is submitted."""
+        init = await self.get_initiative(initiative_id)
+        if init is None:
+            raise NotFoundError(f"no initiative {initiative_id}")
+        if init.state != "building":
+            raise ValidationError(f"initiative is {init.state}, not building")
+        await self.pg.execute(
+            "UPDATE initiatives SET state = 'draft', updated_at = now() WHERE id = $1",
+            initiative_id,
+        )
+        await self.pg.execute(
+            """UPDATE specs SET doc = jsonb_set(doc, '{state}', to_jsonb('draft'::text)),
                updated_at = now() WHERE initiative_id = $1""",
             initiative_id,
         )
