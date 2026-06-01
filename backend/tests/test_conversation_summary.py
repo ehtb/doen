@@ -31,7 +31,7 @@ def _store_run(fn: Callable[[SpecStore], Awaitable[object]]) -> object:
             return await fn(SpecStore(pg, redis))
         finally:
             await pg.close()
-            await redis.aclose()
+            await redis.close()
 
     return asyncio.run(go())
 
@@ -58,7 +58,7 @@ def test_conversation_summary_covers_decisions_and_alternatives(
                 iid,
             )
             await store.resolve_decision(
-                d.id, "UTF-8", "Widest compatibility; the report is ASCII-heavy.", "Edo Balvers"
+                d.id, "UTF-8", "Widest compatibility; the report is ASCII-heavy.", "edo"
             )
             return await summarize_conversation(store, iid)
 

@@ -99,7 +99,7 @@ def test_resolve_triggers_embedding(make_initiative: Callable[[], str]):
             return populated, fake.calls
         finally:
             await pg.close()
-            await redis.aclose()
+            await redis.close()
 
     populated, calls = _run(go())
     assert populated is True, "resolve did not populate the embedding"
@@ -135,7 +135,7 @@ def test_backfill_embeds_resolved(make_initiative: Callable[[], str]):
             return before_null, done, remaining, after_null
         finally:
             await pg.close()
-            await redis.aclose()
+            await redis.close()
 
     before_null, done, remaining, after_null = _run(go())
     assert before_null is True, "setup: embedding should have been nulled"
@@ -158,7 +158,7 @@ async def _raise_resolve(iid: str) -> str:
         return d.id
     finally:
         await pg.close()
-        await redis.aclose()
+        await redis.close()
 
 
 def test_create_memory_embeds(make_initiative: Callable[[], str]):
@@ -181,7 +181,7 @@ def test_create_memory_embeds(make_initiative: Callable[[], str]):
             return mem.id, populated, [m.id for m in listed], fake.calls
         finally:
             await pg.close()
-            await redis.aclose()
+            await redis.close()
 
     mid, populated, listed_ids, calls = _run(go())
     assert populated is True, "memory row was not embedded"
@@ -222,7 +222,7 @@ def test_learn_review_and_submit(client, make_initiative: Callable[[], str], mon
 
 
 # --- u3: get_context retrieval (a6, a7) --------------------------------------------
-def test_get_context_cross_initiative(make_initiative: Callable[[], str]):
+def test_get_context_cross_initiative(make_initiative: Callable[[], str], project: str):
     # a7 — get_context returns OTHER initiatives' memory, not just the current one.
     # a6 — each hit is source-attributed with a score. Deterministic via the fake:
     # querying the exact embedded text makes that row distance 0, so it tops the ranking.
@@ -240,11 +240,11 @@ def test_get_context_cross_initiative(make_initiative: Callable[[], str]):
             # force complete so the BD-19 filter admits this memory row.
             await pg.execute("UPDATE initiatives SET state = 'complete' WHERE id = $1", other)
             await store._drain()
-            hits = await store.get_context(distinctive, limit=5, project_id="build-doen")
+            hits = await store.get_context(distinctive, limit=5, project_id=project)
             return hits
         finally:
             await pg.close()
-            await redis.aclose()
+            await redis.close()
 
     hits = _run(go())
     assert hits, "get_context returned nothing"
@@ -256,7 +256,7 @@ def test_get_context_cross_initiative(make_initiative: Callable[[], str]):
 
 
 # --- BD-19: get_context only surfaces content from completed initiatives ----------
-def test_get_context_excludes_incomplete_initiative(make_initiative: Callable[[], str]):
+def test_get_context_excludes_incomplete_initiative(make_initiative: Callable[[], str], project: str):
     # BD-19 item_b54fe02b22d2: high-similarity content from a non-complete initiative
     # must not appear, even when it would otherwise top the ranking.
     draft_id = make_initiative()
@@ -275,16 +275,16 @@ def test_get_context_excludes_incomplete_initiative(make_initiative: Callable[[]
             # state is draft — verify it, then query
             row = await pg.fetchrow("SELECT state FROM initiatives WHERE id = $1", draft_id)
             assert row["state"] == "draft"
-            return await store.get_context(distinctive, limit=5, project_id="build-doen")
+            return await store.get_context(distinctive, limit=5, project_id=project)
         finally:
             await pg.close()
-            await redis.aclose()
+            await redis.close()
 
     hits = _run(go())
     assert not any(h.initiative_id == draft_id for h in hits)
 
 
-def test_get_context_includes_completed_initiative(make_initiative: Callable[[], str]):
+def test_get_context_includes_completed_initiative(make_initiative: Callable[[], str], project: str):
     # BD-19 item_130db6160bf9: content from a completed initiative must still appear.
     complete_id = make_initiative()
     fake = FakeEmbedder()
@@ -296,10 +296,10 @@ def test_get_context_includes_completed_initiative(make_initiative: Callable[[],
             await store.create_memory(complete_id, distinctive)
             await pg.execute("UPDATE initiatives SET state = 'complete' WHERE id = $1", complete_id)
             await store._drain()
-            return await store.get_context(distinctive, limit=5, project_id="build-doen")
+            return await store.get_context(distinctive, limit=5, project_id=project)
         finally:
             await pg.close()
-            await redis.aclose()
+            await redis.close()
 
     hits = _run(go())
     assert any(h.initiative_id == complete_id for h in hits)

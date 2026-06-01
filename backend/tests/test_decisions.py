@@ -41,7 +41,7 @@ async def _raise(iid: str, question: str, options: list[str], rec: str | None = 
         return d.id
     finally:
         await pool.close()
-        await redis.aclose()
+        await redis.close()
 
 
 async def _read_row(decision_id: str) -> dict:
@@ -60,7 +60,7 @@ async def _flushall() -> None:
     try:
         await redis.flushall()
     finally:
-        await redis.aclose()
+        await redis.close()
 
 
 def test_list_open_decisions(client: TestClient, make_initiative: Callable[[], str]):

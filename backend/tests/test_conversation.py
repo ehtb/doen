@@ -64,7 +64,7 @@ def _store_run(
             return await fn(SpecStore(pg, redis, embedder=embedder))
         finally:
             await pg.close()
-            await redis.aclose()
+            await redis.close()
 
     return asyncio.run(go())
 

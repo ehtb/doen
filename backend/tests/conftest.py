@@ -18,6 +18,16 @@ from app.config import DATABASE_URL
 from app.main import app
 from app.migrate import run_migrations
 
+_TEST_PROJECT_IDS = (
+    "test-suite",
+    "launch-hosted-tier",
+    "same-project",
+    "group-a",
+    "group-b",
+    "api-project",
+    "orphan-test",
+)
+
 
 def _run(coro: Awaitable) -> object:
     return asyncio.run(coro)
@@ -36,6 +46,15 @@ def _migrate() -> None:
     async def go() -> None:
         conn = await asyncpg.connect(DATABASE_URL)
         try:
+            # Clean up stale test projects left by previous runs whose teardown failed.
+            await conn.execute(
+                "DELETE FROM initiatives WHERE project_id = ANY($1::text[])",
+                list(_TEST_PROJECT_IDS),
+            )
+            await conn.execute(
+                "DELETE FROM projects WHERE id = ANY($1::text[])",
+                list(_TEST_PROJECT_IDS),
+            )
             await run_migrations(conn)
         finally:
             await conn.close()
@@ -43,24 +62,42 @@ def _migrate() -> None:
     _run(go())
 
 
-@pytest.fixture
+# session-scoped so the MCP StreamableHTTPSessionManager runs only once per test session
+@pytest.fixture(scope="session")
 def client() -> TestClient:
     with TestClient(app) as c:
         yield c
 
 
+@pytest.fixture(scope="session")
+def project(client: TestClient) -> str:
+    """A project created once per test session; the default owner for make_initiative."""
+    r = client.post("/projects", json={"name": "Test Suite", "intent": "automated test project"})
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]  # "test-suite"
+    yield pid
+
+    async def drop() -> None:
+        conn = await asyncpg.connect(DATABASE_URL)
+        try:
+            await conn.execute("DELETE FROM initiatives WHERE project_id = $1", pid)
+            await conn.execute("DELETE FROM projects WHERE id = $1", pid)
+        finally:
+            await conn.close()
+
+    _run(drop())
+
+
 @pytest.fixture
-def make_initiative(client: TestClient) -> Callable[[], str]:
-    """Create dev initiatives via the API and drop them (cascade) on teardown. Each gets a
-    unique title so the derived slug never collides across tests; the slug is the id. Every
-    initiative belongs to a project (no orphan specs) — the always-present 'build-doen' project
-    (created by migration 0006) is the default owner."""
+def make_initiative(client: TestClient, project: str) -> Callable[[], str]:
+    """Create initiatives via the API and drop them on teardown. Each gets a unique title
+    so the derived slug never collides across tests. Defaults to the session test project."""
     created: list[str] = []
 
-    def make(title: str | None = None, project_id: str = "build-doen") -> str:
+    def make(title: str | None = None, project_id: str | None = None) -> str:
         r = client.post(
             "/initiatives",
-            json={"title": title or f"Test {uuid4().hex[:8]}", "project_id": project_id},
+            json={"title": title or f"Test {uuid4().hex[:8]}", "project_id": project_id or project},
         )
         assert r.status_code == 201, r.text
         iid = r.json()["id"]

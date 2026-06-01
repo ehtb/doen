@@ -20,7 +20,7 @@ from dataclasses import dataclass
 _CLAUDE_MD = """\
 # Doen — Spec-Driven Development
 
-This project uses [Doen](https://github.com/edobal/doen) as its intent layer.
+This project uses [Doen](https://github.com/ehtb/doen) as its intent layer.
 Every initiative is a living spec that constrains what you build and verifies
 what was built. Ground yourself in the spec before touching any code.
 
@@ -147,5 +147,5 @@ the required Doen configuration files — agent instructions (CLAUDE.md / agents
 and a setup guide (docs/doen-setup.md) — into the current directory.
 
 If setup_project is not yet available, follow the MCP server setup instructions \
-at https://github.com/edobal/doen#mcp-setup to connect your executor first.\
+at https://github.com/ehtb/doen#mcp-setup to connect your executor first.\
 """

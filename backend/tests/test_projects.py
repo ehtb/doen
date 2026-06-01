@@ -31,7 +31,7 @@ def _store_run(fn: Callable[[SpecStore], Awaitable[object]]) -> object:
             return await fn(SpecStore(pg, redis))
         finally:
             await pg.close()
-            await redis.aclose()
+            await redis.close()
 
     return asyncio.run(go())
 
@@ -151,32 +151,28 @@ def test_reassign_initiative_between_projects(
         pass
 
 
-# --- a7: the migration created build-doen; the schema forbids orphans ---------
-def test_no_orphan_specs(track_initiatives: list[str]):
-    # build-doen exists with its strategic intent and groups the seeded history (a7).
-    proj = _store_run(lambda s: s.get_project("build-doen"))
-    assert isinstance(proj, Project)
-    assert proj.name == "Build Doen" and proj.intent
-    members = _store_run(lambda s: s.list_project_initiatives("build-doen"))
-    assert members, "build-doen has no grouped initiatives"
+# --- a7: the schema forbids orphans ------------------------------------------
+def test_no_orphan_specs(track_initiatives: list[str], track_projects: list[str]):
+    proj = _store_run(lambda s: s.create_project("Orphan Test", "no-orphan invariant test"))
+    track_projects.append(proj.id)
 
     # the invariant: NO initiative is orphaned — project_id is NOT NULL across the board.
     orphans = _sql("SELECT count(*) AS n FROM initiatives WHERE project_id IS NULL")
     assert orphans["n"] == 0
 
-    # a freshly created initiative lands in a project too (can't be created without one).
-    init = _store_run(lambda s: s.create_initiative("Fresh One", "build-doen"))
+    # a freshly created initiative lands in a project (can't be created without one).
+    init = _store_run(lambda s: s.create_initiative("Fresh One", proj.id))
     track_initiatives.append(init.id)
-    assert init.project_id == "build-doen"
+    assert init.project_id == proj.id
 
 
 # --- existing per-initiative flows still work for a project initiative --------
 def test_project_initiative_flows_work(
-    client: TestClient, make_initiative: Callable[[], str]
+    client: TestClient, make_initiative: Callable[[], str], project: str
 ):
-    iid = make_initiative()  # created under build-doen by the fixture
+    iid = make_initiative()
     got = _store_run(lambda s: s.get_initiative(iid))
-    assert got.project_id == "build-doen"
+    assert got.project_id == project
 
     # spec editing (0002) is unaffected
     r = client.post(
@@ -187,7 +183,7 @@ def test_project_initiative_flows_work(
     # it shows on the dashboard feed, project_id carried through
     feed = client.get("/initiatives").json()
     entry = next((i for i in feed if i["id"] == iid), None)
-    assert entry is not None and entry["project_id"] == "build-doen"
+    assert entry is not None and entry["project_id"] == project
 
 
 # --- a1: the project CRUD endpoints + assignment over HTTP --------------------

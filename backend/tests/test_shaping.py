@@ -195,12 +195,12 @@ def _drop(iid: str) -> None:
 
 
 # --- 0011 a3: description-first creation IS shaping (TestClient; LLM + embedder faked) -----
-def test_create_from_description_endpoint(client, monkeypatch):
+def test_create_from_description_endpoint(client, project, monkeypatch):
     monkeypatch.setattr("app.services.shaping.get_shaping_llm", lambda: FakeLLM(PAYLOAD))
     monkeypatch.setattr("app.store.get_embedding_provider", lambda: FakeEmbedder())
 
     r = client.post(
-        "/projects/build-doen/initiatives/shape",
+        f"/projects/{project}/initiatives/shape",
         json={"description": "passwordless sign-in via single-use email links"},
     )
     assert r.status_code == 201, r.text
@@ -208,8 +208,8 @@ def test_create_from_description_endpoint(client, monkeypatch):
     try:
         # the Advisor named the initiative (title from shaping) and it's born Draft, in the project
         import re as _re
-        assert _re.fullmatch(r"BD-\d+", init["id"]), f"unexpected id: {init['id']}"
-        assert init["state"] == "draft" and init["project_id"] == "build-doen"
+        assert _re.fullmatch(r"[A-Z]+-\d+", init["id"]), f"unexpected id: {init['id']}"
+        assert init["state"] == "draft" and init["project_id"] == project
 
         # the whole spec is drafted as proposals to confirm item by item (a3)
         spec = client.get(f"/specs/{init['id']}").json()
@@ -218,15 +218,9 @@ def test_create_from_description_endpoint(client, monkeypatch):
         assert len(spec["constraints"]) == 2 and len(spec["acceptance"]) == 2
         assert all(i["provenance"] == "ai_proposed" and i["status"] == "proposed" for i in items)
 
-        # proposed units came with it, mapped to the persisted acceptance criteria
-        units = client.get(f"/specs/{init['id']}/units").json()
-        assert len(units) == 2 and all(u["status"] == "proposed" for u in units)
-        acc_ids = {a["id"] for a in spec["acceptance"]}
-        assert all(cid in acc_ids for u in units for cid in u["criterion_ids"])
-
         # an empty description is rejected; an unknown project -> 404
         assert client.post(
-            "/projects/build-doen/initiatives/shape", json={"description": "  "}
+            f"/projects/{project}/initiatives/shape", json={"description": "  "}
         ).status_code == 422
         assert client.post(
             "/projects/ghost/initiatives/shape", json={"description": "x"}

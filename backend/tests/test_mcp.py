@@ -36,9 +36,8 @@ async def _flow() -> None:
     redis = aioredis.from_url(REDIS_URL, decode_responses=True)
     store = SpecStore(pool, redis)
 
-    # Seed an initiative + spec for get_spec to find via the store so the ID and seq
-    # are assigned correctly (avhle u1 — client may not supply an ID).
-    init = await store.create_initiative("MCP demo", "build-doen")
+    proj = await store.create_project(f"MCP Test {uuid4().hex[:6]}", "drive MCP tools in test")
+    init = await store.create_initiative("MCP demo", proj.id)
     iid = init.id
     await store.save_spec(Spec(initiative_id=iid, version=0, title="MCP demo", intent="prove a4"))
 
@@ -94,8 +93,9 @@ async def _flow() -> None:
                 assert woken["chosen"] == "yes"
     finally:
         await pool.execute("DELETE FROM initiatives WHERE id = $1", iid)
+        await pool.execute("DELETE FROM projects WHERE id = $1", proj.id)
         await pool.close()
-        await redis.aclose()
+        await redis.close()
 
 
 def test_mcp_tools_over_stdio():

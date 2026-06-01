@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await app.state.pg.close()
-        await app.state.redis.aclose()
+        await app.state.redis.close()
 
 
 def get_pool(request: Request) -> asyncpg.Pool:
