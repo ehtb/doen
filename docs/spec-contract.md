@@ -158,13 +158,13 @@ interface Project {
   updated_at: string;
 }
 
-interface Message {              // conversation history — Postgres, in the messages table
-  id: string;
-  initiative_id?: string;        // exactly one of initiative_id or project_id is set
-  project_id?: string;
+interface Message {              // conversation history — browser-local (IndexedDB), NOT Postgres
+  id: string;                    //   (spec uvama). The backend never stores it; each Advisor call
+  initiative_id?: string;        //   carries a windowed slice in its body and discards it.
+  project_id?: string;           // exactly one of initiative_id or project_id is set
   role: "human" | "advisor";
   content: string;
-  metadata: object;              // structured payloads (review notes, etc.)
+  metadata: object;              // structured payloads (e.g. the Advisor's proposal cards)
   created_at: string;
 }
 ```
@@ -182,21 +182,26 @@ This is the Implement ↔ Verify loop. Thirteen tools, in `backend/app/mcp_serve
 ```typescript
 get_spec(initiative_id): Spec & {
   initiative: { id, title, state },
-  advisor_summary?: string,                       // latest Advisor note
-  unit_context?: { [unit_id]: {                   // submission summary + verdict + review notes
-    submission_summary?, verdict?, advisor_review?
+  advisor_summary: null,                          // always null since spec uvama (see note)
+  unit_context?: { [unit_id]: {                   // durable per-unit context:
+    submission_summary?, verdict?, verification_feedback?
   }}
 }
-// Read before acting. The current version, the lifecycle state, and the reasoning around
-// each unit (submissions, verdicts, the Advisor's reviews).
+// Read before acting. The current version, the lifecycle state, and the durable reasoning
+// around each unit (submissions + the human's verdict/feedback). NOTE: advisor_summary and the
+// per-unit advisor_review were message-derived; conversations are browser-local now (spec uvama),
+// so advisor_summary is always null and advisor_review is gone — get_spec narrows to what is
+// durable in Postgres.
 
 get_conversation_summary(initiative_id): {
   key_decisions: { question, chosen, rationale }[],
-  rejected_alternatives: string[],
-  stated_priorities: string[],
+  rejected_alternatives: { question, alternatives }[],
+  stated_priorities: string[],                    // always [] since spec uvama (see note)
 }
-// Read WHY this spec is the way it is. Pairs with get_spec — the spec tells you what to
-// build, this tells you what the human cared about and what was already decided.
+// Read WHY this spec is the way it is. Pairs with get_spec — the spec tells you what to build,
+// this tells you what was already decided (resolved decisions + their rejected alternatives).
+// NOTE: stated_priorities came from the human's message turns; conversations are browser-local
+// now (spec uvama), so the backend can't read them — it degrades to an empty list.
 
 get_context(initiative_id, query): { snippets: ContextSnippet[] }
 // Semantic retrieval (pgvector) over the codebase's intent and prior initiatives. Project-
@@ -250,8 +255,9 @@ report_progress(unit_id, note, percent?): { ok: boolean }
 
 submit_for_verification(unit_id, summary, criteria_results, artifacts): { queued: boolean }
 // in_progress → in_verification. Map your own output to each criterion; the human verifies
-// intent-alignment, not your diff line-by-line. Also auto-posts the Advisor's preliminary
-// review to the rail so the human walks in primed.
+// intent-alignment, not your diff line-by-line. (The Advisor's auto-posted preliminary review
+// was retired in spec uvama — it was delivered only as a rail message, and the backend no
+// longer writes the browser-local conversation.)
 //   criteria_results: { criterion_id, result: "pass" | "fail" | "needs_judgment", evidence }[]
 //   artifacts:        string[]   // free-form pointers (paths, urls, notes)
 
@@ -287,7 +293,7 @@ On `complete` (every unit done + learn record written), Doen embeds the resolved
 | `specs` | one JSONB document per initiative: intent, constraints[], discretion[], acceptance[], references[], memory_links[] | `intent_embedding` — powers memory similarity & `memory_links` |
 | `work_units` | scope, criterion_ids[], status, blocked_on, progress_note, submission, verdict | — |
 | `decisions` | append-only judgment log | `decision_embedding` — retrieved by `get_context` |
-| `messages` | conversation history (initiative- or project-scoped) | — |
+| _(conversation history)_ | NOT a Postgres table — browser-local in IndexedDB since spec uvama; the backend is stateless about messages | — |
 | `projects` | id, name, prefix, intent | — |
 | `memory` | completed-initiative summaries + outcomes | embedding for cross-initiative retrieval |
 

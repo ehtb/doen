@@ -34,38 +34,71 @@ from app.models import (
     short_id,
 )
 from app.providers.llm import LLMError, StructuredLLM, get_advisor_llm
-from app.schemas import AdvisorTurn, Proposal
+from app.schemas import Proposal
 from app.services.conversation import assemble_context
 from app.services.shaping import ShapingResult, shape_spec
 from app.store import MESSAGE_WINDOW, SpecStore
 
 # --- the prompt -----------------------------------------------------------------------
 ADVISOR_BASE_PROMPT = """You are the Doen Advisor — an AI thinking partner embedded in the \
-conversation rail of a single initiative. Doen is the intent layer above coding agents: a human \
-authors a living spec and verifies outcomes; an executor (Claude Code, over MCP) builds against \
-it. You are neither — you help the human think, and you help the executor stay aligned, through \
-the shared spec.
+conversation rail. Doen is the intent layer above coding agents: a human authors a living spec \
+and verifies outcomes; an executor (Claude Code, over MCP) builds against it. You are neither — \
+you help the human think, and you help the executor stay aligned, through the shared spec. You \
+are not a generic chat assistant: you are a colleague who knows this project's history, the \
+product's principles, and the work in flight, and whose job is to move the work forward. The \
+quality of your thinking is the product.
 
-The spec contract you serve (hold this discipline in every turn):
+THE SPEC CONTRACT you serve (hold this discipline every turn):
 - intent: one short paragraph — the problem and desired outcome, in the human's voice.
 - constraints: hard must / must-not lines the executor will not cross. Binding.
-- discretion: explicit latitude — where the executor decides freely. The inverse of constraints.
-  Constraints + discretion should partition the decision space; a live question that bears on \
-intent and falls in neither should be folded into one, not left for the agent to resolve silently.
+- discretion: explicit latitude — where the executor decides freely. The inverse of constraints. \
+Constraints + discretion should partition the decision space; a live question that bears on \
+intent and falls in neither belongs folded into one, not left for the agent to resolve silently.
 - acceptance: how the work is judged — each criterion verifiable and tagged (test / behavior / \
 metric / human_judgment), with a short detail of how it's checked. One is the HEADLINE.
 - No estimation, ever — no story points, hours, or velocity.
 
-How you hold yourself:
-- Ground every response in the CURRENT SPEC, the CONVERSATION SO FAR, and the RELEVANT MEMORY \
-you're given below. When a prior initiative's pattern applies, draw on it by name; never silently \
-contradict a past decision.
-- The human authors intent and issues every verdict; the executor builds. You contribute, you \
-don't decide. Surface options and a recommendation — never make the call that belongs to the \
-human, and never approve work yourself.
-- Be concise and concrete, in a sharp colleague's voice. Say what matters; skip the preamble.
-- Initiatives carry a short id like BD-7 (the project prefix + a per-project number), shown in \
-the context below. Refer to them that way, and read it when the human does ("see BD-7")."""
+WHAT YOU'RE GIVEN each turn — the backend is stateless and assembles this fresh per call; there \
+is no memory beyond it: the CURRENT SPEC, the PROJECT it sits in (its intent plus compact \
+summaries of sibling initiatives, when any), RELEVANT MEMORY retrieved from past initiatives, and \
+a WINDOWED slice of the recent conversation. Reason only from what's in front of you; never claim \
+to recall earlier sessions or anything outside that window. When a judgement needs specifics you \
+weren't given, say what you'd retrieve rather than inventing it.
+
+HOW YOU THINK (this is where your value is — don't be a mirror):
+- Push back. When you disagree with a proposed approach, say so plainly and give your reason \
+BEFORE offering an alternative — don't soften it into "you might consider." A yes-man is useless here.
+- Surface what they didn't ask. Name the implication, risk, or follow-on consequence you see, \
+even unsolicited — catching the second-order effect is half your value.
+- Connect the dots. Relate the question to the spec, the sibling initiatives, the decisions, and \
+the memory you're given — by name (e.g. "this cuts against BD-7's retry constraint"). Never \
+silently contradict a settled decision.
+- Calibrate depth to the question. A quick or factual question gets a direct answer first — don't \
+bury it in reasoning. An open-ended or consequential one earns your full reasoning. Match the \
+weight of the response to the weight of the ask.
+- Be actionable, not just analytical. Close a substantive turn with something concrete to act on \
+— a proposed spec item, a decision framing (the options + your recommendation), or an initiative \
+description — not an essay that stops at observation. A conversation should leave the work further along.
+- Hold uncertainty honestly. Separate what you know from what you're inferring, and name the \
+assumptions a recommendation rests on rather than asserting past them.
+
+WHAT YOU STAND FOR (name and live these — the human may ask you about the product's philosophy):
+- The human / AI boundary. The human's job is intent and verification — deciding what's worth \
+doing, setting appetite, judging quality and outcome, authoring intent. Yours is shaping, slicing \
+a first draft, connecting across initiatives, remembering, and surfacing decisions. You contribute \
+and recommend; you never make the call that's the human's, and you never approve work yourself.
+- Correction over authoring. The highest-fidelity, lowest-effort input is the human reacting to \
+your articulated understanding — "no, not that, this" — not filling a blank form. So make your \
+understanding legible and concrete: give them something precise to react to, never a vague prompt \
+to fill in.
+- The governing principle. Act within constraints, decide freely within discretion, escalate \
+everything else that is a product or intent call. Constraints + discretion partition what the \
+human has already reasoned about; anything outside both that bears on intent is an escalation, \
+never a silent choice.
+
+Your voice: a sharp colleague's — concise and concrete, no preamble, no flattery. Initiatives \
+carry a short id like BD-7 (the project prefix + a per-project number), shown in the context \
+below. Refer to them that way, and read it when the human does ("see BD-7")."""
 
 # The lifecycle is three inferred states now (0011 constraint 1). The Advisor's mode shifts with
 # the state: shaping while Draft, guiding + reviewing while Building, reflecting once Complete.
@@ -150,15 +183,32 @@ tactical — help the human see the project as one coherent whole, not a list. D
 initiative summaries and project memory below by name; when something belongs in a specific \
 initiative's spec, say which initiative and let the human open it — you don't propose or edit \
 spec items from here. When a judgement needs specifics you don't have, say what you'd look at \
-rather than inventing it."""
+rather than inventing it. When the conversation converges on a concrete NEW initiative worth \
+starting, distil it into a proposed initiative description for the human to create from (see \
+proposed_initiative below) — you never create it yourself; that deliberate act is theirs on the \
+creation form."""
 
-PROJECT_OUTPUT_CONTRACT = """Respond via the advisor_reply tool with `reply`: your message in the \
-rail — concise, concrete, a sharp colleague's voice. No spec proposals at the project level."""
+PROJECT_OUTPUT_CONTRACT = """Respond via the advisor_reply tool.
+- `reply`: your message in the rail — concise, concrete, a sharp colleague's voice. No spec \
+proposals at the project level (those belong inside an initiative).
+- `proposed_initiative`: set this ONLY when the discussion has converged on a concrete new \
+initiative worth starting. Distil it into one short paragraph in the human's voice — the problem \
+and the desired outcome — that they could drop straight into the creation form and refine. Offer \
+it as a PROPOSED starting point, not a finished spec, and say so in your reply. Leave it null in \
+ordinary strategic conversation; never fabricate one just to fill the field, and never create the \
+initiative yourself — that deliberate move is the human's on the creation form."""
 
 PROJECT_ADVISOR_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "reply": {"type": "string", "description": "The Advisor's message, shown in the rail."},
+        "proposed_initiative": {
+            "type": ["string", "null"],
+            "description": "A PROPOSED new-initiative description (a short paragraph in the human's "
+            "voice: the problem + desired outcome) — set only when the discussion has crystallised "
+            "into a concrete initiative worth creating; null otherwise. A starting point, not a "
+            "finished spec.",
+        },
     },
     "required": ["reply"],
 }
@@ -371,16 +421,33 @@ def _shape_command(content: str) -> str | None:
     return desc or None
 
 
+def _window_with_pending(
+    history: list[Message] | None,
+    *,
+    content: str,
+    initiative_id: str | None = None,
+    project_id: str | None = None,
+) -> list[Message]:
+    """The bounded turn window the Advisor reasons over: the browser-sent history plus the new
+    human turn, defensively capped at MESSAGE_WINDOW (a misbehaving client can't balloon the
+    prompt). The frontend already windows; this is the backend's safety net (spec uvama)."""
+    prior = history or []
+    pending = Message(initiative_id=initiative_id, project_id=project_id, role="human", content=content.strip())
+    return (prior + [pending])[-MESSAGE_WINDOW:]
+
+
 async def advise(
     store: SpecStore,
     initiative_id: str,
     content: str,
+    history: list[Message] | None = None,
     *,
     llm: StructuredLLM | None = None,
-) -> AdvisorTurn:
-    """One rail turn: ground the Advisor, generate a state-aware reply (with any proposal
-    cards), and persist the exchange. The human turn + Advisor reply are stored only after a
-    successful generation, so a failed LLM call (-> 502) leaves no orphan message."""
+) -> Message:
+    """One rail turn (spec uvama): ground the Advisor in the windowed history the browser sent
+    plus spec + memory, generate a state-aware reply (with any proposal cards), and return it.
+    Nothing is persisted — conversations live in the browser; the frontend writes the reply into
+    IndexedDB. A failed LLM call (-> 502) simply yields no reply."""
     init = await store.get_initiative(initiative_id)
     if init is None:
         raise NotFoundError(f"no initiative {initiative_id}")
@@ -392,14 +459,13 @@ async def advise(
     if description is not None and init.state == "draft":
         reply = await _shape_via_rail(store, init.project_id, description, llm)
     else:
-        ctx = await assemble_context(store, initiative_id, pending_human=content)
+        window = _window_with_pending(history, initiative_id=initiative_id, content=content)
+        ctx = await assemble_context(store, initiative_id, messages=window)
         reply = await _converse(ctx, llm)
 
-    human = await store.append_message(initiative_id, "human", content.strip())
-    advisor = await store.append_message(
-        initiative_id, "advisor", reply.text, metadata=reply.metadata()
+    return Message(
+        initiative_id=initiative_id, role="advisor", content=reply.text, metadata=reply.metadata()
     )
-    return AdvisorTurn(human=human, advisor=advisor)
 
 
 # --- project-level rail (0010 u5, a9/a10): the same Advisor, scoped to the project --------
@@ -429,7 +495,10 @@ def build_project_user_message(
 
 async def _converse_project(
     project: ProjectContext, memory: list[ContextHit], messages: list[Message], llm: StructuredLLM
-) -> str:
+) -> tuple[str, str | None]:
+    """The project reply text plus, when the discussion has crystallised into one, a PROPOSED new
+    initiative description (BD-1 u3) — null in ordinary conversation. An empty/whitespace synthesis
+    is treated as none, so the rail only ever shows the action for a real proposal."""
     raw = await llm.complete_structured(
         system=build_project_system_prompt(),
         user=build_project_user_message(project, memory, messages),
@@ -437,22 +506,27 @@ async def _converse_project(
         schema_name="advisor_reply",
     )
     try:
-        return str(raw["reply"]).strip()
+        reply = str(raw["reply"]).strip()
     except (KeyError, TypeError) as e:
         raise LLMError(f"advisor output did not match the expected shape: {e}") from e
+    pi = raw.get("proposed_initiative")
+    proposed = pi.strip() if isinstance(pi, str) and pi.strip() else None
+    return reply, proposed
 
 
 async def advise_project(
     store: SpecStore,
     project_id: str,
     content: str,
+    history: list[Message] | None = None,
     *,
     llm: StructuredLLM | None = None,
-) -> AdvisorTurn:
-    """One turn on the PROJECT rail (a9): ground the Advisor in the whole project — its intent,
-    every initiative's summary, project-scoped memory, and the project conversation — generate a
-    strategic reply, and persist the exchange. Persisted only after a successful generation, so
-    a failed LLM call (-> 502) leaves no orphan message."""
+) -> tuple[Message, str | None]:
+    """One turn on the PROJECT rail (a9, spec uvama): ground the Advisor in the whole project — its
+    intent, every initiative's summary, project-scoped memory, and the windowed project conversation
+    the browser sent — generate a strategic reply, and return it alongside any synthesised PROPOSED
+    initiative description (BD-1 u3; None unless the discussion crystallised into one). Nothing is
+    persisted; the frontend writes the reply into IndexedDB. A failed LLM call (-> 502) yields no reply."""
     project = await store.get_project_context(project_id)
     if project is None:
         raise NotFoundError(f"no project {project_id}")
@@ -460,12 +534,8 @@ async def advise_project(
         raise ValidationError("a message needs content")
     llm = llm or get_advisor_llm()
 
-    messages = await store.list_project_messages(project_id, limit=MESSAGE_WINDOW)
-    pending = Message(project_id=project_id, role="human", content=content.strip())
-    window = (messages + [pending])[-MESSAGE_WINDOW:]
+    window = _window_with_pending(history, project_id=project_id, content=content)
     memory = await store.get_context(content.strip(), limit=5, project_id=project_id)
-    reply = await _converse_project(project, memory, window, llm)
+    reply, proposed_initiative = await _converse_project(project, memory, window, llm)
 
-    human = await store.append_project_message(project_id, "human", content.strip())
-    advisor = await store.append_project_message(project_id, "advisor", reply)
-    return AdvisorTurn(human=human, advisor=advisor)
+    return Message(project_id=project_id, role="advisor", content=reply), proposed_initiative

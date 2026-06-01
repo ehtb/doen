@@ -147,10 +147,16 @@ export interface Message {
   created_at: string;
 }
 
-// The Advisor's response to a human turn (backend AdvisorTurn, schemas.py).
-export interface AdvisorTurn {
-  human: Message;
-  advisor: Message;
+// The Advisor's response to a rail turn (backend AdvisorReply, schemas.py). Just the Advisor's
+// message — the human's turn already lives in the browser (IndexedDB). The frontend writes this
+// reply into IndexedDB itself; nothing is persisted server-side (spec uvama).
+//
+// BD-1 u3: on a PROJECT turn the Advisor may synthesise the discussion into a *proposed* initiative
+// description — it rides here, deliberately NOT in message.metadata, so the rail can surface a
+// 'Create initiative from this' action without ever persisting the synthesis. Null otherwise.
+export interface AdvisorReply {
+  message: Message;
+  proposed_initiative?: string | null;
 }
 
 // An escalation on the steering rail. Mirrors backend Decision (store.py).

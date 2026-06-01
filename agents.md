@@ -17,8 +17,10 @@ in @docs/design-principles.md.
 
 - **Backend:** FastAPI, async throughout. `asyncpg` (no ORM — keep overhead low). Pydantic v2.
   Layered (router → service → repository) — don't put business logic or data access in routers.
-- **Store:** Postgres = source of truth (including conversation history in the `messages`
-  table). Redis = derived hot cache + real-time coordination (decision pub/sub).
+- **Store:** Postgres = source of truth for the durable record (specs, decisions, work units,
+  memory, projects). Redis = derived hot cache + real-time coordination (decision pub/sub).
+  Conversation history is NOT here — it's browser-local (IndexedDB) since spec uvama; the backend
+  is stateless about messages (see Current state).
 - **Data layer:** `backend/app/store.py` — the `SpecStore` repository. Domain models live in
   `backend/app/models.py`. Reuse them; don't reinvent.
 - **Web:** Next.js (App Router), TypeScript, Tailwind, shadcn/ui, Tailwind Typography.
@@ -127,7 +129,10 @@ doen/
 - `work_units` — separate table. Status: `proposed` → `ready` → `in_progress` →
   `in_verification` → `done` (or `blocked_on_decision`).
 - `decisions` — separate table, append-only.
-- `messages` — conversation history (initiative-scoped OR project-scoped; exactly one set).
+- conversation history — NOT a table (dropped in spec uvama). It lives in the browser's
+  IndexedDB, keyed per initiative/project; the backend never reads or writes it. Each Advisor
+  call carries a windowed slice in its request body, which the backend uses for the prompt and
+  discards.
 - `projects` — one row per project (id, name, prefix, intent).
 - `memory` — embedded snippets the Advisor surfaces across initiatives.
 

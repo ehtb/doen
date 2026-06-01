@@ -43,6 +43,3 @@ export function shortId(prefix: string, seq: number): string {
   return `${prefix}-${seq}`;
 }
 
-export function shortSlug(prefix: string, seq: number, title: string | null | undefined): string {
-  return `${prefix.toLowerCase()}-${seq}-${slugify(title)}`;
-}

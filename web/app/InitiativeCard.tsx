@@ -78,7 +78,7 @@ export function InitiativeCard({
     : 0;
   return (
     <Link
-      href={href ?? `/projects/${initiative.project_id}/specs/${initiative.id}`}
+      href={href ?? `/${initiative.project_id}/${initiative.id}`}
       className="group block rounded-lg border border-border bg-card/60 px-5 py-4 transition-colors hover:bg-card"
     >
       <div className="flex items-center justify-between gap-4">

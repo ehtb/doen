@@ -1,9 +1,13 @@
-"""u1 — conversation persistence (spec 0009).
+"""Conversation: browser-local storage + a stateless backend (spec uvama, u1).
 
-Covers a4 (history persists across sessions; messages are individual rows with role,
-content, timestamp) and constraint 1 (the Advisor's context is an explicit bounded
-window: recent messages + spec state + relevant memory). The LLM is NOT exercised here —
-u1 is storage + retrieval + context assembly; the Advisor's reply generation is u2.
+Conversations moved out of Postgres into the browser's IndexedDB (the IndexedDB store + pruning
+live in web/lib/conversations.test.ts). What this suite covers on the backend:
+  - AC item_ff5a6e8db336: the `messages` table no longer exists in Postgres.
+  - AC item_b5be6599f7b3: an Advisor request carries the windowed history in its body and the
+    backend persists none of it — no row is written anywhere.
+  - constraint 1: assemble_context builds the bounded window from the messages it is GIVEN
+    (no store read), plus spec state + relevant memory.
+
 Integration tests over the real docker-compose Postgres + Redis.
 """
 
@@ -20,7 +24,7 @@ from fastapi.testclient import TestClient
 from redis import asyncio as aioredis
 
 from app.config import DATABASE_URL, REDIS_URL
-from app.main import app
+from app.models import Message
 from app.services.conversation import assemble_context
 from app.store import SpecStore
 
@@ -43,6 +47,13 @@ class FakeEmbedder:
         return [rng.uniform(-1.0, 1.0) for _ in range(DIM)]
 
 
+class FakeLLM:
+    """A minimal advisor provider: returns a normal conversational turn (no proposals needed)."""
+
+    async def complete_structured(self, *, system, user, schema, schema_name="result"):
+        return {"reply": "Here's a grounded answer.", "proposals": []}
+
+
 def _store_run(
     fn: Callable[[SpecStore], Awaitable[object]], embedder: FakeEmbedder | None = None
 ) -> object:
@@ -58,104 +69,82 @@ def _store_run(
     return asyncio.run(go())
 
 
-def _message_rows(iid: str) -> list[asyncpg.Record]:
-    async def go() -> list[asyncpg.Record]:
+async def _table_counts() -> dict[str, int]:
+    """Row counts for every base table in the public schema — to assert nothing was persisted."""
+    c = await asyncpg.connect(DATABASE_URL)
+    try:
+        names = [
+            r["tablename"]
+            for r in await c.fetch(
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+            )
+        ]
+        counts: dict[str, int] = {}
+        for n in names:
+            counts[n] = await c.fetchval(f'SELECT count(*) FROM "{n}"')
+        return counts
+    finally:
+        await c.close()
+
+
+# --- AC item_ff5a6e8db336: the messages table is gone from Postgres ------------------
+def test_messages_table_dropped():
+    async def go() -> bool:
         c = await asyncpg.connect(DATABASE_URL)
         try:
-            return await c.fetch(
-                "SELECT role, content, created_at FROM messages "
-                "WHERE initiative_id = $1 ORDER BY seq",
-                iid,
+            return await c.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' "
+                "AND tablename = 'messages')"
             )
         finally:
             await c.close()
 
-    return asyncio.run(go())
+    assert asyncio.run(go()) is False, "the messages table should no longer exist"
 
 
-# --- a4: a posted turn persists and replays on a fresh session ----------------
-def test_messages_persist_across_sessions(
-    client: TestClient, make_initiative: Callable[[], str]
+# --- AC item_b5be6599f7b3: an Advisor request persists nothing -----------------------
+def test_advisor_request_persists_nothing(
+    client: TestClient, make_initiative: Callable[[], str], monkeypatch
 ):
+    monkeypatch.setattr("app.services.advisor.get_advisor_llm", lambda: FakeLLM())
+    monkeypatch.setattr("app.store.get_embedding_provider", lambda: FakeEmbedder())
     iid = make_initiative()
-    r = client.post(f"/initiatives/{iid}/messages", json={"content": "What should I build first?"})
+
+    before = asyncio.run(_table_counts())
+    # a fabricated windowed history rides along in the request body
+    r = client.post(
+        f"/initiatives/{iid}/advisor",
+        json={
+            "content": "given what we discussed, what next?",
+            "history": [
+                {"role": "human", "content": "let's talk about the export"},
+                {"role": "advisor", "content": "sure — streaming or buffered?"},
+            ],
+        },
+    )
     assert r.status_code == 201, r.text
-    posted = r.json()
-    assert posted["role"] == "human"
-    assert posted["content"] == "What should I build first?"
-    assert posted["created_at"]  # the rail renders a timestamp
+    assert r.json()["message"]["role"] == "advisor"  # a reply was generated
 
-    # a second TestClient runs a fresh lifespan (new pool) — a genuine reopen. The history
-    # comes back from Postgres, not from any in-process state.
-    with TestClient(app) as reopened:
-        got = reopened.get(f"/initiatives/{iid}/messages").json()
-    assert [m["content"] for m in got] == ["What should I build first?"]
-    assert got[0]["id"] == posted["id"]
+    after = asyncio.run(_table_counts())
+    assert after == before, f"the Advisor call wrote rows: { {k: (before.get(k), after[k]) for k in after if after[k] != before.get(k)} }"
 
 
-# --- a4: messages are individual rows with role, content, timestamp -----------
-def test_messages_are_individual_rows(
+# --- constraint 1: assemble_context uses the GIVEN window (no store read) -------------
+def test_assemble_context_uses_given_window(
     client: TestClient, make_initiative: Callable[[], str]
 ):
     iid = make_initiative()
-    for text in ["first", "second", "third"]:
-        assert client.post(f"/initiatives/{iid}/messages", json={"content": text}).status_code == 201
-
-    rows = _message_rows(iid)
-    assert [r["content"] for r in rows] == ["first", "second", "third"]  # insertion order
-    assert all(r["role"] == "human" for r in rows)
-    assert all(r["created_at"] is not None for r in rows)  # a real timestamp column
-
-
-# --- a4 (u2 substrate): an Advisor turn round-trips with its metadata ----------
-def test_advisor_message_metadata_roundtrips(
-    client: TestClient, make_initiative: Callable[[], str]
-):
-    iid = make_initiative()
-    card = {"proposals": [{"section": "constraints", "text": "must be idempotent"}]}
-
-    def append_both(store: SpecStore):
-        async def go():
-            await store.append_message(iid, "human", "shape this")
-            await store.append_message(iid, "advisor", "Here's a proposal.", metadata=card)
-            return await store.list_messages(iid)
-
-        return go()
-
-    msgs = _store_run(append_both)
-    assert [m.role for m in msgs] == ["human", "advisor"]  # oldest-first
-    assert msgs[1].metadata == card  # JSONB payload survives the round-trip
-
-
-def test_post_message_validation(client: TestClient, make_initiative: Callable[[], str]):
-    iid = make_initiative()
-    # empty content is rejected (and nothing lands)
-    assert client.post(f"/initiatives/{iid}/messages", json={"content": "   "}).status_code == 422
-    # posting to an unknown initiative is a 404
-    assert client.post("/initiatives/nope/messages", json={"content": "hi"}).status_code == 404
-    assert _message_rows(iid) == []
-
-
-# --- constraint 1: the assembled context is a bounded recent window -----------
-def test_context_window_bounds_messages(
-    client: TestClient, make_initiative: Callable[[], str]
-):
-    iid = make_initiative()
+    window = [Message(initiative_id=iid, role="human", content=f"m{i}") for i in range(5)]
 
     def build(store: SpecStore):
-        async def go():
-            for i in range(12):
-                await store.append_message(iid, "human", f"m{i}")
-            return await assemble_context(store, iid, window=5, memory_limit=3)
-
-        return go()
+        return assemble_context(store, iid, messages=window, memory_limit=3)
 
     ctx = _store_run(build, embedder=FakeEmbedder())
-    assert [m.content for m in ctx.messages] == ["m7", "m8", "m9", "m10", "m11"]  # last 5, in order
+    assert [m.content for m in ctx.messages] == ["m0", "m1", "m2", "m3", "m4"]  # exactly what we gave
     assert ctx.spec is not None and ctx.spec.initiative_id == iid  # spec state is included
 
 
-# --- constraint 1: relevant memory is retrieved against the latest human turn --
+# --- constraint 1: relevant memory is retrieved against the latest human turn --------
 def test_context_includes_relevant_memory(
     client: TestClient, make_initiative: Callable[[], str]
 ):
@@ -166,9 +155,10 @@ def test_context_includes_relevant_memory(
     def build(store: SpecStore):
         async def go():
             await store.create_memory(other, distinctive)  # embedded text == summary verbatim
+            await store.pg.execute("UPDATE initiatives SET state = 'complete' WHERE id = $1", other)
             await store._drain()
-            await store.append_message(current, "human", distinctive)  # anchors the memory query
-            return await assemble_context(store, current, memory_limit=5)
+            window = [Message(initiative_id=current, role="human", content=distinctive)]
+            return await assemble_context(store, current, messages=window, memory_limit=5)
 
         return go()
 
@@ -177,3 +167,16 @@ def test_context_includes_relevant_memory(
     top = ctx.memory[0]
     assert top.initiative_id == other and top.type == "memory"  # cross-initiative recall
     assert top.score > 0.99  # exact-text match -> ~1.0 similarity
+
+
+# --- the empty-content guard still rejects a blank turn ------------------------------
+def test_advisor_rejects_blank_content(
+    client: TestClient, make_initiative: Callable[[], str], monkeypatch
+):
+    monkeypatch.setattr("app.services.advisor.get_advisor_llm", lambda: FakeLLM())
+    monkeypatch.setattr("app.store.get_embedding_provider", lambda: FakeEmbedder())
+    iid = make_initiative()
+    r = client.post(f"/initiatives/{iid}/advisor", json={"content": "   ", "history": []})
+    assert r.status_code == 422
+    # an unknown initiative is a 404
+    assert client.post("/initiatives/nope/advisor", json={"content": "hi", "history": []}).status_code == 404

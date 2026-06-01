@@ -236,8 +236,11 @@ def test_get_context_cross_initiative(make_initiative: Callable[[], str]):
         try:
             # no learnings, so the embedded text equals the summary verbatim
             await store.create_memory(other, distinctive)
+            # create_memory alone leaves state='draft' (derive_state([], has_learn=True)=='draft');
+            # force complete so the BD-19 filter admits this memory row.
+            await pg.execute("UPDATE initiatives SET state = 'complete' WHERE id = $1", other)
             await store._drain()
-            hits = await store.get_context(distinctive, limit=5)
+            hits = await store.get_context(distinctive, limit=5, project_id="build-doen")
             return hits
         finally:
             await pg.close()
@@ -250,3 +253,53 @@ def test_get_context_cross_initiative(make_initiative: Callable[[], str]):
     assert top.initiative_id != current
     assert top.text and isinstance(top.score, float)  # source attribution + relevance score
     assert top.score > 0.99  # exact-text match -> ~1.0 similarity
+
+
+# --- BD-19: get_context only surfaces content from completed initiatives ----------
+def test_get_context_excludes_incomplete_initiative(make_initiative: Callable[[], str]):
+    # BD-19 item_b54fe02b22d2: high-similarity content from a non-complete initiative
+    # must not appear, even when it would otherwise top the ranking.
+    draft_id = make_initiative()
+    fake = FakeEmbedder()
+    distinctive = "provisional-draft-decision-that-must-not-leak-bd19"
+
+    async def go():
+        store, pg, redis = await _store(fake)
+        try:
+            d = await store.raise_decision(
+                Decision(question=distinctive, options=["yes", "no"]), draft_id
+            )
+            await store.resolve_decision(d.id, "yes", "test rationale", "edo")
+            await store.embed_decision(d.id)
+            await store._drain()
+            # state is draft — verify it, then query
+            row = await pg.fetchrow("SELECT state FROM initiatives WHERE id = $1", draft_id)
+            assert row["state"] == "draft"
+            return await store.get_context(distinctive, limit=5, project_id="build-doen")
+        finally:
+            await pg.close()
+            await redis.aclose()
+
+    hits = _run(go())
+    assert not any(h.initiative_id == draft_id for h in hits)
+
+
+def test_get_context_includes_completed_initiative(make_initiative: Callable[[], str]):
+    # BD-19 item_130db6160bf9: content from a completed initiative must still appear.
+    complete_id = make_initiative()
+    fake = FakeEmbedder()
+    distinctive = "completed-initiative-memory-that-must-surface-bd19"
+
+    async def go():
+        store, pg, redis = await _store(fake)
+        try:
+            await store.create_memory(complete_id, distinctive)
+            await pg.execute("UPDATE initiatives SET state = 'complete' WHERE id = $1", complete_id)
+            await store._drain()
+            return await store.get_context(distinctive, limit=5, project_id="build-doen")
+        finally:
+            await pg.close()
+            await redis.aclose()
+
+    hits = _run(go())
+    assert any(h.initiative_id == complete_id for h in hits)

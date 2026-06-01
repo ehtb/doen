@@ -36,22 +36,19 @@ def _store_run(fn: Callable[[SpecStore], Awaitable[object]]) -> object:
     return asyncio.run(go())
 
 
-# --- e0ff: the conversation summary covers all three content areas -------------------
-def test_conversation_summary_covers_decisions_alternatives_priorities(
+# --- e0ff: the conversation summary covers the durable decision reasoning ------------
+def test_conversation_summary_covers_decisions_and_alternatives(
     client: TestClient, make_initiative: Callable[[], str]
 ):
+    # Conversations are browser-local now (spec uvama, decision dec_0397d7a8f45e/A): the human's
+    # stated_priorities came from message turns the backend can no longer read, so they degrade to
+    # an empty list. The durable reasoning — resolved decisions + their rejected alternatives —
+    # is unaffected, and that is what the summary still carries.
     iid = make_initiative()
 
     def seed(store: SpecStore):
         async def go():
-            # the human states what matters (priorities) ...
-            await store.append_message(
-                iid, "human", "Priority: the export must stream rows, never buffer the whole table."
-            )
-            await store.append_message(
-                iid, "human", "Also important: column order must match the on-screen report."
-            )
-            # ... and a decision is raised and resolved (a key decision with rejected options)
+            # a decision is raised and resolved (a key decision with rejected options)
             d = await store.raise_decision(
                 Decision(
                     question="Which CSV text encoding?",
@@ -79,10 +76,8 @@ def test_conversation_summary_covers_decisions_alternatives_priorities(
     rejected = {alt for r in summary["rejected_alternatives"] for alt in r["alternatives"]}
     assert {"UTF-16", "Latin-1"} <= rejected, f"rejected alternatives missing: {rejected}"
 
-    # the human's stated priorities are present
-    priorities = summary["stated_priorities"]
-    assert priorities, "no stated priorities captured"
-    assert any("stream" in p for p in priorities)
+    # stated_priorities is browser-local now — the backend reports it empty (not crash)
+    assert summary["stated_priorities"] == []
 
 
 def test_conversation_summary_unknown_initiative_raises(
@@ -97,10 +92,14 @@ def test_conversation_summary_unknown_initiative_raises(
         _store_run(go)
 
 
-# --- 7f2c: get_spec enrichment — advisor note + per-unit context ---------------------
-def test_spec_enrichment_advisor_note_and_unit_context(
+# --- 7f2c: get_spec enrichment — durable per-unit context ----------------------------
+def test_spec_enrichment_unit_context(
     client: TestClient, make_initiative: Callable[[], str]
 ):
+    # The message-derived fields (advisor_summary, per-unit advisor_review) are browser-local now
+    # (spec uvama, decision dec_0397d7a8f45e/A): advisor_summary is always None and advisor_review
+    # is gone. What remains is the durable work-unit context — submission summary + the human's
+    # verdict and feedback.
     iid = make_initiative()
 
     def seed(store: SpecStore):
@@ -120,23 +119,14 @@ def test_spec_enrichment_advisor_note_and_unit_context(
                 ),
             )  # in_progress -> in_verification
             await store.record_verdict(unit.id, "approved", "Ship it.", "Edo Balvers")  # -> done
-            # the Advisor's preliminary review for this unit (0009) lives in message metadata ...
-            await store.append_message(
-                iid,
-                "advisor",
-                "Preliminary review of the export unit.",
-                metadata={"review": {"unit_id": unit.id, "summary": "Evidence looks solid.", "concerns": []}},
-            )
-            # ... and its latest note is plain guidance
-            await store.append_message(iid, "advisor", "Latest guidance: keep the stream lazy.")
             return unit.id, await spec_enrichment(store, iid)
 
         return go()
 
     unit_id, enr = _store_run(seed)
-    assert enr["advisor_summary"] == "Latest guidance: keep the stream lazy."
+    assert enr["advisor_summary"] is None  # browser-local now — no server-side advisor note
     uc = enr["unit_context"][unit_id]
     assert uc["submission_summary"] == "Streams rows in constant memory."
     assert uc["verdict"] == "approved"
     assert uc["verification_feedback"] == "Ship it."
-    assert uc["advisor_review"]["summary"] == "Evidence looks solid."
+    assert "advisor_review" not in uc  # the per-unit Advisor review was retired with messages

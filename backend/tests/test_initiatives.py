@@ -1,10 +1,11 @@
-"""Initiatives as the parent entity: table, model, slug, scaffolded spec, lifecycle state.
+"""Initiatives as the parent entity: table, model, ID format, scaffolded spec, lifecycle state.
 
 Covers create (persists an initiative row + scaffolds an empty v0 spec at state=draft), the
-slug derivation (unique, duplicate disambiguated), and the 0011 lifecycle: a1 (three states;
-the migration maps the old stages correctly) and a2 (state is inferred from the work units +
-learn record, with no manual advance). get_initiative surfaces the {id, title, state} the MCP
-get_spec response carries. Integration tests over the real docker-compose Postgres + Redis.
+{prefix}-{seq} ID format (avhle u1: server-assigned, race-safe, client-supplied ID ignored),
+and the 0011 lifecycle: a1 (three states; the migration maps the old stages correctly) and a2
+(state is inferred from the work units + learn record, with no manual advance).
+get_initiative surfaces the {id, title, state} the MCP get_spec response carries.
+Integration tests over the real docker-compose Postgres + Redis.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
 
 import asyncpg
 import pytest
@@ -73,19 +75,67 @@ def track_initiatives():
     asyncio.run(drop())
 
 
-# --- a2: slug derivation (pure) -----------------------------------------------
+# --- pure slugify helper (still used by project creation) ----------------------
 def test_slugify_kebab_cases_the_title():
     assert slugify("Passwordless Sign-In") == "passwordless-sign-in"
     assert slugify("  Spaces & Symbols!! ") == "spaces-symbols"
     assert slugify("") == "initiative"
 
 
+# --- avhle u1 / item_f70eeff560a4: ID is {prefix}-{seq}, server-assigned ------
+def test_create_initiative_returns_prefix_seq_id(track_initiatives: list[str]):
+    """Creating two initiatives yields BD-N and BD-(N+1); IDs have no random suffix."""
+    a = _store_run(lambda s: s.create_initiative("Alpha", "build-doen"))
+    b = _store_run(lambda s: s.create_initiative("Beta", "build-doen"))
+    track_initiatives.extend([a.id, b.id])
+    assert re.fullmatch(r"BD-\d+", a.id), f"unexpected id: {a.id}"
+    assert re.fullmatch(r"BD-\d+", b.id), f"unexpected id: {b.id}"
+    assert b.seq == a.seq + 1  # contiguous per-project
+
+
+# --- avhle u1 / item_f70eeff560a4: client-supplied id is ignored ---------------
+def test_create_initiative_endpoint_ignores_client_id(
+    client: TestClient, track_initiatives: list[str]
+):
+    """Sending an 'id' field in the payload must not affect the server-assigned ID."""
+    r = client.post(
+        "/initiatives",
+        json={"title": "Client ID Test", "project_id": "build-doen", "id": "should-be-ignored"},
+    )
+    assert r.status_code == 201, r.text
+    init = r.json()
+    track_initiatives.append(init["id"])
+    assert re.fullmatch(r"BD-\d+", init["id"]), f"id not in prefix-seq format: {init['id']}"
+    assert init["id"] != "should-be-ignored"
+
+
+# --- avhle u1 / item_45ac98eca08d: seq is race-safe ----------------------------
+def test_create_initiative_seq_race_safe(track_initiatives: list[str]):
+    """N concurrent creations in the same project must produce N distinct seq values."""
+    n = 8
+
+    def _create(_: int) -> Initiative:
+        return _store_run(lambda s: s.create_initiative(f"Concurrent {_}", "build-doen"))
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        initiatives = list(pool.map(_create, range(n)))
+
+    for init in initiatives:
+        track_initiatives.append(init.id)
+
+    seqs = [i.seq for i in initiatives]
+    assert len(seqs) == len(set(seqs)), f"duplicate seq values: {seqs}"
+    ids = [i.id for i in initiatives]
+    assert len(ids) == len(set(ids)), f"duplicate IDs: {ids}"
+    for iid in ids:
+        assert re.fullmatch(r"BD-\d+", iid), f"unexpected id format: {iid}"
+
+
 # --- create persists an initiative + scaffolds an empty v0/draft spec ----------
 def test_create_initiative_scaffolds_empty_spec(track_initiatives: list[str]):
     init = _store_run(lambda s: s.create_initiative("Passwordless Sign-In", "build-doen"))
     track_initiatives.append(init.id)
-    # a random ~5-letter prefix keeps slugs unique; the title-derived part follows
-    assert re.fullmatch(r"[a-z]{5}-passwordless-sign-in", init.id)
+    assert re.fullmatch(r"BD-\d+", init.id), f"unexpected id: {init.id}"
     assert init.title == "Passwordless Sign-In"
     assert init.state == "draft"  # nothing under construction yet (0011)
 
@@ -101,13 +151,12 @@ def test_create_initiative_scaffolds_empty_spec(track_initiatives: list[str]):
     assert spec.constraints == [] and spec.discretion == [] and spec.acceptance == []
 
 
-# --- a2: same-titled initiatives get distinct slugs via the random prefix ------
-def test_duplicate_title_disambiguated(track_initiatives: list[str]):
+# --- same-titled initiatives still get distinct IDs (distinct seq) -------------
+def test_duplicate_title_has_distinct_ids(track_initiatives: list[str]):
     a = _store_run(lambda s: s.create_initiative("Same Title", "build-doen"))
     b = _store_run(lambda s: s.create_initiative("Same Title", "build-doen"))
     track_initiatives.extend([a.id, b.id])
-    assert a.id != b.id  # distinct prefixes, no collision
-    assert a.id.endswith("-same-title") and b.id.endswith("-same-title")
+    assert a.id != b.id
 
 
 # --- D1 fold-in: get_initiative surfaces the lifecycle metadata ----------------
@@ -116,7 +165,8 @@ def test_get_initiative_returns_lifecycle_metadata(track_initiatives: list[str])
     track_initiatives.append(init.id)
     got = _store_run(lambda s: s.get_initiative(init.id))
     assert isinstance(got, Initiative)
-    assert got.id == init.id and got.id.endswith("-lifecycle-meta")
+    assert got.id == init.id
+    assert re.fullmatch(r"BD-\d+", got.id), f"unexpected id: {got.id}"
     assert (got.title, got.state) == ("Lifecycle Meta", "draft")
     assert _store_run(lambda s: s.get_initiative("does-not-exist")) is None
 
@@ -178,7 +228,7 @@ def test_create_initiative_endpoint_scaffolds(
     assert r.status_code == 201, r.text
     init = r.json()
     track_initiatives.append(init["id"])
-    assert init["id"].endswith("-endpoint-made")
+    assert re.fullmatch(r"BD-\d+", init["id"]), f"unexpected id: {init['id']}"
     assert init["state"] == "draft"
     assert init["project_id"] == "build-doen"  # every initiative belongs to a project
 

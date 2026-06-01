@@ -2,13 +2,13 @@ import { notFound } from "next/navigation";
 import { GitBranch, Layers } from "lucide-react";
 
 import { getProjectDashboard } from "@/lib/api";
-import { shortId, shortSlug } from "@/lib/utils";
+import { shortId } from "@/lib/utils";
 import { SetBreadcrumb } from "@/app/_shell/breadcrumb";
 import { InitiativeCard, STATES } from "../../InitiativeCard";
 import NewInitiative from "../../NewInitiative";
 import CopySyncDocsPrompt from "./CopySyncDocsPrompt";
 import ProjectIntent from "./ProjectIntent";
-import ConversationRail from "./specs/[specId]/ConversationRail";
+import ConversationRail from "@/app/[projectId]/[initiativeId]/ConversationRail";
 
 // The project as a whole — its grouped initiatives change live as they're created/advanced.
 export const dynamic = "force-dynamic";
@@ -127,7 +127,7 @@ export default async function ProjectDashboardPage({
                             initiative={i}
                             attention={attention[i.id]}
                             shortId={shortId(project.prefix, i.seq)}
-                            href={`/projects/${project.id}/specs/${shortSlug(project.prefix, i.seq, i.title)}`}
+                            href={`/${project.id}/${i.id}`}
                           />
                         </li>
                       ))}
@@ -142,7 +142,7 @@ export default async function ProjectDashboardPage({
         {/* the project-level rail (a9/a10): the same Advisor, scoped to the whole project */}
         <div className="sticky top-6 min-w-80 flex-[1_1_360px] self-start">
           <ConversationRail
-            messagesUrl={`/api/projects/${project.id}/messages`}
+            scope={{ projectId: project.id }}
             advisorUrl={`/api/projects/${project.id}/advisor`}
             mode="reasoning across the project"
             subtitle="the whole project — your strategic thinking partner"

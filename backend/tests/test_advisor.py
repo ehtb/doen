@@ -134,6 +134,35 @@ def test_system_prompt_adapts_to_state():
     assert draft != building != complete
 
 
+# --- BD-1 u4: the prompt encodes the named reasoning-quality directives + design principles -----
+def test_system_prompt_encodes_reasoning_quality_and_design_principles():
+    from app.services.advisor import build_project_system_prompt
+
+    # Every state, and the project rail, carry the same base discipline — so the directives and
+    # principles must be present in all of them (the base prompt is shared).
+    prompts = [
+        build_system_prompt("draft"),
+        build_system_prompt("building"),
+        build_system_prompt("complete"),
+        build_project_system_prompt(),
+    ]
+    for p in prompts:
+        low = p.lower()
+        # reasoning-quality expectations, as behavioural directives (criterion item_1768116dfead)
+        assert "push back" in low
+        assert "even unsolicited" in low            # surface implications they didn't ask about
+        assert "connect the dots" in low
+        assert "calibrate depth" in low
+        assert "actionable" in low                  # produce concrete next steps, not just analysis
+        assert "uncertainty" in low                 # acknowledge it
+        # the design principles, NAMED so the Advisor can reference them (criterion item_dea3987dd8c2)
+        assert "human / ai boundary" in low
+        assert "correction over authoring" in low
+        assert "governing principle" in low
+        # written for a stateless, windowed conversation model (not "remember earlier sessions")
+        assert "stateless" in low and "windowed" in low
+
+
 # --- a2: the user message grounds in spec + memory + history (pure) -----------
 def test_user_message_grounds_in_spec_memory_history():
     spec = Spec(
@@ -168,7 +197,10 @@ def test_user_message_grounds_in_spec_memory_history():
 
 
 # --- a2/a5: a live turn feeds the grounded, state-named context to the LLM ----
-def test_advise_grounds_and_persists(make_initiative: Callable[[], str]):
+def test_advise_grounds_and_returns_reply(make_initiative: Callable[[], str]):
+    # Conversations are browser-local now (spec uvama): advise() persists nothing — it returns the
+    # Advisor's reply Message for the frontend to write into IndexedDB. The new human turn alone is
+    # enough to anchor the memory query.
     iid = make_initiative()  # born in draft (0011) — the Advisor's shaping mode
     other = make_initiative()
     distinctive = "single-use magic-link sign-in that expires after ten minutes"
@@ -183,23 +215,23 @@ def test_advise_grounds_and_persists(make_initiative: Callable[[], str]):
             )
             await store.save_spec(spec)
             await store.create_memory(other, distinctive)  # cross-initiative prior
+            # get_context only surfaces memory from complete initiatives (BD-19), so mark it complete
+            await store.pg.execute("UPDATE initiatives SET state = 'complete' WHERE id = $1", other)
             await store._drain()
-            turn = await advise(store, iid, distinctive, llm=fake)  # anchors memory on this turn
-            msgs = await store.list_messages(iid)
-            return turn, msgs
+            return await advise(store, iid, distinctive, llm=fake)  # anchors memory on this turn
 
         return inner()
 
-    turn, msgs = _store_run(go, embedder=FakeEmbedder())
-    assert isinstance(turn.human, Message) and turn.human.role == "human"
-    assert turn.advisor.role == "advisor" and turn.advisor.content == ADVISOR_PAYLOAD["reply"]
-    assert [m.role for m in msgs] == ["human", "advisor"]  # the exchange persisted, in order
+    reply = _store_run(go, embedder=FakeEmbedder())
+    assert isinstance(reply, Message)
+    assert reply.role == "advisor" and reply.content == ADVISOR_PAYLOAD["reply"]
+    assert reply.initiative_id == iid  # owned by the initiative, unpersisted
 
     call = fake.calls[0]
     assert call["schema_name"] == "advisor_turn"
     assert "**draft** state" in call["system"]                 # a5 — current state drives the mode
     assert "No password is ever stored." in call["user"]       # a2 — confirmed spec
-    assert distinctive in call["user"]                         # a2 — relevant memory retrieved
+    assert distinctive in call["user"]                         # a2 — the turn + relevant memory
 
 
 # --- a5: shape proposals ride along on the advisor message as cards -----------
@@ -213,8 +245,8 @@ def test_advise_proposals_become_cards(make_initiative: Callable[[], str]):
 
         return inner()
 
-    turn = _store_run(go, embedder=FakeEmbedder())
-    cards = turn.advisor.metadata["proposals"]
+    reply = _store_run(go, embedder=FakeEmbedder())
+    cards = reply.metadata["proposals"]
     assert [c["section"] for c in cards] == ["constraints", "discretion", "acceptance"]
     acc = next(c for c in cards if c["section"] == "acceptance")
     assert acc["verify_kind"] == "test" and acc["verify_detail"]  # acceptance card is confirmable
@@ -229,49 +261,47 @@ def test_shape_command_drafts_cards_without_writing_spec(make_initiative: Callab
         async def inner():
             before = await store.get_spec(iid)
             assert before is not None
-            turn = await advise(
+            reply = await advise(
                 store, iid, "shape this initiative: passwordless sign-in via magic links", llm=fake
             )
             after = await store.get_spec(iid)
-            return turn, before.version, after.version if after else None
+            return reply, before.version, after.version if after else None
 
         return inner()
 
-    turn, before_v, after_v = _store_run(go, embedder=FakeEmbedder())
+    reply, before_v, after_v = _store_run(go, embedder=FakeEmbedder())
     # routed through the 0006 full-draft generation (the proposed_spec schema)
     assert any(c["schema_name"] == "proposed_spec" for c in fake.calls)
-    cards = turn.advisor.metadata["proposals"]
+    cards = reply.metadata["proposals"]
     # the whole draft surfaced as cards: 2 constraints + 1 discretion + 1 acceptance
     assert sum(c["section"] == "constraints" for c in cards) == 2
     assert sum(c["section"] == "discretion" for c in cards) == 1
     assert sum(c["section"] == "acceptance" for c in cards) == 1
-    assert "drafted a full spec" in turn.advisor.content
+    assert "drafted a full spec" in reply.content
     # constraint 4 — nothing was written to the spec; the human confirms the cards
     assert after_v == before_v
 
 
-# --- endpoint: a turn persists both messages; an LLM failure leaves no orphan --
-def test_advisor_endpoint_persists_turn(client, make_initiative: Callable[[], str], monkeypatch):
+# --- endpoint: a turn returns the Advisor's reply; an LLM failure maps to 502 --
+def test_advisor_endpoint_returns_reply(client, make_initiative: Callable[[], str], monkeypatch):
     monkeypatch.setattr("app.services.advisor.get_advisor_llm", lambda: FakeLLM())
     monkeypatch.setattr("app.store.get_embedding_provider", lambda: FakeEmbedder())
     iid = make_initiative()
-    r = client.post(f"/initiatives/{iid}/advisor", json={"content": "what should I build first?"})
+    r = client.post(
+        f"/initiatives/{iid}/advisor",
+        json={"content": "what should I build first?", "history": []},
+    )
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["human"]["role"] == "human" and body["advisor"]["role"] == "advisor"
-    assert body["advisor"]["metadata"]["proposals"]  # cards came back
-
-    got = client.get(f"/initiatives/{iid}/messages").json()
-    assert [m["role"] for m in got] == ["human", "advisor"]
+    assert body["message"]["role"] == "advisor"  # just the Advisor's reply (the human turn is local)
+    assert body["message"]["metadata"]["proposals"]  # cards came back
 
 
-def test_advisor_endpoint_llm_failure_no_orphan(
+def test_advisor_endpoint_llm_failure_returns_502(
     client, make_initiative: Callable[[], str], monkeypatch
 ):
     monkeypatch.setattr("app.services.advisor.get_advisor_llm", lambda: FakeLLM(error=LLMError("boom")))
     monkeypatch.setattr("app.store.get_embedding_provider", lambda: FakeEmbedder())
     iid = make_initiative()
-    r = client.post(f"/initiatives/{iid}/advisor", json={"content": "hello"})
+    r = client.post(f"/initiatives/{iid}/advisor", json={"content": "hello", "history": []})
     assert r.status_code == 502, r.text
-    # the human turn is only persisted on success, so a failed call leaves no orphan message
-    assert client.get(f"/initiatives/{iid}/messages").json() == []

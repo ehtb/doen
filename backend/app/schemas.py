@@ -19,6 +19,7 @@ from app.models import (
     InitiativeAttention,
     Memory,
     Message,
+    MessageRole,
     Project,
     Section,
     Verify,
@@ -119,8 +120,22 @@ class ShapeWithAI(BaseModel):
 
 
 # --- conversation rail ---------------------------------------------------------------
-class PostMessage(BaseModel):
-    content: str  # a human turn on the rail; the role is set server-side
+class MessageInput(BaseModel):
+    """One prior turn the browser replays into an Advisor call. Conversations are browser-local
+    (spec uvama): the backend never stores these — it reads the window only to build the prompt,
+    then discards it. Lean by design (role + content); proposal metadata stays client-side."""
+
+    role: MessageRole
+    content: str
+
+
+class AdvisorRequest(BaseModel):
+    """A rail turn (spec uvama): the human's new message plus the windowed slice of recent history
+    the browser holds in IndexedDB. The backend assembles the prompt from `history` + `content` +
+    spec/memory, generates a reply, and persists nothing."""
+
+    content: str
+    history: list[MessageInput] = []
 
 
 class Proposal(BaseModel):
@@ -134,12 +149,18 @@ class Proposal(BaseModel):
     verify_detail: str | None = None
 
 
-class AdvisorTurn(BaseModel):
-    """One exchange on the rail: the human's turn and the Advisor's reply, both persisted.
-    The reply's proposals live in its message metadata (rendered as cards by u3)."""
+class AdvisorReply(BaseModel):
+    """The Advisor's reply to a rail turn (spec uvama). Just the Advisor's message — the human's
+    turn already lives in the browser. Nothing here is persisted server-side; the frontend writes
+    the reply into IndexedDB. `metadata` carries any proposal cards (rendered by the rail).
 
-    human: Message
-    advisor: Message
+    BD-1 u3: on a PROJECT turn the Advisor may also synthesise the discussion into a *proposed*
+    initiative description — `proposed_initiative` carries it (null otherwise). It rides here as a
+    sibling of the message, deliberately NOT inside message.metadata, so it stays transient UI
+    state the frontend renders a 'Create initiative from this' action for and never persists."""
+
+    message: Message
+    proposed_initiative: str | None = None
 
 
 # --- learn stage ---------------------------------------------------------------------

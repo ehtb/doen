@@ -41,8 +41,6 @@ from app.models import (
     Initiative,
     InitiativeAttention,
     Memory,
-    Message,
-    MessageRole,
     Project,
     ProjectContext,
     SiblingSummary,
@@ -129,21 +127,12 @@ def _memory_from_row(row: asyncpg.Record) -> Memory:
     )
 
 
-def _message_from_row(row: asyncpg.Record) -> Message:
-    return Message(
-        id=row["id"],
-        initiative_id=row["initiative_id"],
-        project_id=row["project_id"],
-        role=row["role"],
-        content=row["content"],
-        metadata=json.loads(row["metadata"]) if row["metadata"] else {},
-        created_at=row["created_at"].isoformat(),
-    )
-
-
 # ----------------------------------------------------------------------------- store
 SPEC_CACHE_TTL = 300  # seconds; cache is derived, so a short TTL is just a safety net
-MESSAGE_WINDOW = 30   # recent messages an Advisor context assembly includes (0009 discretion)
+# Conversations live in the browser now (spec uvama): the frontend windows its own history and
+# sends a slice with each Advisor call. This is the backend's defensive cap on how many of those
+# turns it will fold into a prompt — a safety net against a client sending an unbounded slice.
+MESSAGE_WINDOW = 30
 GUIDANCE_CACHE_TTL = 300  # seconds; a unit briefing is regenerated on demand after it lapses
 # Project context is rendered into every Advisor turn for a project initiative, so it must
 # stay compact (0010 constraint 3): cap how many siblings, and how many constraint headlines
@@ -232,27 +221,30 @@ class SpecStore:
     ) -> Initiative:
         """Create an initiative under a project and scaffold its empty spec in one act
         (constraint 2): the spec is born at version 0, state=draft (0011), with empty item lists.
-        The id is a unique slug derived from the title. Every initiative belongs to a project —
-        `project_id` is required and must exist (no orphan specs)."""
+        The id is {project.prefix}-{seq} (e.g. BD-1), assigned server-side — the client never
+        supplies it. Every initiative belongs to a project — `project_id` is required and must
+        exist (no orphan specs)."""
         if await self.get_project(project_id) is None:
             raise NotFoundError(f"no project {project_id}")
-        slug = await self._unique_slug(f"{slug_prefix()}-{slugify(title)}")
-        spec = Spec(initiative_id=slug, title=title, state="draft")
         async with self.pg.acquire() as conn:
             async with conn.transaction():
-                # Allocate the immutable per-project sequence (0012 u5/a10). Lock the project row
-                # so concurrent creations serialise — MAX+1 can't race two initiatives onto one seq.
-                await conn.execute("SELECT 1 FROM projects WHERE id = $1 FOR UPDATE", project_id)
+                # Lock the project row to serialize seq assignment across concurrent creations
+                # and read the prefix in one query (avhle u1).
+                prefix: str = await conn.fetchval(
+                    "SELECT prefix FROM projects WHERE id = $1 FOR UPDATE", project_id
+                )
                 seq: int = await conn.fetchval(
                     "SELECT COALESCE(MAX(seq), 0) + 1 FROM initiatives WHERE project_id = $1",
                     project_id,
                 )
+                new_id = f"{prefix}-{seq}"
+                spec = Spec(initiative_id=new_id, title=title, state="draft")
                 await conn.execute(
                     """INSERT INTO initiatives
                            (id, title, project_id, seq, org_id, owner_id,
                             state, created_at, updated_at)
                        VALUES ($1, $2, $3, $4, $5, $6, 'draft', now(), now())""",
-                    slug, title, project_id, seq, org_id, owner_id,
+                    new_id, title, project_id, seq, org_id, owner_id,
                 )
                 # Scaffold the spec at version 0 directly. A brand-new spec has no prior
                 # row to guard, so this doesn't bypass the optimistic lock — the first real
@@ -260,11 +252,11 @@ class SpecStore:
                 await conn.execute(
                     """INSERT INTO specs (initiative_id, version, doc, updated_at)
                        VALUES ($1, 0, $2, now())""",
-                    slug, spec.model_dump_json(),
+                    new_id, spec.model_dump_json(),
                 )
-        await self.redis.set(f"spec:{slug}", spec.model_dump_json(), ex=SPEC_CACHE_TTL)
+        await self.redis.set(f"spec:{new_id}", spec.model_dump_json(), ex=SPEC_CACHE_TTL)
         return Initiative(
-            id=slug, title=title, state="draft",
+            id=new_id, title=title, state="draft",
             project_id=project_id, seq=seq, org_id=org_id, owner_id=owner_id,
         )
 
@@ -750,23 +742,19 @@ class SpecStore:
         return [_memory_from_row(r) for r in rows]
 
     async def get_context(
-        self, query: str, limit: int = 8, *, project_id: str | None = None
+        self, query: str, limit: int = 8, *, project_id: str
     ) -> list[ContextHit]:
         """Similarity search over the memory corpus — resolved decisions + completed-
         initiative memory (D2 scope) — so an executor shaping or building the next feature
         retrieves relevant prior patterns (0005 a6/a7/a8). Ranked by cosine similarity; rows
         without an embedding are skipped.
 
-        0010 constraint 4: when `project_id` is given (the calling initiative belongs to a
-        project), search WITHIN the project first; only if those are insufficient to fill
-        `limit` does it fall back to the rest of the corpus (outside the project). Each hit is
-        tagged with its scope (project / global) and its source initiative. With no project_id
-        it's the original global search (scope stays None) — standalone initiatives unaffected."""
+        0010 constraint 4: search WITHIN the project first; only if those are insufficient to
+        fill `limit` does it fall back to the rest of the corpus (outside the project). Each
+        hit is tagged with its scope (project / global) and its source initiative."""
         if not query.strip():
             return []
         [qvec] = await self._get_embedder().embed([query])
-        if project_id is None:
-            return await self._context_search(qvec, limit)
         project_hits = await self._context_search(qvec, limit, project_id=project_id)
         for h in project_hits:
             h.scope = "project"
@@ -811,7 +799,8 @@ class SpecStore:
                   FROM memory WHERE embedding IS NOT NULL
             ) q
             JOIN initiatives i ON i.id = q.initiative_id
-            WHERE ($2::text IS NULL OR i.project_id = $2)
+            WHERE i.state = 'complete'
+              AND ($2::text IS NULL OR i.project_id = $2)
               AND ($3::text IS NULL OR i.project_id IS DISTINCT FROM $3)
             ORDER BY q.dist
             LIMIT $4
@@ -828,86 +817,9 @@ class SpecStore:
             for r in rows
         ]
 
-    # --- conversation: the rail's persisted history (0009 u1) ----------------
-    async def append_message(
-        self,
-        initiative_id: str,
-        role: MessageRole,
-        content: str,
-        metadata: dict | None = None,
-    ) -> Message:
-        """Append one message row (constraint 1: individual rows). created_at is taken from
-        the column default so the DB clock is the single source of truth for the timestamp."""
-        msg = Message(initiative_id=initiative_id, role=role, content=content, metadata=metadata or {})
-        row = await self.pg.fetchrow(
-            """INSERT INTO messages (id, initiative_id, role, content, metadata)
-               VALUES ($1, $2, $3, $4, $5)
-               RETURNING id, initiative_id, project_id, role, content, metadata, created_at""",
-            msg.id, initiative_id, role, content, json.dumps(msg.metadata),
-        )
-        return _message_from_row(row)
-
-    async def list_messages(
-        self, initiative_id: str, limit: int | None = None
-    ) -> list[Message]:
-        """An initiative's conversation, oldest-first. With no limit the rail gets the full
-        history (a4); with a limit it gets the most recent `limit` (still oldest-first) — the
-        Advisor's windowed context (constraint 1)."""
-        if limit is None:
-            rows = await self.pg.fetch(
-                """SELECT id, initiative_id, project_id, role, content, metadata, created_at
-                   FROM messages WHERE initiative_id = $1 ORDER BY seq""",
-                initiative_id,
-            )
-        else:
-            rows = await self.pg.fetch(
-                """SELECT id, initiative_id, project_id, role, content, metadata, created_at FROM (
-                       SELECT * FROM messages WHERE initiative_id = $1
-                       ORDER BY seq DESC LIMIT $2
-                   ) recent ORDER BY seq""",
-                initiative_id, limit,
-            )
-        return [_message_from_row(r) for r in rows]
-
-    # --- project conversation: the project-level rail's history (0010 u5) ----
-    async def append_project_message(
-        self,
-        project_id: str,
-        role: MessageRole,
-        content: str,
-        metadata: dict | None = None,
-    ) -> Message:
-        """Append one project-owned message row (initiative_id NULL, project_id set). The same
-        table as the initiative rail — one Message abstraction, two owners (u5)."""
-        msg = Message(project_id=project_id, role=role, content=content, metadata=metadata or {})
-        row = await self.pg.fetchrow(
-            """INSERT INTO messages (id, project_id, role, content, metadata)
-               VALUES ($1, $2, $3, $4, $5)
-               RETURNING id, initiative_id, project_id, role, content, metadata, created_at""",
-            msg.id, project_id, role, content, json.dumps(msg.metadata),
-        )
-        return _message_from_row(row)
-
-    async def list_project_messages(
-        self, project_id: str, limit: int | None = None
-    ) -> list[Message]:
-        """A project's conversation, oldest-first; with a limit, the most recent `limit` (still
-        oldest-first) — the project Advisor's windowed context."""
-        if limit is None:
-            rows = await self.pg.fetch(
-                """SELECT id, initiative_id, project_id, role, content, metadata, created_at
-                   FROM messages WHERE project_id = $1 ORDER BY seq""",
-                project_id,
-            )
-        else:
-            rows = await self.pg.fetch(
-                """SELECT id, initiative_id, project_id, role, content, metadata, created_at FROM (
-                       SELECT * FROM messages WHERE project_id = $1
-                       ORDER BY seq DESC LIMIT $2
-                   ) recent ORDER BY seq""",
-                project_id, limit,
-            )
-        return [_message_from_row(r) for r in rows]
+    # Conversation history is no longer stored server-side (spec uvama): it lives in the
+    # browser's IndexedDB. The frontend sends a windowed slice with each Advisor call and the
+    # backend discards it after replying — there is deliberately no message read/write here.
 
     # --- guidance cache: a derived, short-lived unit briefing (0009 u4) ------
     def _guidance_key(self, unit_id: str, spec_version: int) -> str:
@@ -1007,19 +919,15 @@ class SpecStore:
         return await self.save_unit(unit)
 
     async def reject_unit(self, unit_id: str) -> WorkUnit:
-        """Reject a proposed work unit (0011 a6): delete it and log the rejection to the rail
-        (D1 -> c) — the same lightweight 'no thanks' the proposed spec items get. Only a proposed
-        unit can be rejected; a confirmed/started unit is real work, not a proposal."""
+        """Reject a proposed work unit (0011 a6): delete it. Only a proposed unit can be rejected;
+        a confirmed/started unit is real work, not a proposal. (The rejection used to be logged to
+        the rail as an advisor message; conversations are browser-local now — spec uvama — so the
+        backend no longer writes that note.)"""
         unit = await self._require_unit(unit_id)
         if unit.status != "proposed":
             raise ValidationError(f"only a proposed work unit can be rejected (it is {unit.status})")
         await self.pg.execute("DELETE FROM work_units WHERE id = $1", unit_id)
         await self._recompute_state(unit.spec_id)
-        await self.append_message(
-            unit.spec_id,
-            "advisor",
-            f'Noted — you rejected the proposed work unit: "{unit.title}". I\'ve removed it.',
-        )
         return unit
 
     async def record_verdict(

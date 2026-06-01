@@ -16,7 +16,6 @@ client (the human's rail), which is why pub/sub across connections matters.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -30,10 +29,7 @@ from app.exceptions import DecisionTimeout, InvalidTransition, NotFoundError
 from app.models import CriterionResult, Decision, Submission, WorkUnit
 from app.services.conversation import spec_enrichment, summarize_conversation
 from app.services.guidance import generate_guidance
-from app.services.review import post_review
 from app.store import SpecStore
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -209,13 +205,10 @@ async def submit_for_verification(
         raise ValueError(f"no work unit {unit_id}")
     except InvalidTransition as e:
         raise ValueError(str(e))
-    # D1 -> b: the one proactive moment — auto-post the Advisor's preliminary review to the
-    # rail so the human verifier reads it before judging. Best-effort: a review failure
-    # (e.g. no LLM key) must never undo a successful submission.
-    try:
-        await post_review(store, unit_id)
-    except Exception:
-        logger.warning("auto-review failed for unit %s", unit_id, exc_info=True)
+    # The Advisor's preliminary review used to be auto-posted to the rail here so the human
+    # verifier could read it before judging. Conversations are browser-local now (spec uvama,
+    # decision dec_0397d7a8f45e/A) — the backend can't write to the rail — so that proactive
+    # review is retired; the human judges from the submission's criteria_results directly.
     return unit.model_dump()
 
 

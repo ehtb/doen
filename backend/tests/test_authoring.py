@@ -217,10 +217,13 @@ def test_confirm_all_scoped_to_one_section(client: TestClient, make_initiative: 
     assert saved["discretion"][0]["status"] == "proposed"  # other section untouched
 
 
-# --- 0011 a6 / D1 -> c: rejecting a proposed item deletes it + logs to the rail ---------
-def test_reject_proposed_item_deletes_and_logs_to_rail(
+# --- 0011 a6: rejecting a proposed item deletes it -------------------------------------
+def test_reject_proposed_item_deletes(
     client: TestClient, make_initiative: Callable[[], str]
 ):
+    # The rejection used to be logged to the conversation rail as an advisor note; conversations
+    # are browser-local now (spec uvama) so the backend no longer writes that note — the item is
+    # simply removed from the spec, leaving a clean contract.
     iid = make_initiative()
     spec = _put_with_proposed(client, iid)  # v1, one ai_proposed constraint
     item = spec["constraints"][0]
@@ -231,13 +234,6 @@ def test_reject_proposed_item_deletes_and_logs_to_rail(
     # gone from the spec entirely (a clean contract, not a dimmed/retired row), version bumped
     assert after["version"] == spec["version"] + 1
     assert all(c["id"] != item["id"] for c in after["constraints"])
-
-    # D1 -> c: the rejection is preserved in the conversation rail (the Advisor's history)
-    msgs = client.get(f"/initiatives/{iid}/messages").json()
-    assert any(
-        m["role"] == "advisor" and "rejected" in m["content"] and item["text"] in m["content"]
-        for m in msgs
-    )
 
 
 def test_reject_only_applies_to_proposed_items(

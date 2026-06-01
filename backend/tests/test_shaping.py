@@ -209,7 +209,8 @@ def test_create_from_description_endpoint(client, monkeypatch):
     init = r.json()
     try:
         # the Advisor named the initiative (title from shaping) and it's born Draft, in the project
-        assert init["id"].endswith("-passwordless-sign-in")
+        import re as _re
+        assert _re.fullmatch(r"BD-\d+", init["id"]), f"unexpected id: {init['id']}"
         assert init["state"] == "draft" and init["project_id"] == "build-doen"
 
         # the whole spec is drafted as proposals to confirm item by item (a3)

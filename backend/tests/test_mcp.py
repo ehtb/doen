@@ -35,16 +35,12 @@ async def _flow() -> None:
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=3)
     redis = aioredis.from_url(REDIS_URL, decode_responses=True)
     store = SpecStore(pool, redis)
-    iid = f"init_{uuid4().hex[:12]}"
 
-    # Seed an initiative + spec for get_spec to find. Every initiative belongs to a project
-    # (no orphan specs) — the always-present build-doen project owns this test one.
-    await pool.execute(
-        "INSERT INTO initiatives (id, org_id, owner_id, state, project_id) "
-        "VALUES ($1,$2,$3,'draft','build-doen')",
-        iid, DEV_ORG_ID, DEV_USER_ID,
-    )
-    await store.save_spec(Spec(initiative_id=iid, title="MCP demo", intent="prove a4"))
+    # Seed an initiative + spec for get_spec to find via the store so the ID and seq
+    # are assigned correctly (avhle u1 — client may not supply an ID).
+    init = await store.create_initiative("MCP demo", "build-doen")
+    iid = init.id
+    await store.save_spec(Spec(initiative_id=iid, version=0, title="MCP demo", intent="prove a4"))
 
     params = StdioServerParameters(
         command=sys.executable, args=["-m", "app.mcp_server"], cwd=str(BACKEND_DIR)

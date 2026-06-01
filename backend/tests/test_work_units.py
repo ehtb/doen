@@ -345,10 +345,13 @@ def test_resolving_decision_resumes_blocked_unit(
     assert resumed.blocked_on is None
 
 
-# --- 0011 a6 / D1 -> c: rejecting a proposed unit deletes it + logs to the rail ---------
-def test_reject_proposed_unit_deletes_and_logs(
+# --- 0011 a6: rejecting a proposed unit deletes it -------------------------------------
+def test_reject_proposed_unit_deletes(
     client: TestClient, make_initiative: Callable[[], str]
 ):
+    # The rejection used to be logged to the conversation rail as an advisor note; conversations
+    # are browser-local now (spec uvama) so the backend no longer writes that note — only the
+    # deletion remains observable here.
     iid = make_initiative()
     _spec_row(client, iid)
     unit = WorkUnit(spec_id=iid, title="throwaway unit", scope="not wanted")
@@ -357,12 +360,6 @@ def test_reject_proposed_unit_deletes_and_logs(
     r = client.post(f"/units/{unit.id}/reject")
     assert r.status_code == 200, r.text
     assert _store_run(lambda s: s.get_unit(unit.id)) is None  # deleted
-
-    msgs = _store_run(lambda s: s.list_messages(iid))
-    assert any(
-        m.role == "advisor" and "rejected" in m.content and "throwaway unit" in m.content
-        for m in msgs
-    )
 
 
 def test_reject_only_applies_to_proposed_units(

@@ -159,6 +159,7 @@ def test_guidance_includes_relevant_memory(make_initiative: Callable[[], str]):
     def go(store: SpecStore):
         async def inner():
             await store.create_memory(other, distinctive)
+            await store.pg.execute("UPDATE initiatives SET state = 'complete' WHERE id = $1", other)
             await store._drain()
             unit_id, _ = await _seed_unit(store, iid)
             return await generate_guidance(store, unit_id, llm=fake)

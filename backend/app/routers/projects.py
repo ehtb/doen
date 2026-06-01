@@ -14,10 +14,10 @@ from app.database import get_store
 from app.exceptions import NotFoundError, ValidationError
 from app.models import Initiative, Message, Project, short_id, short_slug
 from app.schemas import (
-    AdvisorTurn,
+    AdvisorReply,
+    AdvisorRequest,
     AssignProject,
     CreateProject,
-    PostMessage,
     ProjectDashboard,
     ShapeWithAI,
     UpdateProject,
@@ -134,17 +134,16 @@ async def assign_to_project(
     return await store.assign_initiative_to_project(initiative_id, body.project_id)
 
 
-# --- the project-level conversation rail (0010 u5): the Advisor scoped to the project ---
-@router.get("/projects/{project_id}/messages")
-async def project_messages(project_id: str, store: _Store) -> list[Message]:
-    """The project rail's full history, oldest-first (a9)."""
-    if await store.get_project(project_id) is None:
-        raise NotFoundError(f"no project {project_id}")
-    return await store.list_project_messages(project_id)
-
-
-@router.post("/projects/{project_id}/advisor")
-async def project_advisor(project_id: str, body: PostMessage, store: _Store) -> AdvisorTurn:
+# --- the project-level conversation rail (0010 u5; spec uvama): Advisor scoped to the project ---
+@router.post("/projects/{project_id}/advisor", status_code=201)
+async def project_advisor(project_id: str, body: AdvisorRequest, store: _Store) -> AdvisorReply:
     """One turn on the project rail (a9/a10): the same Advisor, scoped to the whole project,
-    reasoning across its initiatives. An LLMError -> 502; a missing project -> 404."""
-    return await advisor_service.advise_project(store, project_id, body.content)
+    reasoning across its initiatives. The browser sends the windowed history; nothing is
+    persisted (spec uvama). An LLMError -> 502; a missing project -> 404."""
+    history = [
+        Message(project_id=project_id, role=m.role, content=m.content) for m in body.history
+    ]
+    reply, proposed_initiative = await advisor_service.advise_project(
+        store, project_id, body.content, history
+    )
+    return AdvisorReply(message=reply, proposed_initiative=proposed_initiative)

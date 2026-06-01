@@ -315,25 +315,9 @@ class Guidance(BaseModel):
     pitfalls: list[str] = Field(default_factory=list)        # known traps to avoid
 
 
-class CriterionReview(BaseModel):
-    """The Advisor's independent read of the evidence for one acceptance criterion (0009 u5)."""
-
-    criterion: str
-    assessment: Literal["aligned", "partial", "gap", "concern"]
-    note: str
-
-
-class ReviewNotes(BaseModel):
-    """The Advisor's preliminary review of a submitted unit (0009 u5, a7): evidence weighed
-    against the acceptance criteria, for the human verifier. These are notes, never a verdict
-    — only the human judges (no self-approval). Auto-posted to the rail on submit (D1 -> b)."""
-
-    unit_id: str
-    initiative_id: str
-    title: str
-    summary: str
-    criteria: list[CriterionReview] = Field(default_factory=list)
-    concerns: list[str] = Field(default_factory=list)
+# (The verify-stage Advisor review — CriterionReview / ReviewNotes — was retired with the move to
+# browser-local conversations: spec uvama, decision dec_0397d7a8f45e/A. It was delivered only as a
+# rail message, which the backend no longer writes.)
 
 
 # ----------------------------------------------------------------------------- work units (0003)

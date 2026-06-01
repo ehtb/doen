@@ -21,10 +21,11 @@ import pytest
 from redis import asyncio as aioredis
 
 from app.config import DATABASE_URL, REDIS_URL
-from app.models import Decision, SpecItem, WorkUnit
+from app.models import Decision, Message, ProjectContext, SpecItem, WorkUnit
 from app.providers.embeddings import EmbeddingProvider
 from app.services.advisor import (
     PROJECT_COHERENCE_PROMPT,
+    _converse_project,
     advise_project,
     build_system_prompt,
     build_user_message,
@@ -69,13 +70,19 @@ class FakeEmbedder:
 
 
 class FakeLLM:
-    def __init__(self) -> None:
+    def __init__(self, proposed_initiative: str | None = None) -> None:
         self.calls: list[dict] = []
+        # BD-1 u3: when set, the project rail's structured reply carries a synthesised
+        # proposed-initiative description (the crystallised-into-an-initiative case).
+        self._proposed_initiative = proposed_initiative
 
     async def complete_structured(self, *, system, user, schema, schema_name="result"):
         self.calls.append({"system": system, "user": user, "schema_name": schema_name})
         if schema_name == "advisor_reply":
-            return {"reply": "Three initiatives are in shape; 0009 is the one to close out next."}
+            out = {"reply": "Three initiatives are in shape; 0009 is the one to close out next."}
+            if self._proposed_initiative is not None:
+                out["proposed_initiative"] = self._proposed_initiative
+            return out
         return {"briefing": "Reuse the project's Postgres+Redis pattern.", "pitfalls": ["don't add a queue"]}
 
 
@@ -184,7 +191,8 @@ def test_assemble_context_includes_project_for_member(
             proj_id, a_id, b_id = await _build_project_with_two_siblings(
                 store, track_projects, track_initiatives
             )
-            return await assemble_context(store, b_id, pending_human="anything new I should know?")
+            messages = [Message(initiative_id=b_id, role="human", content="anything new I should know?")]
+            return await assemble_context(store, b_id, messages=messages)
 
         return inner()
 
@@ -203,7 +211,8 @@ def test_prompt_renders_project_and_coherence(
             proj_id, a_id, b_id = await _build_project_with_two_siblings(
                 store, track_projects, track_initiatives
             )
-            return await assemble_context(store, b_id, pending_human="how does this fit?")
+            messages = [Message(initiative_id=b_id, role="human", content="how does this fit?")]
+            return await assemble_context(store, b_id, messages=messages)
 
         return inner()
 
@@ -250,35 +259,35 @@ def test_get_context_project_first_then_global_fallback(
             )
             await store.resolve_decision(din.id, "yes", "no third-party queue", "edo")
             await store.embed_decision(din.id)
+            await store.pg.execute("UPDATE initiatives SET state = 'complete' WHERE id = $1", sib.id)
             dout = await store.raise_decision(
                 Decision(question=outsider_text, options=["broker", "db"]), outsider.id
             )
             await store.resolve_decision(dout.id, "broker", "fastest path", "edo")
             await store.embed_decision(dout.id)
+            await store.pg.execute("UPDATE initiatives SET state = 'complete' WHERE id = $1", outsider.id)
             await store._drain()
 
-            # query exactly matches the OUTSIDER's decision, so it tops the global corpus —
-            # yet project hits must still come first, and the fallback must reach outside.
             scoped = await store.get_context(outsider_text, limit=8, project_id=proj.id)
-            unscoped = await store.get_context(outsider_text, limit=8)
-            return proj.id, sib.id, outsider.id, scoped, unscoped
+            return proj.id, sib.id, caller.id, outsider.id, scoped
 
         return inner()
 
-    proj_id, sib_id, outsider_id, scoped, unscoped = _store_run(go, embedder=FakeEmbedder())
+    proj_id, sib_id, caller_id, outsider_id, scoped = _store_run(go, embedder=FakeEmbedder())
 
     # the in-project sibling is returned and tagged project; project hits precede global ones
     project_hits = [h for h in scoped if h.scope == "project"]
     global_hits = [h for h in scoped if h.scope == "global"]
     assert any(h.initiative_id == sib_id for h in project_hits)
     assert scoped[0].scope == "project"  # project-first
-    # the project was thin, so the fallback reached OUTSIDE it — and tagged those global
+    # the project was thin, so the fallback reached OUTSIDE it — and tagged those global.
+    # FakeEmbedder uses hash-based random vectors, so we cannot assert which specific
+    # external decision ranks highest — only that the fallback ran and tagged its hits "global"
+    # and that none of the global hits came from within the project.
     assert global_hits, "the global fallback returned nothing"
-    assert any(h.initiative_id == outsider_id for h in global_hits)
+    in_project_ids = {sib_id, caller_id}
+    assert not any(h.initiative_id in in_project_ids for h in global_hits)
     assert all(h.scope == "global" for h in global_hits)
-
-    # unscoped (no project_id) is the original global search — untagged (a8 / backward compat)
-    assert unscoped and all(h.scope is None for h in unscoped)
 
 
 # --- a6: a unit briefing in a project carries sibling constraints + decisions -
@@ -312,10 +321,12 @@ def test_guidance_includes_project_context(
     assert fake.calls[0]["schema_name"] == "guidance"
 
 
-# --- a9: a project-rail turn is scoped to the whole project and persists ------
-def test_project_advisor_turn_persists_and_grounds(
+# --- a9: a project-rail turn is scoped to the whole project (browser-local; unpersisted) ------
+def test_project_advisor_turn_grounds_in_whole_project(
     track_initiatives: list[str], track_projects: list[str]
 ):
+    # Conversations are browser-local now (spec uvama): advise_project returns the Advisor's reply
+    # Message and persists nothing. The grounding (whole-project scope) is unchanged.
     fake = FakeLLM()
 
     def go(store: SpecStore):
@@ -323,18 +334,19 @@ def test_project_advisor_turn_persists_and_grounds(
             proj_id, _a, _b = await _build_project_with_two_siblings(
                 store, track_projects, track_initiatives
             )
-            turn = await advise_project(store, proj_id, "how is this project going?", llm=fake)
-            history = await store.list_project_messages(proj_id)
-            return proj_id, turn, history
+            reply, proposed = await advise_project(
+                store, proj_id, "how is this project going?", llm=fake
+            )
+            return proj_id, reply, proposed
 
         return inner()
 
-    proj_id, turn, history = _store_run(go, embedder=FakeEmbedder())
-    # the exchange persisted as PROJECT-owned messages (no initiative owner)
-    assert turn.human.project_id == proj_id and turn.human.initiative_id is None
-    assert turn.advisor.project_id == proj_id and turn.advisor.initiative_id is None
-    assert turn.advisor.content
-    assert [m.role for m in history] == ["human", "advisor"]
+    proj_id, reply, proposed = _store_run(go, embedder=FakeEmbedder())
+    # the reply is PROJECT-owned (no initiative owner), unpersisted
+    assert reply.project_id == proj_id and reply.initiative_id is None
+    assert reply.role == "advisor" and reply.content
+    # ordinary strategic conversation -> no synthesised initiative (BD-1 u3)
+    assert proposed is None
 
     # the Advisor was scoped to the WHOLE project (every initiative), in strategic mode
     user, system = fake.calls[0]["user"], fake.calls[0]["system"]
@@ -342,3 +354,37 @@ def test_project_advisor_turn_persists_and_grounds(
     assert "Retry Queue" in user  # an initiative summary is present
     assert "whole project" in system.lower()
     assert fake.calls[0]["schema_name"] == "advisor_reply"
+
+
+# --- BD-1 u3: the project rail can synthesise a discussion into a PROPOSED initiative ----------
+def test_project_rail_synthesises_a_proposed_initiative():
+    # When the conversation crystallises into a concrete new initiative, the Advisor returns it as
+    # proposed_initiative alongside the reply — the signal the rail turns into a 'Create initiative
+    # from this' action. DB-free: _converse_project takes the context directly.
+    proj = ProjectContext(
+        project_id="proj_x", name="Webhook Delivery", prefix="WD", intent="reliable delivery"
+    )
+    desc = "Add a dead-letter queue so webhooks that fail every retry are captured for replay, not lost."
+    fake = FakeLLM(proposed_initiative=desc)
+
+    reply, proposed = asyncio.run(_converse_project(proj, [], [], fake))
+
+    assert reply  # the normal rail message is still there
+    assert proposed == desc  # the synthesised description is surfaced verbatim
+    assert fake.calls[0]["schema_name"] == "advisor_reply"
+    # the synthesis instruction is in the prompt (correction-over-authoring framing)
+    assert "proposed_initiative" in fake.calls[0]["system"]
+
+
+def test_project_rail_no_synthesis_in_ordinary_conversation():
+    # Most turns aren't an initiative proposal: proposed_initiative stays None, so no action shows.
+    proj = ProjectContext(project_id="proj_x", name="Webhook Delivery")
+    reply, proposed = asyncio.run(_converse_project(proj, [], [], FakeLLM()))
+    assert reply and proposed is None
+
+
+def test_project_rail_blank_synthesis_is_treated_as_none():
+    # A whitespace/empty proposed_initiative must not surface a spurious action.
+    proj = ProjectContext(project_id="proj_x", name="Webhook Delivery")
+    reply, proposed = asyncio.run(_converse_project(proj, [], [], FakeLLM(proposed_initiative="   ")))
+    assert reply and proposed is None

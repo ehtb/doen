@@ -1,7 +1,9 @@
-"""Conversation rail endpoints (spec 0009 u1): persist + replay an initiative's history.
+"""Conversation rail endpoint (spec 0009 u1; spec uvama): the Advisor turn.
 
-Thin: read the request, call the store/service, return. The Advisor's reply generation
-(LLM) is u2 — this slice is storage + retrieval only (a4).
+Conversations are browser-local now (spec uvama): the rail's history lives in the browser's
+IndexedDB, not Postgres. There is no message read/write endpoint — the rail loads its own history
+and POSTs a windowed slice with each turn. The backend assembles the prompt from that slice plus
+spec + memory, replies, and persists nothing.
 """
 
 from __future__ import annotations
@@ -12,9 +14,8 @@ from fastapi import APIRouter, Depends
 
 from app.database import get_store
 from app.models import Message
-from app.schemas import AdvisorTurn, PostMessage
+from app.schemas import AdvisorReply, AdvisorRequest
 from app.services import advisor as advisor_service
-from app.services import conversation as conversation_service
 from app.store import SpecStore
 
 router = APIRouter(tags=["conversation"])
@@ -22,19 +23,13 @@ router = APIRouter(tags=["conversation"])
 _Store = Annotated[SpecStore, Depends(get_store)]
 
 
-@router.get("/initiatives/{initiative_id}/messages")
-async def list_messages(initiative_id: str, store: _Store) -> list[Message]:
-    return await store.list_messages(initiative_id)
-
-
-@router.post("/initiatives/{initiative_id}/messages", status_code=201)
-async def post_message(initiative_id: str, body: PostMessage, store: _Store) -> Message:
-    return await conversation_service.post_message(store, initiative_id, body.content)
-
-
 @router.post("/initiatives/{initiative_id}/advisor", status_code=201)
-async def advise(initiative_id: str, body: PostMessage, store: _Store) -> AdvisorTurn:
-    """A conversational turn: persist the human message, generate the Advisor's state-aware
-    reply (with any proposal cards), and return both. The Advisor's reply generation (LLM)
-    is u2; a failed call maps to 502 with no message persisted."""
-    return await advisor_service.advise(store, initiative_id, body.content)
+async def advise(initiative_id: str, body: AdvisorRequest, store: _Store) -> AdvisorReply:
+    """A conversational turn: generate the Advisor's state-aware reply (with any proposal cards)
+    from the human's message plus the windowed history the browser sent. Nothing is persisted —
+    the frontend writes the reply into IndexedDB. A failed LLM call maps to 502."""
+    history = [
+        Message(initiative_id=initiative_id, role=m.role, content=m.content) for m in body.history
+    ]
+    reply = await advisor_service.advise(store, initiative_id, body.content, history)
+    return AdvisorReply(message=reply)
