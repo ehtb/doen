@@ -22,7 +22,8 @@ from fastapi.testclient import TestClient
 from redis import asyncio as aioredis
 
 from app.config import DATABASE_URL, REDIS_URL
-from app.store import Decision, SpecStore
+from app.models import Decision
+from app.store import SpecStore
 
 
 def _run(coro) -> object:

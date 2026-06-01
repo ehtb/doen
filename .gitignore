@@ -17,3 +17,5 @@ web/out/
 
 # cache
 web/.cache/
+.mypy_cache/
+.pytest_cache/

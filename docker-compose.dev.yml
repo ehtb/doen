@@ -1,0 +1,29 @@
+# Development overlay — hot-reload on host edits. Layer it on top of the base file:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# The base docker-compose.yml on its own is the production-style "just run it" path
+# (built images, no reload). This overlay bind-mounts the source and swaps the commands
+# for reloaders, so edits on your host reflect live — no rebuild.
+#
+# (Compose profiles only toggle *which* services run; they can't change a running
+# service's command/mounts, so a dev variant is an override file — the idiomatic pattern.)
+
+services:
+  backend:
+    # `python -m uvicorn` puts the working dir on sys.path, so the bind-mounted source
+    # (not the image's installed copy) is what runs and what --reload watches.
+    command: ["sh", "-c", "python -m app.migrate && exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/migrations:/app/migrations
+
+  web:
+    command: ["npm", "run", "dev", "--", "-H", "0.0.0.0"]
+    environment:
+      DOEN_API_URL: http://backend:8000
+      NODE_ENV: development
+    volumes:
+      - ./web:/app
+      - /app/node_modules  # keep the image's installed deps (right arch), not the host's
+      - /app/.next         # keep the build cache container-local

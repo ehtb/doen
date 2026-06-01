@@ -18,7 +18,8 @@ from redis import asyncio as aioredis
 
 from app.backfill_embeddings import backfill_with
 from app.config import DATABASE_URL, REDIS_URL
-from app.store import Decision, SpecStore
+from app.models import Decision
+from app.store import SpecStore
 
 DIM = 1536
 

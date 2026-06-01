@@ -13,9 +13,9 @@ import hashlib
 import random
 from collections.abc import Callable
 
-from app.llm import LLMError
-from app.shaping import shape_spec
-from app.store import AcceptanceCriterion, ContextHit, SpecItem
+from app.models import AcceptanceCriterion, ContextHit, SpecItem
+from app.providers.llm import LLMError
+from app.services.shaping import shape_spec
 
 PAYLOAD = {
     "intent": "Let users sign in without a password using a single-use email magic link.",
@@ -132,7 +132,7 @@ def test_shape_spec_malformed_output_raises():
 def test_shape_endpoint_persists_proposed(client, make_initiative: Callable[[], str], monkeypatch):
     # a3 — every generated item persists as ai_proposed / proposed; a7-precondition: they're
     # ordinary proposed items, immediately actionable via the existing editing flow.
-    monkeypatch.setattr("app.shaping.get_shaping_llm", lambda: FakeLLM(PAYLOAD))
+    monkeypatch.setattr("app.services.shaping.get_shaping_llm", lambda: FakeLLM(PAYLOAD))
     monkeypatch.setattr("app.store.get_embedding_provider", lambda: FakeEmbedder())
     iid = make_initiative()
     r = client.post(f"/specs/{iid}/shape", json={"description": "passwordless sign-in via email links"})
@@ -149,7 +149,7 @@ def test_shape_endpoint_llm_failure_leaves_spec_untouched(
     client, make_initiative: Callable[[], str], monkeypatch
 ):
     # a6 — a failed LLM call surfaces an error and the spec is unchanged.
-    monkeypatch.setattr("app.shaping.get_shaping_llm", lambda: FakeLLM(error=LLMError("boom")))
+    monkeypatch.setattr("app.services.shaping.get_shaping_llm", lambda: FakeLLM(error=LLMError("boom")))
     monkeypatch.setattr("app.store.get_embedding_provider", lambda: FakeEmbedder())
     iid = make_initiative()
     before = client.get(f"/specs/{iid}").json()

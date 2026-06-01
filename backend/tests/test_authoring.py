@@ -12,7 +12,7 @@ from collections.abc import Callable
 
 from fastapi.testclient import TestClient
 
-from app.store import Spec
+from app.models import Spec
 
 
 def _put_with_proposed(client: TestClient, iid: str) -> dict:

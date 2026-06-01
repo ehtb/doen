@@ -17,15 +17,9 @@ from fastapi.testclient import TestClient
 from redis import asyncio as aioredis
 
 from app.config import DATABASE_URL, REDIS_URL
-from app.store import (
-    CriterionResult,
-    Decision,
-    InvalidTransition,
-    SpecStore,
-    Submission,
-    Verdict,
-    WorkUnit,
-)
+from app.exceptions import InvalidTransition
+from app.models import CriterionResult, Decision, Submission, Verdict, WorkUnit
+from app.store import SpecStore
 
 
 def _store_run(fn: Callable[[SpecStore], Awaitable[object]]) -> object:

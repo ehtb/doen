@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { getSpec } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import LearnStage from "./LearnStage";
@@ -59,8 +61,12 @@ export default async function SpecPage({ params }: { params: Promise<{ id: strin
     <main className="relative z-10 mx-auto max-w-[1180px] px-5 py-8 md:px-8">
       <header className="animate-rise">
         <div className="flex items-baseline justify-between gap-4">
-          <span className="font-mono text-[11px] font-semibold tracking-[0.18em] text-accent-deep uppercase">
-            Initiative
+          <span className="font-mono text-[11px] font-semibold tracking-[0.18em] uppercase">
+            <Link href="/" className="text-ink-faint transition-colors hover:text-accent-deep">
+              Doen
+            </Link>
+            <span className="text-ink-faint"> / </span>
+            <span className="text-accent-deep">Initiative</span>
           </span>
           <span className="flex items-center gap-2 font-mono text-[11px] text-ink-faint">
             <span className="size-[7px] rounded-full bg-confirmed animate-live" />

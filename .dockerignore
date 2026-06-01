@@ -1,0 +1,12 @@
+# keep build contexts lean and secrets out of images
+**/.venv
+**/__pycache__
+**/*.pyc
+**/node_modules
+**/.next
+**/.git
+**/.env
+**/.DS_Store
+**/.pytest_cache
+**/.mypy_cache
+**/.cache

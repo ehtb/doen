@@ -13,12 +13,15 @@ verify it was built right. The canonical design lives in @docs/spec-contract.md.
 ## Stack
 
 - **Backend:** FastAPI, async throughout. `asyncpg` (no ORM — keep overhead low). Pydantic v2.
+  Layered (see "Backend architecture" below) — don't put business logic or data access in routers.
 - **Store:** Postgres = source of truth. Redis = derived hot cache + real-time coordination.
-- **Data layer:** already written — `backend/app/store.py` (models + `SpecStore`). Reuse it; do
-  not reinvent it.
+- **Data layer:** `backend/app/store.py` — the `SpecStore` repository. Domain models live in
+  `app/models.py`. Reuse them; don't reinvent.
 - **Web:** Next.js (App Router), TypeScript, Tailwind, shadcn/ui, shadcn/ui-prose, Tailwind Typography.
 - **Integration:** an MCP server exposing the spec tools so executors read/write the spec.
-- Later specs add: pgvector (memory + drift), WorkOS AuthKit, the conversation rail. Not now.
+- **Deps + tooling:** `backend/pyproject.toml` (hatchling); pyright type-checks `app/`.
+- Shipped since: pgvector memory + `get_context` (0005), AI-assisted shaping (0006), the
+  one-command Docker setup (0008). Still later: WorkOS AuthKit (0007), the conversation rail.
 
 ## Architecture invariants — hard constraints, never cross
 
@@ -36,13 +39,50 @@ verify it was built right. The canonical design lives in @docs/spec-contract.md.
 
 ```
 doen/
-├── CLAUDE.md                 # this file
-├── docker-compose.yml        # local postgres + redis
-├── docs/spec-contract.md     # canonical architecture
-├── specs/                    # bootstrap specs live here UNTIL Doen can hold its own
-├── backend/app/{main,store,routes,mcp}/…
-└── web/app/…
+├── CLAUDE.md                 # this file (the constitution)
+├── docker-compose.yml        # full stack: pgvector Postgres, Redis, backend, web
+├── docs/                     # spec-contract.md, design-principles.md, getting-started.md
+├── specs/                    # historical bootstrap specs (new specs live IN Doen now)
+├── backend/app/
+│   ├── main.py               # app factory: lifespan, exception handlers, routers
+│   ├── config.py / database.py   # settings; shared pool/redis + the FastAPI deps
+│   ├── models.py             # domain models (the spec contract as Pydantic)
+│   ├── schemas.py            # API request/response models
+│   ├── exceptions.py         # domain errors + the HTTP error-mapping handlers
+│   ├── store.py              # SpecStore — the repository (all Postgres/Redis access)
+│   ├── services/             # business logic: shaping, authoring, learn, decisions
+│   ├── providers/            # external integrations: llm, embeddings (pluggable)
+│   ├── routers/              # thin APIRouters per domain
+│   ├── mcp_server.py         # the executor-facing MCP tools (stdio)
+│   └── migrate.py / backfill_embeddings.py   # ops
+└── web/app/…                 # Next.js: dashboard, living-spec view, steering rail
 ```
+
+## Backend architecture — layered (FastAPI best-practice)
+
+A request flows **router → service → repository**, over shared **models / schemas / providers /
+exceptions**. Keep each concern in its layer — the cardinal sin is business logic or SQL in a
+router.
+
+- **routers/** — one `APIRouter` per domain. Thin: read the request, call a service or the
+  store, return. No business logic, and **no try/except** — domain exceptions are mapped to
+  status codes centrally (see exceptions).
+- **services/** — business logic / orchestration (shaping, authoring, learn, decisions).
+  **Framework-agnostic**: they never import FastAPI, so they're testable without the web layer
+  and reusable from the MCP server. They raise domain exceptions.
+- **store.py** — the `SpecStore` **repository**: the *only* place that touches Postgres/Redis.
+- **models.py** = durable **domain** models; **schemas.py** = the **API** request/response
+  shapes. Keep them separate — the wire format is not the domain.
+- **providers/** — external integrations behind a tiny interface (LLM, embeddings), pluggable by
+  config so a self-hoster can swap vendors. API keys come from env, never the DB.
+- **exceptions.py** — domain errors (`NotFoundError`→404, `ValidationError` & the transition
+  errors→422, `ConflictError`/stale-version→409, `LLMError`→502) **and** the single place that
+  maps them to HTTP, via `register_exception_handlers(app)`. This is the error "middleware".
+
+Decisions baked in: thin routers + one central place for error mapping (never repeat try/except
+per route); services don't depend on the framework; one repository owns all data access; the
+domain model is not the API schema; external vendors sit behind pluggable providers keyed from
+env. The same domain exceptions are what the MCP server surfaces as tool errors.
 
 ## How we work
 

@@ -20,7 +20,8 @@ from mcp.client.stdio import stdio_client
 from redis import asyncio as aioredis
 
 from app.config import DATABASE_URL, DEV_ORG_ID, DEV_USER_ID, REDIS_URL
-from app.store import Spec, SpecStore
+from app.models import Spec
+from app.store import SpecStore
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 

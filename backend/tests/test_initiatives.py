@@ -19,7 +19,8 @@ from fastapi.testclient import TestClient
 from redis import asyncio as aioredis
 
 from app.config import DATABASE_URL, REDIS_URL
-from app.store import Initiative, SpecStore, slugify
+from app.models import Initiative, slugify
+from app.store import SpecStore
 
 MIGRATION = (
     Path(__file__).resolve().parent.parent / "migrations" / "0003_initiative_lifecycle.sql"

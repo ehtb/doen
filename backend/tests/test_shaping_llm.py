@@ -13,7 +13,7 @@ import json
 import httpx
 import pytest
 
-from app.llm import LLMError, OpenRouterClaude
+from app.providers.llm import LLMError, OpenRouterClaude
 
 SCHEMA = {
     "type": "object",
