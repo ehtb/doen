@@ -8,7 +8,7 @@ for the AI features. To drive the build loop you'll also want [Claude Code](http
 ## 1. Clone
 
 ```bash
-git clone https://github.com/doen-dev/doen.git
+git clone https://github.com/ehtb/doen.git
 cd doen
 ```
 
@@ -37,7 +37,7 @@ You'll land on an empty dashboard.
 
 ## 4. Create an initiative
 
-Click **New initiative**, give it a title (for example, *Passwordless sign-in*), and create it.
+Click **New initiative**, give it a title (for example, _Passwordless sign-in_), and create it.
 You land in its spec — empty, at the `discover` stage.
 
 ## 5. Shape a spec with AI
@@ -46,7 +46,7 @@ In the spec view, click **Shape with AI**. Describe the feature in a few sentenc
 problem, who it's for, what success looks like — and click **Generate spec**.
 
 In a few seconds the AI proposes a full spec: an intent paragraph, constraints, discretion, and
-acceptance criteria, all as *proposed* items (shown dashed — they don't govern yet). Read them,
+acceptance criteria, all as _proposed_ items (shown dashed — they don't govern yet). Read them,
 edit or retire any that miss, and **Confirm** the rest. That's the core move: you're correcting
 a knowledgeable first draft, not filling a blank form.
 
@@ -63,7 +63,15 @@ The repo ships a `.mcp.json` configured for the Docker setup:
     "doen": {
       "type": "stdio",
       "command": "docker",
-      "args": ["compose", "exec", "-T", "backend", "python", "-m", "app.mcp_server"]
+      "args": [
+        "compose",
+        "exec",
+        "-T",
+        "backend",
+        "python",
+        "-m",
+        "app.mcp_server"
+      ]
     }
   }
 }
@@ -76,6 +84,7 @@ report progress, and raise decisions, all back through Doen.
 
 > **Running the backend on your host instead** (`make dev`, no containers)?
 > The backend reads `backend/.env`. Point `.mcp.json` at the local interpreter:
+>
 > ```json
 > {
 >   "mcpServers": {
@@ -92,6 +101,7 @@ report progress, and raise decisions, all back through Doen.
 > **Running Claude Code on a different machine?** Use HTTP transport instead of stdio.
 > Set `MCP_TRANSPORT=http` in `backend/.env`, restart the stack, then point `.mcp.json` at
 > the backend URL:
+>
 > ```json
 > {
 >   "mcpServers": {
@@ -102,6 +112,7 @@ report progress, and raise decisions, all back through Doen.
 >   }
 > }
 > ```
+>
 > The MCP server mounts at `/mcp/` on the FastAPI app (trailing slash required). If
 > you're exposing the backend directly without a reverse proxy, use port 8000
 > (e.g. `http://your-host:8000/mcp/`). Keep this on a private network — there is no
