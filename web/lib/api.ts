@@ -1,4 +1,4 @@
-import type { Spec } from "./types";
+import type { Initiative, Spec } from "./types";
 
 // Server-side fetch target. In dev the Next server (Node) talks to the FastAPI
 // backend directly; override with DOEN_API_URL when they live elsewhere.
@@ -9,5 +9,12 @@ export async function getSpec(initiativeId: string): Promise<Spec | null> {
   const res = await fetch(`${API_BASE}/specs/${initiativeId}`, { cache: "no-store" });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`spec fetch failed (${res.status})`);
+  return res.json();
+}
+
+export async function listInitiatives(): Promise<Initiative[]> {
+  // The dashboard's feed — initiatives change as they're created/advanced, so no cache.
+  const res = await fetch(`${API_BASE}/initiatives`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`initiatives fetch failed (${res.status})`);
   return res.json();
 }

@@ -27,6 +27,7 @@ Requires Python 3.11+ (asyncio.timeout), pydantic v2, asyncpg, redis>=4.2 (redis
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
@@ -45,10 +46,27 @@ def _id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:12]}"
 
 
+def slugify(title: str) -> str:
+    """Kebab-case slug from a human title — the initiative id and URL key (0004)."""
+    s = re.sub(r"[^a-z0-9]+", "-", title.strip().lower()).strip("-")
+    return s or "initiative"
+
+
 # ----------------------------------------------------------------------------- models
 Provenance = Literal["human", "ai_proposed", "ai_confirmed_by_human"]
 ItemStatus = Literal["proposed", "confirmed", "retired"]
 Stage = Literal["discover", "shape", "bet", "decompose", "implement", "verify", "learn"]
+STAGES: tuple[str, ...] = (
+    "discover", "shape", "bet", "decompose", "implement", "verify", "learn",
+)
+
+
+def _is_adjacent_stage(current: str, target: str) -> bool:
+    """A legal lifecycle move is exactly one step — forward, or back for rework (0004 c3).
+    No skipping; no arbitrary jumps."""
+    if current not in STAGES or target not in STAGES:
+        return False
+    return abs(STAGES.index(current) - STAGES.index(target)) == 1
 
 
 class SpecItem(BaseModel):
@@ -89,6 +107,29 @@ class Decision(BaseModel):
     emitted_item_ids: list[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=_now)
     resolved_at: str | None = None
+
+
+class Initiative(BaseModel):
+    """The parent entity (0004): a spec, its decisions, and its work units all belong to
+    one initiative. `id` is a human-readable slug. org/owner exist but are unused until
+    auth (0007). `stage` is the tracked lifecycle position, kept in sync with the spec."""
+
+    id: str  # slug
+    title: str | None = None
+    stage: Stage = "discover"
+    org_id: str | None = None
+    owner_id: str | None = None
+    created_at: str = Field(default_factory=_now)
+    updated_at: str = Field(default_factory=_now)
+
+
+def _initiative_from_row(row: asyncpg.Record) -> Initiative:
+    return Initiative(
+        id=row["id"], title=row["title"], stage=row["stage"],
+        org_id=row["org_id"], owner_id=row["owner_id"],
+        created_at=row["created_at"].isoformat(),
+        updated_at=row["updated_at"].isoformat(),
+    )
 
 
 class Spec(BaseModel):
@@ -206,6 +247,16 @@ class InvalidTransition(Exception):
         self.unit_id, self.current, self.target = unit_id, current, target
 
 
+class InvalidStageTransition(Exception):
+    """An initiative was asked to jump stages — only one step (forward or back) is legal."""
+
+    def __init__(self, initiative_id: str, current: str, target: str):
+        super().__init__(
+            f"initiative {initiative_id}: {current} -> {target} is not a one-step lifecycle move"
+        )
+        self.initiative_id, self.current, self.target = initiative_id, current, target
+
+
 # ----------------------------------------------------------------------------- store
 SPEC_CACHE_TTL = 300  # seconds; cache is derived, so a short TTL is just a safety net
 
@@ -263,6 +314,88 @@ class SpecStore:
             f"spec:{spec.initiative_id}", spec.model_dump_json(), ex=SPEC_CACHE_TTL
         )
         return spec
+
+    # --- initiatives: the parent entity, born with a scaffolded spec (0004) --
+    async def create_initiative(
+        self, title: str, *, org_id: str | None = None, owner_id: str | None = None
+    ) -> Initiative:
+        """Create an initiative and scaffold its empty spec in one act (constraint 2):
+        the spec is born at version 0, stage=discover, with empty item lists. The id is a
+        unique slug derived from the title."""
+        slug = await self._unique_slug(slugify(title))
+        spec = Spec(initiative_id=slug, title=title, stage="discover")
+        async with self.pg.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """INSERT INTO initiatives (id, title, org_id, owner_id, stage, created_at, updated_at)
+                       VALUES ($1, $2, $3, $4, 'discover', now(), now())""",
+                    slug, title, org_id, owner_id,
+                )
+                # Scaffold the spec at version 0 directly. A brand-new spec has no prior
+                # row to guard, so this doesn't bypass the optimistic lock — the first real
+                # edit (via 0002) reads v0 and moves it to v1.
+                await conn.execute(
+                    """INSERT INTO specs (initiative_id, version, doc, updated_at)
+                       VALUES ($1, 0, $2, now())""",
+                    slug, spec.model_dump_json(),
+                )
+        await self.redis.set(f"spec:{slug}", spec.model_dump_json(), ex=SPEC_CACHE_TTL)
+        return Initiative(id=slug, title=title, stage="discover", org_id=org_id, owner_id=owner_id)
+
+    async def get_initiative(self, initiative_id: str) -> Initiative | None:
+        """The initiative's lifecycle context — surfaced alongside the spec on MCP
+        get_spec so an executor grounds itself in stage before acting (D1 / 0004)."""
+        row = await self.pg.fetchrow(
+            """SELECT id, title, stage, org_id, owner_id, created_at, updated_at
+               FROM initiatives WHERE id = $1""",
+            initiative_id,
+        )
+        return _initiative_from_row(row) if row else None
+
+    async def list_initiatives(self) -> list[Initiative]:
+        """Every initiative that has a spec — the dashboard's feed (0004 a3). Most recently
+        updated first."""
+        rows = await self.pg.fetch(
+            """SELECT i.id, i.title, i.stage, i.org_id, i.owner_id, i.created_at, i.updated_at
+               FROM initiatives i
+               JOIN specs s ON s.initiative_id = i.id
+               ORDER BY i.updated_at DESC, i.id"""
+        )
+        return [_initiative_from_row(r) for r in rows]
+
+    async def set_stage(self, initiative_id: str, target: str) -> Initiative:
+        """Advance or retreat an initiative by one lifecycle step (0004 a4/a5), keeping the
+        spec doc's stage in sync. The stage mirror onto the doc is metadata, not a content
+        edit, so it does not bump the spec version (a stage move never 409s a live editor)."""
+        init = await self.get_initiative(initiative_id)
+        if init is None:
+            raise KeyError(initiative_id)
+        if not _is_adjacent_stage(init.stage, target):
+            raise InvalidStageTransition(initiative_id, init.stage, target)
+        async with self.pg.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "UPDATE initiatives SET stage = $2, updated_at = now() WHERE id = $1",
+                    initiative_id, target,
+                )
+                await conn.execute(
+                    """UPDATE specs SET doc = jsonb_set(doc, '{stage}', to_jsonb($2::text)),
+                       updated_at = now() WHERE initiative_id = $1""",
+                    initiative_id, target,
+                )
+        # refresh the derived spec cache from PG truth
+        doc = await self.pg.fetchval(
+            "SELECT doc FROM specs WHERE initiative_id = $1", initiative_id
+        )
+        if doc is not None:
+            await self.redis.set(f"spec:{initiative_id}", doc, ex=SPEC_CACHE_TTL)
+        return await self.get_initiative(initiative_id)
+
+    async def _unique_slug(self, base: str) -> str:
+        slug, n = base, 2
+        while await self.pg.fetchval("SELECT 1 FROM initiatives WHERE id = $1", slug):
+            slug, n = f"{base}-{n}", n + 1
+        return slug
 
     # --- decisions: durable in PG, surfaced + resolved in real time ----------
     async def raise_decision(self, d: Decision, initiative_id: str) -> Decision:

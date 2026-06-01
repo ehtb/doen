@@ -1,6 +1,7 @@
 import { getSpec } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import SpecDocument from "./SpecDocument";
+import StageControls from "./StageControls";
 import SteeringRail from "./SteeringRail";
 import WorkUnits from "./WorkUnits";
 
@@ -9,10 +10,7 @@ const STAGES = ["discover", "shape", "bet", "decompose", "implement", "verify", 
 function LifecycleStepper({ stage }: { stage: string }) {
   const current = Math.max(0, STAGES.indexOf(stage));
   return (
-    <nav
-      aria-label="lifecycle"
-      className="mt-4 flex flex-wrap gap-x-1 gap-y-2 border-t border-border pt-3.5"
-    >
+    <nav aria-label="lifecycle" className="flex flex-wrap gap-x-1 gap-y-2">
       {STAGES.map((s, i) => {
         const done = i < current;
         const active = i === current;
@@ -71,7 +69,10 @@ export default async function SpecPage({ params }: { params: Promise<{ id: strin
         <h1 className="mt-2 max-w-[20ch] font-serif text-[clamp(1.9rem,3.4vw,2.6rem)] leading-[1.08] font-medium tracking-tight">
           {spec.title}
         </h1>
-        <LifecycleStepper stage={spec.stage} />
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3.5">
+          <LifecycleStepper stage={spec.stage} />
+          <StageControls initiativeId={spec.initiative_id} stage={spec.stage} />
+        </div>
       </header>
 
       <div className="mt-7 flex flex-wrap items-start gap-7">

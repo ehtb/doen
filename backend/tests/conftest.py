@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from uuid import uuid4
 
 import asyncpg
 import pytest
@@ -50,11 +51,12 @@ def client() -> TestClient:
 
 @pytest.fixture
 def make_initiative(client: TestClient) -> Callable[[], str]:
-    """Create dev initiatives via the API and drop them (cascade) on teardown."""
+    """Create dev initiatives via the API and drop them (cascade) on teardown. Each gets a
+    unique title so the derived slug never collides across tests; the slug is the id."""
     created: list[str] = []
 
-    def make() -> str:
-        r = client.post("/initiatives", json={})
+    def make(title: str | None = None) -> str:
+        r = client.post("/initiatives", json={"title": title or f"Test {uuid4().hex[:8]}"})
         assert r.status_code == 201, r.text
         iid = r.json()["id"]
         created.append(iid)

@@ -53,6 +53,7 @@ def test_stale_version_conflicts(client: TestClient, make_initiative: Callable[[
     assert r.status_code == 409, r.text
 
 
-def test_get_missing_spec_is_404(client: TestClient, make_initiative: Callable[[], str]):
-    iid = make_initiative()  # initiative exists, but no spec saved yet
-    assert client.get(f"/specs/{iid}").status_code == 404
+def test_get_missing_spec_is_404(client: TestClient):
+    # No initiative/spec for this id -> 404. (Creating an initiative now scaffolds a spec
+    # in the same act, so "an initiative with no spec" is no longer reachable — 0004 / c2.)
+    assert client.get("/specs/no-such-initiative").status_code == 404

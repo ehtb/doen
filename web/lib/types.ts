@@ -27,6 +27,17 @@ export interface Spec {
   memory_links: string[];
 }
 
+// The parent entity listed on the dashboard (backend Initiative, store.py).
+export interface Initiative {
+  id: string;
+  title: string | null;
+  stage: string;
+  org_id?: string | null;
+  owner_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 // A work unit decomposed from the spec (backend WorkUnit, store.py). The executor
 // proposes and works it over MCP; the human confirms and judges it here.
 export interface CriterionResult {

@@ -18,18 +18,19 @@ optimistic lock — a human edit never silently clobbers a concurrent change.
 from __future__ import annotations
 
 from typing import Annotated, Literal
-from uuid import uuid4
 
 import asyncpg
 from asyncpg.exceptions import ForeignKeyViolationError
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.config import DEV_ORG_ID, DEV_USER_ID
+from app.config import DEV_USER_ID
 from app.deps import get_pool, get_store
 from app.store import (
     AcceptanceCriterion,
     Decision,
+    Initiative,
+    InvalidStageTransition,
     InvalidTransition,
     Spec,
     SpecItem,
@@ -45,23 +46,47 @@ router = APIRouter()
 
 
 class CreateInitiative(BaseModel):
-    appetite: str | None = None
-    stage: Stage = "shape"
+    title: str
+
+
+@router.get("/initiatives")
+async def list_initiatives(
+    store: Annotated[SpecStore, Depends(get_store)],
+) -> list[Initiative]:
+    """The dashboard's feed: every initiative that has a spec (0004 a3)."""
+    return await store.list_initiatives()
 
 
 @router.post("/initiatives", status_code=201)
 async def create_initiative(
     body: CreateInitiative,
-    pool: Annotated[asyncpg.Pool, Depends(get_pool)],
-) -> dict:
-    initiative_id = f"init_{uuid4().hex[:12]}"
-    row = await pool.fetchrow(
-        """INSERT INTO initiatives (id, org_id, owner_id, appetite, stage)
-           VALUES ($1, $2, $3, $4, $5)
-           RETURNING id, org_id, owner_id, appetite, stage, created_at""",
-        initiative_id, DEV_ORG_ID, DEV_USER_ID, body.appetite, body.stage,
-    )
-    return dict(row)
+    store: Annotated[SpecStore, Depends(get_store)],
+) -> Initiative:
+    """Create an initiative and scaffold its empty spec in one act (0004 a1): a unique
+    slug from the title, and a new spec at version 0, stage=discover."""
+    if not body.title.strip():
+        raise HTTPException(422, "initiative title must not be empty")
+    return await store.create_initiative(body.title)
+
+
+class SetStage(BaseModel):
+    stage: Stage  # the target stage — must be one lifecycle step from the current one
+
+
+@router.post("/initiatives/{initiative_id}/stage")
+async def set_stage(
+    initiative_id: str,
+    body: SetStage,
+    store: Annotated[SpecStore, Depends(get_store)],
+) -> Initiative:
+    """Advance or retreat an initiative by one lifecycle step (0004 a4/a5); the spec's
+    stage is kept in sync. A skip or arbitrary jump is rejected."""
+    try:
+        return await store.set_stage(initiative_id, body.stage)
+    except KeyError:
+        raise HTTPException(404, f"no initiative {initiative_id}")
+    except InvalidStageTransition as e:
+        raise HTTPException(422, str(e))
 
 
 @router.put("/specs/{initiative_id}")

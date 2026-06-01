@@ -62,12 +62,20 @@ def _store(ctx: Context) -> SpecStore:
 
 @mcp.tool()
 async def get_spec(initiative_id: str, ctx: Context) -> dict:
-    """Read the whole living spec for an initiative at its current version.
-    Ground yourself in intent, constraints, discretion, and acceptance before acting."""
-    spec = await _store(ctx).get_spec(initiative_id)
+    """Read the whole living spec for an initiative at its current version, plus the
+    initiative's lifecycle context as `initiative: {id, title, stage}`. Ground yourself in
+    intent, constraints, discretion, acceptance — and stage (don't reshape a spec already
+    in `implement`) — before acting."""
+    store = _store(ctx)
+    spec = await store.get_spec(initiative_id)
     if spec is None:
         raise ValueError(f"no spec for initiative {initiative_id}")
-    return spec.model_dump()
+    out = spec.model_dump()
+    init = await store.get_initiative(initiative_id)
+    out["initiative"] = (
+        {"id": init.id, "title": init.title, "stage": init.stage} if init else None
+    )
+    return out
 
 
 @mcp.tool()
