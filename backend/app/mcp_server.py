@@ -25,10 +25,9 @@ from mcp.server.fastmcp import Context, FastMCP
 from redis import asyncio as aioredis
 
 from app.config import DATABASE_URL, REDIS_URL
-from app.exceptions import DecisionTimeout, InvalidTransition, NotFoundError
-from app.models import CriterionResult, Decision, Submission, WorkUnit
+from app.exceptions import DecisionTimeout, NotFoundError
+from app.models import Decision
 from app.services.conversation import spec_enrichment, summarize_conversation
-from app.services.guidance import generate_guidance
 from app.store import SpecStore
 
 
@@ -97,17 +96,11 @@ async def raise_decision(
     options: list[str],
     ctx: Context,
     recommendation: str | None = None,
-    unit_id: str | None = None,
 ) -> dict:
     """Surface a product/intent call that is outside the spec's constraints + discretion.
-    Do not guess in code. Returns the open Decision; await it with wait_for_decision.
-    Pass unit_id to park that work unit (blocked_on_decision) on this decision — resolving
-    it later resumes the unit automatically."""
+    Do not guess in code. Returns the open Decision; await it with wait_for_decision."""
     d = Decision(question=question, options=options, recommendation=recommendation)
-    store = _store(ctx)
-    saved = await store.raise_decision(d, initiative_id)
-    if unit_id is not None:
-        await store.block_on_decision(unit_id, saved.id)
+    saved = await _store(ctx).raise_decision(d, initiative_id)
     return saved.model_dump()
 
 
@@ -135,108 +128,34 @@ async def wait_for_decision(decision_id: str, ctx: Context, timeout: float = 600
     return d.model_dump()
 
 
-# --- work units (spec 0003): decompose, work, submit; the human confirms + judges ---
+# --- BD-5 u2: criteria-as-tracking MCP tools ----------------------------------------
 @mcp.tool()
-async def propose_unit(
-    spec_id: str,
-    title: str,
-    scope: str,
-    criterion_ids: list[str],
-    ctx: Context,
-) -> dict:
-    """Propose a work unit decomposed from a spec, naming the acceptance criteria it
-    satisfies. It is created `proposed` — a human must confirm it before it is workable.
-    You cannot confirm your own unit."""
-    unit = WorkUnit(spec_id=spec_id, title=title, scope=scope, criterion_ids=criterion_ids)
-    saved = await _store(ctx).create_unit(unit)
-    return saved.model_dump()
-
-
-@mcp.tool()
-async def list_units(spec_id: str, ctx: Context, status: str | None = None) -> list[dict]:
-    """List the work units for a spec (oldest first), optionally filtered by status."""
-    units = await _store(ctx).list_units(spec_id, status)
-    return [u.model_dump() for u in units]
-
-
-@mcp.tool()
-async def claim_unit(unit_id: str, ctx: Context) -> dict:
-    """Claim a confirmed (ready) work unit to start building it: ready -> in_progress.
-    Only a unit a human has confirmed can be claimed."""
-    try:
-        unit = await _store(ctx).claim_unit(unit_id)
-    except KeyError:
-        raise ValueError(f"no work unit {unit_id}")
-    except InvalidTransition as e:
-        raise ValueError(str(e))
-    return unit.model_dump()
-
-
-@mcp.tool()
-async def report_progress(unit_id: str, note: str, ctx: Context) -> dict:
-    """Update a unit's progress note — a lightweight heartbeat the human's spec view reflects."""
-    try:
-        unit = await _store(ctx).report_progress(unit_id, note)
-    except KeyError:
-        raise ValueError(f"no work unit {unit_id}")
-    return unit.model_dump()
-
-
-@mcp.tool()
-async def submit_for_verification(
-    unit_id: str,
-    summary: str,
+async def submit_evidence(
+    initiative_id: str,
     criteria_results: list[dict],
     ctx: Context,
-    artifacts: list[str] | None = None,
 ) -> dict:
-    """Hand a unit back for the human to judge. Map your output to each acceptance criterion
-    (result: pass / fail / needs_judgment, plus evidence). At least one result is required.
-    The human judges intent-alignment — you cannot set your own verdict."""
-    submission = Submission(
-        summary=summary,
-        criteria_results=[CriterionResult(**c) for c in criteria_results],
-        artifacts=artifacts or [],
-    )
-    store = _store(ctx)
+    """Submit evidence against acceptance criteria (BD-5). Each entry must include
+    `criterion_id`, `result` ('pass' | 'fail' | 'needs_judgment'), and `evidence` (string).
+    Sets `verification_status` to `evidence_submitted` on each criterion and bumps the spec
+    version. All-or-nothing: if any `criterion_id` does not exist the whole call is rejected
+    with no state change. Uses the same optimistic-lock guard as all spec edits."""
     try:
-        unit = await store.submit_for_verification(unit_id, submission)
-    except KeyError:
-        raise ValueError(f"no work unit {unit_id}")
-    except InvalidTransition as e:
-        raise ValueError(str(e))
-    # The Advisor's preliminary review used to be auto-posted to the rail here so the human
-    # verifier could read it before judging. Conversations are browser-local now (spec uvama,
-    # decision dec_0397d7a8f45e/A) — the backend can't write to the rail — so that proactive
-    # review is retired; the human judges from the submission's criteria_results directly.
-    return unit.model_dump()
-
-
-@mcp.tool()
-async def get_guidance(unit_id: str, ctx: Context) -> dict:
-    """Read the Advisor's contextual briefing for a work unit BEFORE you build it (spec 0009).
-    Returns the constraints that bind this unit, the acceptance criteria it must satisfy,
-    relevant patterns from past initiatives, and the Advisor's synthesised briefing + known
-    pitfalls — all grounded in the current spec and organizational memory. Read-only: it never
-    changes the unit or the spec. Call it after claim_unit and before you start building."""
-    try:
-        guidance = await generate_guidance(_store(ctx), unit_id)
+        spec = await _store(ctx).submit_evidence(initiative_id, criteria_results)
     except NotFoundError as e:
         raise ValueError(str(e))
-    return guidance.model_dump()
+    return {"version": spec.version, "updated_criteria": [r["criterion_id"] for r in criteria_results]}
 
 
 @mcp.tool()
-async def get_verification(unit_id: str, ctx: Context) -> dict:
-    """Read the human's verdict on a submitted unit, or `pending` if not yet judged.
-    This only ever returns a verdict a human gave — there is no self-approval path."""
+async def get_criteria_status(initiative_id: str, ctx: Context) -> dict:
+    """Return all acceptance criteria for an initiative with their current
+    `verification_status`, `evidence`, `verdict`, and `feedback` fields."""
     try:
-        verdict = await _store(ctx).get_verification(unit_id)
-    except KeyError:
-        raise ValueError(f"no work unit {unit_id}")
-    if verdict is None:
-        return {"status": "pending"}
-    return {"status": "judged", **verdict.model_dump()}
+        criteria = await _store(ctx).get_criteria_status(initiative_id)
+    except NotFoundError as e:
+        raise ValueError(str(e))
+    return {"initiative_id": initiative_id, "criteria": criteria}
 
 
 # --- organizational memory (spec 0005): retrieve relevant prior patterns -------------

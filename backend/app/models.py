@@ -2,9 +2,9 @@
 
 These are the durable shapes the whole app speaks in: the living Spec (one JSONB document
 per initiative), its items, the parent Initiative, durable Decisions, append-only Memory,
-retrieval hits, and the work-unit state machine. They carry no I/O — the repository
-(app.store) persists them and the routers/services orchestrate them. API request/response
-shapes live in app.schemas; persistence in app.store.
+and retrieval hits. They carry no I/O — the repository (app.store) persists them and the
+routers/services orchestrate them. API request/response shapes live in app.schemas;
+persistence in app.store.
 """
 
 from __future__ import annotations
@@ -17,8 +17,6 @@ from typing import Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
-
-from app.exceptions import InvalidTransition
 
 
 # ----------------------------------------------------------------------------- helpers
@@ -72,29 +70,11 @@ Provenance = Literal["human", "ai_proposed", "ai_confirmed_by_human"]
 ItemStatus = Literal["proposed", "confirmed", "retired"]
 Section = Literal["constraints", "discretion", "acceptance"]  # the editable spec sections
 
-# The lifecycle (0011 constraint 1): three states, never manually advanced. They are INFERRED
-# from the work units + learn record, so the state can't drift from reality (D2 -> c). Draft:
-# the spec is being shaped, nothing under construction. Building: at least one unit has started.
-# Complete: every unit is done and a learn record is captured.
-State = Literal["draft", "building", "complete"]
-STATES: tuple[str, ...] = ("draft", "building", "complete")
-
-# A unit "has started" once it leaves the proposed/ready prelude — work has actually begun.
-_STARTED_UNIT_STATUSES = frozenset(
-    {"in_progress", "blocked_on_decision", "in_verification", "done"}
-)
-
-
-def derive_state(unit_statuses: list[str], has_learn: bool) -> State:
-    """The inferred lifecycle state (0011 constraint 1 / a2). Pure: state is a function of the
-    work units and whether a learn record exists — no stored label to forget or drift.
-    Complete only once there ARE units, all are done, and learnings are captured; Building once
-    any unit has started; Draft otherwise (no units, or all still proposed/ready)."""
-    if unit_statuses and all(s == "done" for s in unit_statuses) and has_learn:
-        return "complete"
-    if any(s in _STARTED_UNIT_STATUSES for s in unit_statuses):
-        return "building"
-    return "draft"
+# The lifecycle (BD-5): four states — Draft, Building, Learning, Complete — derived from
+# criteria verification state, not work units. State is stored on the initiative row and
+# updated by store methods as criteria and learn records change.
+State = Literal["draft", "building", "learning", "complete"]
+STATES: tuple[str, ...] = ("draft", "building", "learning", "complete")
 
 
 # ----------------------------------------------------------------------------- spec models
@@ -112,8 +92,17 @@ class Verify(BaseModel):
     detail: str
 
 
+VerificationStatus = Literal["pending", "evidence_submitted", "verified", "changes_requested"]
+CriterionVerdict = Literal["approved", "changes_requested"]
+
+
 class AcceptanceCriterion(SpecItem):
     verify: Verify
+    # BD-5 u2: criteria-as-tracking fields — set by submit_evidence and human verdict actions
+    verification_status: VerificationStatus = "pending"
+    evidence: str | None = None
+    verdict: CriterionVerdict | None = None
+    feedback: str | None = None
 
 
 class Reference(BaseModel):
@@ -271,16 +260,14 @@ class ProjectContext(BaseModel):
 
 class InitiativeAttention(BaseModel):
     """What needs the human on one initiative (0011 a8): the attention indicators the project
-    screen shows per card, so where work is waiting is visible without opening a spec. The
-    three things only a human can clear — confirm proposals, resolve decisions, verify units."""
+    screen shows per card, so where work is waiting is visible without opening a spec."""
 
     proposed_items: int = 0      # ai_proposed spec items awaiting confirm / reject
     open_decisions: int = 0      # escalations awaiting a verdict
-    units_to_verify: int = 0     # work units submitted, awaiting the human's verdict
 
     @property
     def total(self) -> int:
-        return self.proposed_items + self.open_decisions + self.units_to_verify
+        return self.proposed_items + self.open_decisions
 
 
 class ConversationContext(BaseModel):
@@ -297,96 +284,3 @@ class ConversationContext(BaseModel):
     project: ProjectContext | None = None
 
 
-class Guidance(BaseModel):
-    """A read-only briefing for an executor about to build a work unit (0009 u4, constraint
-    5). The grounded fields (constraints / criteria / memory) come straight from the spec and
-    memory corpus — never hallucinated; the Advisor adds the synthesis (briefing + pitfalls).
-    The executor reads it; it never writes back. `spec_version` is part of the cache key, so a
-    spec edit invalidates a stale briefing for free."""
-
-    unit_id: str
-    title: str
-    scope: str
-    spec_version: int
-    constraints: list[str] = Field(default_factory=list)    # the confirmed rules that bind it
-    criteria: list[str] = Field(default_factory=list)        # acceptance criteria it must meet
-    memory: list[ContextHit] = Field(default_factory=list)   # relevant prior patterns
-    briefing: str = ""                                       # the Advisor's synthesized notes
-    pitfalls: list[str] = Field(default_factory=list)        # known traps to avoid
-
-
-# (The verify-stage Advisor review — CriterionReview / ReviewNotes — was retired with the move to
-# browser-local conversations: spec uvama, decision dec_0397d7a8f45e/A. It was delivered only as a
-# rail message, which the backend no longer writes.)
-
-
-# ----------------------------------------------------------------------------- work units (0003)
-# A fixed state machine. A unit is created `proposed`; a human confirms it to `ready`
-# before it's workable, and an executor can never confirm its own (no-self-confirm).
-# `changes_requested` is a verdict, not a resting status: per 0003 a7 it lands the unit
-# back in `in_progress` with feedback — so it is NOT a member of UnitStatus, and
-# `in_verification -> in_progress` is the one allowed backward transition.
-UnitStatus = Literal[
-    "proposed", "ready", "in_progress", "blocked_on_decision", "in_verification", "done"
-]
-
-_UNIT_TRANSITIONS: dict[str, frozenset[str]] = {
-    "proposed": frozenset({"ready"}),                        # human confirms
-    "ready": frozenset({"in_progress"}),                     # executor starts
-    "in_progress": frozenset({"blocked_on_decision", "in_verification"}),
-    "blocked_on_decision": frozenset({"in_progress"}),       # decision resolved -> resume
-    "in_verification": frozenset({"done", "in_progress"}),   # approved / changes_requested
-    "done": frozenset(),                                     # terminal
-}
-
-
-class CriterionResult(BaseModel):
-    """One acceptance criterion, as the executor reports it on submission."""
-
-    criterion_id: str
-    result: Literal["pass", "fail", "needs_judgment"]
-    evidence: str = ""
-
-
-class Submission(BaseModel):
-    """What the executor hands back for judgment — its output mapped to the criteria."""
-
-    summary: str
-    criteria_results: list[CriterionResult]
-    artifacts: list[str] = Field(default_factory=list)
-    submitted_at: str = Field(default_factory=_now)
-
-
-class Verdict(BaseModel):
-    """The human's judgment on a submission. Only a human writes this (no self-approval)."""
-
-    verdict: Literal["approved", "changes_requested"]
-    feedback: str = ""
-    decided_by: str
-    decided_at: str = Field(default_factory=_now)
-
-
-class WorkUnit(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str = Field(default_factory=lambda: _id("unit"))
-    spec_id: str  # the initiative_id of the spec this unit decomposes (one spec per initiative)
-    title: str
-    scope: str
-    criterion_ids: list[str] = Field(default_factory=list)  # acceptance criteria it satisfies
-    status: UnitStatus = "proposed"  # created proposed; not workable until a human confirms it
-    blocked_on: str | None = None  # decision id while status == blocked_on_decision
-    progress_note: str | None = None  # lightweight executor heartbeat (report_progress)
-    submission: Submission | None = None  # set on submit_for_verification
-    verdict: Verdict | None = None  # set by the human's verdict (u3); read by get_verification
-    created_at: str = Field(default_factory=_now)
-    updated_at: str = Field(default_factory=_now)
-
-    def transition(self, target: UnitStatus) -> "WorkUnit":
-        """Move along the fixed state machine, or raise. Every status change goes through
-        here — it is the sole legality rule for a unit's lifecycle."""
-        if target not in _UNIT_TRANSITIONS.get(self.status, frozenset()):
-            raise InvalidTransition(self.id, self.status, target)
-        self.status = target
-        self.updated_at = _now()
-        return self

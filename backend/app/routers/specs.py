@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.database import get_store
 from app.exceptions import NotFoundError
 from app.models import Spec
-from app.schemas import AddItem, ConfirmAll, EditItem, ItemVersion
+from app.schemas import AddItem, CriterionVerdictBody, ConfirmAll, EditItem, ItemVersion
 from app.services import authoring
 from app.store import SpecStore
 
@@ -75,4 +75,14 @@ async def reject_item(initiative_id: str, item_id: str, body: ItemVersion, store
 async def confirm_all(initiative_id: str, body: ConfirmAll, store: _Store) -> Spec:
     return await authoring.confirm_all(
         store, initiative_id, version=body.version, section=body.section
+    )
+
+
+@router.post("/specs/{initiative_id}/criteria/{criterion_id}/verdict")
+async def criterion_verdict(
+    initiative_id: str, criterion_id: str, body: CriterionVerdictBody, store: _Store
+) -> Spec:
+    """Human approves or requests changes on a criterion that has evidence (BD-5 u3)."""
+    return await store.record_criterion_verdict(
+        initiative_id, criterion_id, body.verdict, body.feedback
     )

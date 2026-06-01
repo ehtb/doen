@@ -2,6 +2,7 @@ import { getProject, getSpec } from "@/lib/api";
 import { cn, stateMode } from "@/lib/utils";
 import { SetBreadcrumb } from "@/app/_shell/breadcrumb";
 import ConversationRail from "./ConversationRail";
+import CriteriaVerification from "./CriteriaVerification";
 import GuidedReview from "./GuidedReview";
 import LearnStage from "./LearnStage";
 import NextStepHint from "./NextStepHint";
@@ -9,11 +10,7 @@ import SpecActions from "./SpecActions";
 import SpecDocument from "./SpecDocument";
 import { SpecProvider } from "./spec-context";
 import SteeringRail from "./SteeringRail";
-import WorkUnits from "./WorkUnits";
-
-// The three inferred lifecycle states (0011). There is no manual advance — the state is a read
-// of the work units + learn record, so this stepper only reflects where the initiative sits.
-const STATES = ["draft", "building", "complete"];
+const STATES = ["draft", "building", "learning", "complete"];
 
 function StateStepper({ state }: { state: string }) {
   const current = Math.max(0, STATES.indexOf(state));
@@ -108,8 +105,10 @@ export default async function SpecPage({
         <div className="mt-7 flex flex-wrap items-start gap-7">
           <section className="min-w-80 flex-[1_1_560px]">
             <SpecDocument />
-            <WorkUnits initiativeId={spec.initiative_id} acceptance={spec.acceptance} />
-            {(spec.state === "building" || spec.state === "complete") && (
+            {(spec.state === "building" || spec.state === "learning" || spec.state === "complete") && (
+              <CriteriaVerification initiativeId={spec.initiative_id} />
+            )}
+            {(spec.state === "learning" || spec.state === "complete") && (
               <LearnStage
                 initiativeId={spec.initiative_id}
                 intent={spec.intent}

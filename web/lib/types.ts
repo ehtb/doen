@@ -11,6 +11,11 @@ export interface SpecItem {
 
 export interface AcceptanceCriterion extends SpecItem {
   verify: { kind: string; detail: string };
+  // BD-5 u2: criteria-as-tracking fields
+  verification_status: "pending" | "evidence_submitted" | "verified" | "changes_requested";
+  evidence?: string | null;
+  verdict?: "approved" | "changes_requested" | null;
+  feedback?: string | null;
 }
 
 export interface Spec {
@@ -59,7 +64,6 @@ export interface Project {
 export interface InitiativeAttention {
   proposed_items: number;
   open_decisions: number;
-  units_to_verify: number;
 }
 
 // The project dashboard payload (backend ProjectDashboard, schemas.py).
@@ -68,43 +72,6 @@ export interface ProjectDashboard {
   initiatives: Initiative[];
   open_decisions: number;
   attention: Record<string, InitiativeAttention>;
-}
-
-// A work unit decomposed from the spec (backend WorkUnit, store.py). The executor
-// proposes and works it over MCP; the human confirms and judges it here.
-export interface CriterionResult {
-  criterion_id: string;
-  result: "pass" | "fail" | "needs_judgment";
-  evidence: string;
-}
-
-export interface Submission {
-  summary: string;
-  criteria_results: CriterionResult[];
-  artifacts: string[];
-  submitted_at: string;
-}
-
-export interface Verdict {
-  verdict: "approved" | "changes_requested";
-  feedback: string;
-  decided_by: string;
-  decided_at: string;
-}
-
-export interface WorkUnit {
-  id: string;
-  spec_id: string;
-  title: string;
-  scope: string;
-  criterion_ids: string[];
-  status: string;
-  blocked_on?: string | null;
-  progress_note?: string | null;
-  submission?: Submission | null;
-  verdict?: Verdict | null;
-  created_at: string;
-  updated_at: string;
 }
 
 // An append-only record the Learn stage writes (backend Memory, store.py).
@@ -122,7 +89,6 @@ export interface LearnReview {
   initiative: Initiative;
   intent: string;
   decisions: Decision[];
-  units: WorkUnit[];
   memory: Memory[];
 }
 

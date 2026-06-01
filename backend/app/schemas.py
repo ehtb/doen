@@ -23,7 +23,6 @@ from app.models import (
     Project,
     Section,
     Verify,
-    WorkUnit,
 )
 
 
@@ -107,11 +106,10 @@ class ConfirmAll(BaseModel):
     section: Section | None = None  # None = every section
 
 
-# --- work units ----------------------------------------------------------------------
-class UnitVerdict(BaseModel):
+# --- criteria verification (BD-5 u3) -------------------------------------------------
+class CriterionVerdictBody(BaseModel):
     verdict: Literal["approved", "changes_requested"]
-    feedback: str = ""
-    decided_by: str = DEV_USER_ID
+    feedback: str | None = None
 
 
 # --- AI-assisted shaping -------------------------------------------------------------
@@ -168,7 +166,6 @@ class LearnReview(BaseModel):
     initiative: Initiative
     intent: str
     decisions: list[Decision]  # resolved only — the reasoning behind what shipped
-    units: list[WorkUnit]
     memory: list[Memory]
 
 

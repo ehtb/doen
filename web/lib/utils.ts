@@ -10,6 +10,7 @@ export function cn(...inputs: ClassValue[]) {
 const STATE_MODE: Record<string, string> = {
   draft: "shaping the spec",
   building: "guiding the build",
+  learning: "drawing out the learnings",
   complete: "drawing out the learnings",
 };
 

@@ -2,12 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, BookOpen, Check, GitBranch, Loader2, Sparkles } from "lucide-react";
+import { BookOpen, Check, GitBranch, Loader2, Sparkles } from "lucide-react";
 
 import type { AcceptanceCriterion, LearnReview } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/utils";
 
 // Keep the review fresh so a verdict that lands while the page is open is reflected here
 // (the "2 of 5 not yet verified" warning was stale otherwise).
@@ -115,8 +114,6 @@ export default function LearnStage({
     }
   }
 
-  const units = review?.units ?? [];
-  const incomplete = units.filter((u) => u.status !== "done");
   const decisions = review?.decisions ?? [];
   const memory = review?.memory ?? [];
 
@@ -161,43 +158,7 @@ export default function LearnStage({
           </ul>
         )}
 
-        <p className="mt-4 font-mono text-[10px] tracking-widest text-ink-faint uppercase">
-          Unit outcomes
-        </p>
-        {units.length === 0 ? (
-          <p className="mt-1 text-[13px] text-ink-faint">No work units were decomposed.</p>
-        ) : (
-          <ul className="mt-1.5 space-y-1.5">
-            {units.map((u) => (
-              <li key={u.id} className="flex items-start gap-2 text-[12.5px] leading-snug">
-                <span
-                  className={cn(
-                    "mt-0.5 font-mono text-[10px] tracking-wide uppercase",
-                    u.status === "done" ? "text-confirmed-foreground" : "text-proposed-foreground",
-                  )}
-                >
-                  {u.status === "done" ? "done" : u.status.replace(/_/g, " ")}
-                </span>
-                <span className="text-foreground">
-                  {u.title}
-                  {u.verdict?.feedback && (
-                    <span className="text-ink-soft"> — {u.verdict.feedback}</span>
-                  )}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
       </div>
-
-      {/* --- soft gate (constraint 8 / D1->b): warn, never block --- */}
-      {incomplete.length > 0 && (
-        <p className="mt-3 flex items-center gap-2 rounded-md border border-proposed/30 bg-proposed/10 px-3 py-2 text-[12.5px] text-proposed-foreground">
-          <AlertTriangle className="size-3.5 shrink-0" />
-          {incomplete.length} of {units.length} units are not yet verified — you can still close
-          out; their learnings are worth capturing.
-        </p>
-      )}
 
       {/* --- captured memory (after submit / on revisit) --- */}
       {memory.length > 0 && (
@@ -300,6 +261,76 @@ export default function LearnStage({
           </Button>
         </div>
       ) : null}
+
+      {/* Escape hatch: complete without learnings. Friction by design — not the primary CTA.
+          The warning text is required by spec constraint: "Skipping reflection — nothing will
+          be written to memory for this initiative." */}
+      {memory.length === 0 && (
+        <SkipReflection initiativeId={initiativeId} />
+      )}
     </section>
+  );
+}
+
+function SkipReflection({ initiativeId }: { initiativeId: string }) {
+  const router = useRouter();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function skip() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/initiatives/${initiativeId}/complete-without-learnings`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        router.refresh();
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!confirming) {
+    return (
+      <div className="mt-4 flex justify-end">
+        <button
+          type="button"
+          onClick={() => setConfirming(true)}
+          className="font-mono text-[10.5px] tracking-wide text-ink-faint underline-offset-4 hover:text-proposed-foreground hover:underline"
+        >
+          Skip reflection and complete
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 animate-rise rounded-md border border-proposed/30 bg-proposed/5 px-3.5 py-3 text-[12.5px]">
+      <p className="font-mono text-[10.5px] font-semibold tracking-wide text-proposed-foreground uppercase">
+        Skipping reflection — nothing will be written to memory for this initiative.
+      </p>
+      <p className="mt-1 text-ink-soft">
+        Future initiatives won&apos;t be able to learn from this one. Are you sure?
+      </p>
+      <div className="mt-2.5 flex gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={skip}
+          className="font-mono text-[10.5px] tracking-wide text-proposed-foreground underline-offset-4 hover:underline disabled:opacity-50"
+        >
+          Yes, complete without memory
+        </button>
+        <button
+          type="button"
+          onClick={() => setConfirming(false)}
+          className="font-mono text-[10.5px] tracking-wide text-ink-faint underline-offset-4 hover:underline"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }

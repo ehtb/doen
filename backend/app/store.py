@@ -10,7 +10,6 @@ Relational surface (see migrations/):
   specs       (initiative_id pk, version int, doc jsonb, updated_at)
   decisions   (id pk, initiative_id, payload jsonb, status, embedding vector(1536), ...)
   memory      (id pk, initiative_id, summary, learnings, outcome jsonb, embedding, ...)
-  work_units  (id pk, spec_id, payload jsonb, status, created_at, updated_at)
 
 Decisions live in their own table (not the spec doc): append-only, individually
 addressable, and vector-searchable for the learn->shape flywheel. The domain models
@@ -37,7 +36,6 @@ from app.exceptions import (
 from app.models import (
     ContextHit,
     Decision,
-    Guidance,
     Initiative,
     InitiativeAttention,
     Memory,
@@ -45,12 +43,8 @@ from app.models import (
     ProjectContext,
     SiblingSummary,
     Spec,
-    Submission,
-    Verdict,
-    WorkUnit,
     _now,
     derive_prefix,
-    derive_state,
     slug_prefix,
     slugify,
 )
@@ -133,7 +127,6 @@ SPEC_CACHE_TTL = 300  # seconds; cache is derived, so a short TTL is just a safe
 # sends a slice with each Advisor call. This is the backend's defensive cap on how many of those
 # turns it will fold into a prompt — a safety net against a client sending an unbounded slice.
 MESSAGE_WINDOW = 30
-GUIDANCE_CACHE_TTL = 300  # seconds; a unit briefing is regenerated on demand after it lapses
 # Project context is rendered into every Advisor turn for a project initiative, so it must
 # stay compact (0010 constraint 3): cap how many siblings, and how many constraint headlines
 # per sibling, the summaries carry. The Advisor retrieves specifics on demand via get_context.
@@ -323,34 +316,55 @@ class SpecStore:
         return [_initiative_from_row(r) for r in rows]
 
     async def _recompute_state(self, initiative_id: str) -> None:
-        """Re-infer the initiative's lifecycle state from its work units + learn record and
-        persist it (0011 constraint 1 / a2). Called on every unit transition and learn capture —
-        there is no manual setter, so the state can't drift (D2 -> c). The state is mirrored onto
-        the spec doc (metadata, not a content edit — it never bumps the spec version)."""
-        rows = await self.pg.fetch(
-            "SELECT status FROM work_units WHERE spec_id = $1", initiative_id
+        """Re-infer the four-stage lifecycle state (BD-5 u4) from criteria verification status
+        and the learn record, then persist it on both the initiative row and the spec JSONB.
+
+        Draft → Building: any criterion has had evidence submitted (evidence_submitted,
+            verified, or changes_requested).
+        Building → Learning: every criterion is verified.
+        Learning → Complete: every criterion is verified AND a learn record exists.
+        Learning → Complete (skip): via explicit mark_complete_without_learnings — not here.
+        """
+        doc_raw = await self.pg.fetchval(
+            "SELECT doc FROM specs WHERE initiative_id = $1", initiative_id
         )
-        has_learn = await self.pg.fetchval(
+        if doc_raw is None:
+            return
+        spec = Spec.model_validate_json(doc_raw)
+        criteria = spec.acceptance
+
+        has_learn = bool(await self.pg.fetchval(
             "SELECT EXISTS (SELECT 1 FROM memory WHERE initiative_id = $1)", initiative_id
-        )
-        state = derive_state([r["status"] for r in rows], bool(has_learn))
+        ))
+
+        EVIDENCE_SEEN = {"evidence_submitted", "verified", "changes_requested"}
+        if not criteria:
+            new_state = "complete" if has_learn else "draft"
+        elif all(c.verification_status == "verified" for c in criteria) and has_learn:
+            new_state = "complete"
+        elif all(c.verification_status == "verified" for c in criteria):
+            new_state = "learning"
+        elif any(c.verification_status in EVIDENCE_SEEN for c in criteria):
+            new_state = "building"
+        else:
+            new_state = "draft"
+
         async with self.pg.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
                     "UPDATE initiatives SET state = $2, updated_at = now() WHERE id = $1",
-                    initiative_id, state,
+                    initiative_id, new_state,
                 )
                 await conn.execute(
                     """UPDATE specs SET doc = jsonb_set(doc, '{state}', to_jsonb($2::text)),
                        updated_at = now() WHERE initiative_id = $1""",
-                    initiative_id, state,
+                    initiative_id, new_state,
                 )
-        # refresh the derived spec cache from PG truth
-        doc = await self.pg.fetchval(
+        updated_doc = await self.pg.fetchval(
             "SELECT doc FROM specs WHERE initiative_id = $1", initiative_id
         )
-        if doc is not None:
-            await self.redis.set(f"spec:{initiative_id}", doc, ex=SPEC_CACHE_TTL)
+        if updated_doc is not None:
+            await self.redis.set(f"spec:{initiative_id}", updated_doc, ex=SPEC_CACHE_TTL)
 
     async def _unique_slug(self, base: str) -> str:
         slug, n = base, 2
@@ -512,21 +526,11 @@ class SpecStore:
                GROUP BY d.initiative_id""",
             project_id,
         )
-        unit_rows = await self.pg.fetch(
-            """SELECT w.spec_id AS id, count(*) AS n
-               FROM work_units w JOIN initiatives i ON i.id = w.spec_id
-               WHERE i.project_id = $1 AND i.archived_at IS NULL
-                 AND w.status = 'in_verification'
-               GROUP BY w.spec_id""",
-            project_id,
-        )
         decisions = {r["id"]: r["n"] for r in dec_rows}
-        units = {r["id"]: r["n"] for r in unit_rows}
         return {
             r["id"]: InitiativeAttention(
                 proposed_items=r["proposed_items"],
                 open_decisions=decisions.get(r["id"], 0),
-                units_to_verify=units.get(r["id"], 0),
             )
             for r in item_rows
         }
@@ -625,9 +629,6 @@ class SpecStore:
                WHERE id = $1""",
             decision_id, d.model_dump_json(),
         )
-        # a decision can park a work unit (blocked_on_decision); resolving it resumes that
-        # unit BEFORE we wake the executor, so the awaited call finds it in_progress (a9).
-        await self._resume_units_blocked_on(decision_id)
         # wake any agent parked on this exact decision — push, not poll
         await self.redis.publish(f"decision:{decision_id}", d.model_dump_json())
         # embed the resolved reasoning into memory, async + best-effort (0005 constraint 3):
@@ -821,156 +822,119 @@ class SpecStore:
     # browser's IndexedDB. The frontend sends a windowed slice with each Advisor call and the
     # backend discards it after replying — there is deliberately no message read/write here.
 
-    # --- guidance cache: a derived, short-lived unit briefing (0009 u4) ------
-    def _guidance_key(self, unit_id: str, spec_version: int) -> str:
-        # spec_version in the key = automatic invalidation: a spec edit bumps the version, so
-        # the stale briefing's key is simply never read again (it expires on its own).
-        return f"guidance:{unit_id}:{spec_version}"
-
-    async def read_guidance_cache(self, unit_id: str, spec_version: int) -> Guidance | None:
-        cached = await self.redis.get(self._guidance_key(unit_id, spec_version))
-        return Guidance.model_validate_json(cached) if cached else None
-
-    async def write_guidance_cache(self, guidance: Guidance) -> None:
-        await self.redis.set(
-            self._guidance_key(guidance.unit_id, guidance.spec_version),
-            guidance.model_dump_json(),
-            ex=GUIDANCE_CACHE_TTL,
-        )
-
-    # --- work units: durable rows in their own table (0003) ------------------
-    async def create_unit(self, unit: WorkUnit) -> WorkUnit:
-        await self.pg.execute(
-            """INSERT INTO work_units (id, spec_id, payload, status, created_at, updated_at)
-               VALUES ($1, $2, $3, $4, now(), now())""",
-            unit.id, unit.spec_id, unit.model_dump_json(), unit.status,
-        )
-        await self._recompute_state(unit.spec_id)  # a new unit may flip the inferred state (0011)
-        return unit
-
-    async def get_unit(self, unit_id: str) -> WorkUnit | None:
-        row = await self.pg.fetchrow(
-            "SELECT payload FROM work_units WHERE id = $1", unit_id
-        )
-        return WorkUnit.model_validate_json(row["payload"]) if row else None
-
-    async def save_unit(self, unit: WorkUnit) -> WorkUnit:
-        """Persist a unit after a transition. payload is the truth; status is a promoted
-        column so list_units can filter without parsing JSON. Every unit status change routes
-        through here, so this is where the initiative's inferred state is recomputed (0011 a2)."""
-        unit.updated_at = _now()
-        await self.pg.execute(
-            """UPDATE work_units SET payload = $2, status = $3, updated_at = now()
-               WHERE id = $1""",
-            unit.id, unit.model_dump_json(), unit.status,
-        )
-        await self._recompute_state(unit.spec_id)
-        return unit
-
-    async def list_units(self, spec_id: str, status: str | None = None) -> list[WorkUnit]:
-        """The executor's read path (a3). Oldest first; optionally filtered by status, served
-        off the promoted status column so no JSON parsing is needed to filter."""
-        if status is None:
-            rows = await self.pg.fetch(
-                "SELECT payload FROM work_units WHERE spec_id = $1 ORDER BY created_at",
-                spec_id,
-            )
-        else:
-            rows = await self.pg.fetch(
-                """SELECT payload FROM work_units
-                   WHERE spec_id = $1 AND status = $2 ORDER BY created_at""",
-                spec_id, status,
-            )
-        return [WorkUnit.model_validate_json(r["payload"]) for r in rows]
-
-    async def claim_unit(self, unit_id: str) -> WorkUnit:
-        """The executor claims a confirmed unit to start building (ready -> in_progress).
-        Only a confirmed (ready) unit can be claimed."""
-        unit = await self._require_unit(unit_id)
-        unit.transition("in_progress")
-        return await self.save_unit(unit)
-
-    async def report_progress(self, unit_id: str, note: str) -> WorkUnit:
-        unit = await self._require_unit(unit_id)
-        unit.progress_note = note
-        return await self.save_unit(unit)
-
-    async def submit_for_verification(self, unit_id: str, submission: Submission) -> WorkUnit:
-        """Hand a unit back for judgment: in_progress -> in_verification. The executor must
-        map its output to at least one acceptance criterion (constraint 4)."""
-        if not submission.criteria_results:
-            raise ValueError("submit_for_verification requires at least one criterion result")
-        unit = await self._require_unit(unit_id)
-        unit.submission = submission
-        unit.transition("in_verification")  # raises InvalidTransition unless in_progress
-        return await self.save_unit(unit)
-
-    async def get_verification(self, unit_id: str) -> Verdict | None:
-        """The verdict a human gave, or None if not yet judged. Read-only — there is no path
-        here that sets a verdict (no self-approval)."""
-        return (await self._require_unit(unit_id)).verdict
-
-    # --- human verdict + unit/decision linking (u3): humans confirm and judge ---------
-    async def confirm_unit(self, unit_id: str) -> WorkUnit:
-        """A human confirms a proposed unit -> ready — the only path to workable (a4). Raises
-        InvalidTransition unless the unit is proposed."""
-        unit = await self._require_unit(unit_id)
-        unit.transition("ready")
-        return await self.save_unit(unit)
-
-    async def reject_unit(self, unit_id: str) -> WorkUnit:
-        """Reject a proposed work unit (0011 a6): delete it. Only a proposed unit can be rejected;
-        a confirmed/started unit is real work, not a proposal. (The rejection used to be logged to
-        the rail as an advisor message; conversations are browser-local now — spec uvama — so the
-        backend no longer writes that note.)"""
-        unit = await self._require_unit(unit_id)
-        if unit.status != "proposed":
-            raise ValidationError(f"only a proposed work unit can be rejected (it is {unit.status})")
-        await self.pg.execute("DELETE FROM work_units WHERE id = $1", unit_id)
-        await self._recompute_state(unit.spec_id)
-        return unit
-
-    async def record_verdict(
+    # --- BD-5 u2: criteria-as-tracking (submit_evidence, get_criteria_status) -----------
+    async def submit_evidence(
         self,
-        unit_id: str,
-        verdict: Literal["approved", "changes_requested"],
-        feedback: str,
-        decided_by: str,
-    ) -> WorkUnit:
-        """A human judges a submitted unit (a7): approved -> done; changes_requested ->
-        in_progress with feedback attached. Legal only from in_verification."""
-        unit = await self._require_unit(unit_id)
-        unit.verdict = Verdict(verdict=verdict, feedback=feedback, decided_by=decided_by)
-        unit.transition("done" if verdict == "approved" else "in_progress")
-        return await self.save_unit(unit)
+        initiative_id: str,
+        criteria_results: list[dict],
+    ) -> Spec:
+        """Submit evidence against acceptance criteria (BD-5 u2). All-or-nothing: if any
+        criterion_id is not found the whole call is rejected before any mutation. Sets
+        verification_status to evidence_submitted on each targeted criterion and bumps the
+        spec version via save_spec (the existing optimistic-lock guard applies)."""
+        spec = await self.get_spec(initiative_id)
+        if spec is None:
+            raise NotFoundError(f"no spec for initiative {initiative_id}")
 
-    async def block_on_decision(self, unit_id: str, decision_id: str) -> WorkUnit:
-        """Park a unit on a decision (in_progress -> blocked_on_decision). The matching
-        resume happens automatically when the decision resolves."""
-        unit = await self._require_unit(unit_id)
-        unit.blocked_on = decision_id
-        unit.transition("blocked_on_decision")
-        return await self.save_unit(unit)
+        criterion_map = {c.id: c for c in spec.acceptance}
+        # validate all IDs before mutating anything
+        unknown = [r["criterion_id"] for r in criteria_results if r["criterion_id"] not in criterion_map]
+        if unknown:
+            raise NotFoundError(
+                f"criterion id(s) not found in {initiative_id}: {', '.join(unknown)}"
+            )
 
-    async def _resume_units_blocked_on(self, decision_id: str) -> None:
-        rows = await self.pg.fetch(
-            """SELECT payload FROM work_units
-               WHERE status = 'blocked_on_decision' AND payload->>'blocked_on' = $1""",
-            decision_id,
+        for r in criteria_results:
+            c = criterion_map[r["criterion_id"]]
+            c.verification_status = "evidence_submitted"
+            c.evidence = r.get("evidence") or None
+
+        await self.save_spec(spec)
+        await self._recompute_state(initiative_id)  # draft → building on first evidence
+        return await self.get_spec(initiative_id) or spec
+
+    async def transition_to_building(self, initiative_id: str) -> Initiative:
+        """Manual 'start building' trigger (BD-5 u4): move a draft initiative to building.
+        Only valid from draft — a no-op would be confusing so it's rejected from other states."""
+        init = await self.get_initiative(initiative_id)
+        if init is None:
+            raise NotFoundError(f"no initiative {initiative_id}")
+        if init.state != "draft":
+            raise ValidationError(f"initiative is already {init.state}, not draft")
+        await self.pg.execute(
+            "UPDATE initiatives SET state = 'building', updated_at = now() WHERE id = $1",
+            initiative_id,
         )
-        for r in rows:
-            unit = WorkUnit.model_validate_json(r["payload"])
-            unit.blocked_on = None
-            unit.transition("in_progress")
-            await self.save_unit(unit)
+        await self.pg.execute(
+            """UPDATE specs SET doc = jsonb_set(doc, '{state}', to_jsonb('building'::text)),
+               updated_at = now() WHERE initiative_id = $1""",
+            initiative_id,
+        )
+        doc = await self.pg.fetchval("SELECT doc FROM specs WHERE initiative_id = $1", initiative_id)
+        if doc:
+            await self.redis.set(f"spec:{initiative_id}", doc, ex=SPEC_CACHE_TTL)
+        return (await self.get_initiative(initiative_id)) or init
 
-    async def _require_unit(self, unit_id: str) -> WorkUnit:
-        unit = await self.get_unit(unit_id)
-        if unit is None:
-            raise NotFoundError(f"no work unit {unit_id}")
-        return unit
+    async def mark_complete_without_learnings(self, initiative_id: str) -> Initiative:
+        """Escape hatch: complete from learning without writing a learn record (BD-5 u4).
+        Only valid from learning — the caller must have shown the friction warning:
+        'Skipping reflection — nothing will be written to memory for this initiative.'"""
+        init = await self.get_initiative(initiative_id)
+        if init is None:
+            raise NotFoundError(f"no initiative {initiative_id}")
+        if init.state != "learning":
+            raise ValidationError(f"initiative is in {init.state}, not learning")
+        await self.pg.execute(
+            "UPDATE initiatives SET state = 'complete', updated_at = now() WHERE id = $1",
+            initiative_id,
+        )
+        await self.pg.execute(
+            """UPDATE specs SET doc = jsonb_set(doc, '{state}', to_jsonb('complete'::text)),
+               updated_at = now() WHERE initiative_id = $1""",
+            initiative_id,
+        )
+        doc = await self.pg.fetchval("SELECT doc FROM specs WHERE initiative_id = $1", initiative_id)
+        if doc:
+            await self.redis.set(f"spec:{initiative_id}", doc, ex=SPEC_CACHE_TTL)
+        return (await self.get_initiative(initiative_id)) or init
 
-    # --- ephemeral agent state: Redis-native, never persisted ----------------
-    async def heartbeat(self, unit_id: str, note: str) -> None:
-        # drives the live "agents at work" strip; expires on its own, by design
-        await self.redis.set(f"unit:{unit_id}:beat", note, ex=30)
+    async def get_criteria_status(self, initiative_id: str) -> list[dict]:
+        """Return all acceptance criteria with their current verification fields (BD-5 u2)."""
+        spec = await self.get_spec(initiative_id)
+        if spec is None:
+            raise NotFoundError(f"no spec for initiative {initiative_id}")
+        return [
+            {
+                "id": c.id,
+                "text": c.text,
+                "verification_status": c.verification_status,
+                "evidence": c.evidence,
+                "verdict": c.verdict,
+                "feedback": c.feedback,
+            }
+            for c in spec.acceptance
+        ]
+
+    async def record_criterion_verdict(
+        self,
+        initiative_id: str,
+        criterion_id: str,
+        verdict: str,
+        feedback: str | None = None,
+    ) -> Spec:
+        """Record a human verdict on a single criterion (BD-5 u3). Sets verdict + feedback,
+        and transitions verification_status to verified or changes_requested accordingly."""
+        spec = await self.get_spec(initiative_id)
+        if spec is None:
+            raise NotFoundError(f"no spec for initiative {initiative_id}")
+        criterion_map = {c.id: c for c in spec.acceptance}
+        if criterion_id not in criterion_map:
+            raise NotFoundError(f"criterion {criterion_id} not found in {initiative_id}")
+        c = criterion_map[criterion_id]
+        c.verdict = verdict  # type: ignore[assignment]
+        c.feedback = feedback or None
+        c.verification_status = "verified" if verdict == "approved" else "changes_requested"
+        await self.save_spec(spec)
+        await self._recompute_state(initiative_id)  # building → learning when all verified
+        return await self.get_spec(initiative_id) or spec
+

@@ -23,7 +23,6 @@ from app.models import (
     Spec,
     SpecItem,
     Verify,
-    WorkUnit,
 )
 from app.providers.llm import LLMError, StructuredLLM, get_shaping_llm
 from app.store import SpecStore
@@ -50,10 +49,6 @@ resolve silently.
 test, behavior, metric, or human_judgment — with a short detail of how it's checked. Avoid vague \
 criteria. Mark the single most important one as the HEADLINE by appending " [HEADLINE]" to its \
 text.
-- units: independently verifiable slices of the work, each with a short title and a concrete \
-scope, plus the acceptance criteria it satisfies (by 0-based index into the acceptance list). \
-The executor builds one unit at a time.
-
 Size the spec to the work — infer the scale from the description, never ask and never use a size \
 label. A small bug fix or tweak ("fix the misaligned login button") gets a LIGHTWEIGHT spec: \
 about one constraint, one acceptance criterion, and one unit. A substantial feature gets the FULL \
@@ -61,7 +56,7 @@ structure: several constraints, multiple criteria, and a handful of units. Don't
 change into a heavy spec, and don't compress a large one — match the structure to the real size.
 
 Hard rules:
-- No estimation anywhere — no story points, hours, or velocity. Units are sized by scope, not time.
+- No estimation anywhere — no story points, hours, or velocity.
 - Verifiable acceptance criteria only — if you can't say how it's checked, it doesn't belong.
 - Don't invent intent the description doesn't support. Keep it tight: a spec is a contract, not \
 an essay.
@@ -107,53 +102,20 @@ SPEC_SCHEMA: dict[str, Any] = {
                 "required": ["text", "verify_kind", "verify_detail"],
             },
         },
-        "units": {
-            "type": "array",
-            "description": "Independently verifiable work units. Size to the work: ~1 for a bug "
-            "fix, several for a feature.",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "A short title for the unit."},
-                    "scope": {
-                        "type": "string",
-                        "description": "What this unit covers, concretely.",
-                    },
-                    "criteria": {
-                        "type": "array",
-                        "items": {"type": "integer"},
-                        "description": "0-based indexes into the acceptance list this unit satisfies.",
-                    },
-                },
-                "required": ["title", "scope"],
-            },
-        },
     },
-    "required": ["title", "intent", "constraints", "discretion", "acceptance", "units"],
+    "required": ["title", "intent", "constraints", "discretion", "acceptance"],
 }
-
-
-class ProposedUnit(BaseModel):
-    """A work unit the Advisor proposes during shaping (0011 C2): title + scope, and which
-    acceptance criteria it satisfies (by 0-based index into the acceptance list, resolved to
-    real criterion ids once the spec is persisted)."""
-
-    title: str
-    scope: str
-    criterion_indexes: list[int] = []
 
 
 class ShapingResult(BaseModel):
     """The proposed spec components — all ai_proposed/proposed, not yet persisted — plus the
-    memory priors that informed them (for transparency / a4). title + units are 0011 (C2): the
-    Advisor names the initiative and decomposes it, sized to the work (C6/a7)."""
+    memory priors that informed them (for transparency / a4)."""
 
     title: str = ""
     intent: str
     constraints: list[SpecItem]
     discretion: list[SpecItem]
     acceptance: list[AcceptanceCriterion]
-    units: list[ProposedUnit] = []
     context_used: list[ContextHit]
 
 
@@ -190,14 +152,6 @@ def _parse(raw: dict[str, Any], hits: list[ContextHit]) -> ShapingResult:
             )
             for a in raw["acceptance"]
         ]
-        units = [
-            ProposedUnit(
-                title=str(u["title"]).strip(),
-                scope=str(u["scope"]).strip(),
-                criterion_indexes=[int(i) for i in (u.get("criteria") or [])],
-            )
-            for u in (raw.get("units") or [])
-        ]
     except (KeyError, TypeError, ValueError) as e:
         raise LLMError(f"shaping output did not match the spec schema: {e}") from e
     return ShapingResult(
@@ -206,7 +160,6 @@ def _parse(raw: dict[str, Any], hits: list[ContextHit]) -> ShapingResult:
         constraints=constraints,
         discretion=discretion,
         acceptance=acceptance,
-        units=units,
         context_used=hits,
     )
 
@@ -289,13 +242,5 @@ async def create_from_description(
     spec.constraints = result.constraints
     spec.discretion = result.discretion
     spec.acceptance = result.acceptance
-    saved = await store.save_spec(spec)
-
-    # propose the units, resolving each unit's criterion indexes to the now-persisted ids
-    criterion_ids = [a.id for a in saved.acceptance]
-    for u in result.units:
-        cids = [criterion_ids[i] for i in u.criterion_indexes if 0 <= i < len(criterion_ids)]
-        await store.create_unit(
-            WorkUnit(spec_id=init.id, title=u.title, scope=u.scope, criterion_ids=cids)
-        )
+    await store.save_spec(spec)
     return init

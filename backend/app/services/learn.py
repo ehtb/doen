@@ -1,11 +1,8 @@
-"""Learn service (spec 0005 u2): assemble the outcome review, capture memory.
+"""Learn service: assemble the outcome review and capture memory.
 
-The review (a4) gathers intent, the resolved decisions (the calls + why), and the per-unit
-verification outcomes so the human can judge what happened against what was intended.
-Submitting (a5) writes one append-only memory row (embedded for the cross-initiative
-flywheel). The captured learnings feed the inferred lifecycle state (0011): once every unit is
-done and learnings are captured, the initiative is Complete — a soft gate (constraint 8): the
-capture itself never blocks on incomplete units.
+The review gathers intent and the resolved decisions (the calls + why) so the human can
+reflect on what happened. Submitting writes one append-only memory row embedded for the
+cross-initiative flywheel.
 """
 
 from __future__ import annotations
@@ -19,8 +16,8 @@ from app.store import SpecStore
 
 LEARN_DRAFT_SYSTEM_PROMPT = """You are the Doen Advisor drafting the closing outcome for an \
 initiative — for the human to correct and confirm before it is saved to memory. From the \
-initiative's history (its intent, the decisions made and why, and how each work unit was judged), \
-write an honest outcome the next initiative can learn from.
+initiative's history (its intent and the decisions made and why), write an honest outcome \
+the next initiative can learn from.
 
 Return via the outcome tool:
 - summary: a few sentences — what this initiative set out to do and what actually happened against \
@@ -51,7 +48,6 @@ async def learn_review(store: SpecStore, initiative_id: str) -> LearnReview:
         initiative=init,
         intent=spec.intent if spec else "",
         decisions=await store.list_decisions(initiative_id, status="resolved"),
-        units=await store.list_units(initiative_id),
         memory=await store.list_memory(initiative_id),
     )
 
@@ -65,15 +61,6 @@ def _build_history(review: LearnReview) -> str:
                 f"- {d.question}\n  chose: {d.chosen or '(unresolved)'}"
                 + (f" — {d.rationale}" if d.rationale else "")
                 for d in review.decisions
-            )
-        )
-    if review.units:
-        parts.append(
-            "# WORK UNITS (how each landed):\n"
-            + "\n".join(
-                f"- [{u.status}] {u.title}"
-                + (f" — verdict: {u.verdict.verdict}; {u.verdict.feedback}" if u.verdict else "")
-                for u in review.units
             )
         )
     return "\n\n".join(parts)
@@ -111,7 +98,5 @@ async def submit_learn(
         raise NotFoundError(f"no initiative {initiative_id}")
     if not summary.strip():
         raise ValidationError("capturing the outcome needs a human-written summary")
-    # create_memory recomputes the inferred state (0011): with every unit done this completes
-    # the initiative; otherwise the learnings are still captured and the state stays as-is.
     await store.create_memory(initiative_id, summary.strip(), learnings, outcome)
     return await learn_review(store, initiative_id)

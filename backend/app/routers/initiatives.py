@@ -1,5 +1,4 @@
-"""Initiatives: the dashboard feed and creation. The lifecycle state is inferred from the work
-units + learn record (0011), never advanced by hand — so there is no stage endpoint."""
+"""Initiatives: the dashboard feed, creation, and lifecycle transitions (BD-5 u4)."""
 
 from __future__ import annotations
 
@@ -32,6 +31,27 @@ async def create_initiative(
     if not body.title.strip():
         raise ValidationError("initiative title must not be empty")
     return await store.create_initiative(body.title, body.project_id)
+
+
+@router.post("/initiatives/{initiative_id}/start-building", status_code=200)
+async def start_building(
+    initiative_id: str,
+    store: Annotated[SpecStore, Depends(get_store)],
+) -> Initiative:
+    """Manual 'start building' trigger (BD-5 u4): transition a draft initiative to building.
+    Auto-transition also fires on first evidence submission via submit_evidence."""
+    return await store.transition_to_building(initiative_id)
+
+
+@router.post("/initiatives/{initiative_id}/complete-without-learnings", status_code=200)
+async def complete_without_learnings(
+    initiative_id: str,
+    store: Annotated[SpecStore, Depends(get_store)],
+) -> Initiative:
+    """Escape hatch (BD-5 u4): complete a learning initiative without writing learnings.
+    Caller must show the friction warning: 'Skipping reflection — nothing will be written to
+    memory for this initiative.' Only valid from the learning state."""
+    return await store.mark_complete_without_learnings(initiative_id)
 
 
 @router.post("/initiatives/{initiative_id}/archive", status_code=200)

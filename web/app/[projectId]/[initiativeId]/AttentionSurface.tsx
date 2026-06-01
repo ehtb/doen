@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ArrowDownRight, Check, GitBranch, ListChecks, X } from "lucide-react";
+import { ArrowDownRight, Check, GitBranch, X } from "lucide-react";
 
-import type { Decision, Spec, SpecItem, WorkUnit } from "@/lib/types";
+import type { Decision, Spec, SpecItem } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -35,21 +35,13 @@ export default function AttentionSurface({
   onRejectItem: (it: SpecItem) => void;
   busy: boolean;
 }) {
-  const [units, setUnits] = useState<WorkUnit[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
-  const [unitBusy, setUnitBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [u, d] = await Promise.all([
-        fetch(`/api/specs/${initiativeId}/units`, { cache: "no-store" }).then((r) =>
-          r.ok ? r.json() : [],
-        ),
-        fetch(`/api/initiatives/${initiativeId}/decisions`, { cache: "no-store" }).then((r) =>
-          r.ok ? r.json() : [],
-        ),
-      ]);
-      setUnits(u);
+      const d = await fetch(`/api/initiatives/${initiativeId}/decisions`, { cache: "no-store" }).then((r) =>
+        r.ok ? r.json() : [],
+      );
       setDecisions(d);
     } catch {
       /* transient — the next poll retries */
@@ -62,28 +54,10 @@ export default function AttentionSurface({
     return () => clearInterval(t);
   }, [load]);
 
-  async function unitAction(id: string, action: "confirm" | "reject") {
-    if (unitBusy) return;
-    setUnitBusy(id);
-    try {
-      await fetch(`/api/units/${id}/${action}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      });
-      await load();
-    } finally {
-      setUnitBusy(null);
-    }
-  }
-
   const proposedItems: { section: Section; it: SpecItem }[] = SECTIONS.flatMap((s) =>
     (spec[s] as SpecItem[]).filter((i) => i.status === "proposed").map((it) => ({ section: s, it })),
   );
-  const proposedUnits = units.filter((u) => u.status === "proposed");
-  const verifyUnits = units.filter((u) => u.status === "in_verification");
-  const total =
-    decisions.length + verifyUnits.length + proposedItems.length + proposedUnits.length;
+  const total = decisions.length + proposedItems.length;
 
   if (total === 0) {
     return (
@@ -120,23 +94,7 @@ export default function AttentionSurface({
           </Row>
         ))}
 
-        {/* 2 — units awaiting your verdict */}
-        {verifyUnits.map((u) => (
-          <Row key={u.id} tone="urgent" tag="verify" icon={<ListChecks className="size-3" />}>
-            <p className="text-[13px] leading-snug text-foreground">
-              <span className="text-ink-soft">verify · </span>
-              {u.title}
-            </p>
-            <a
-              href="#work-units"
-              className="mt-1 inline-flex items-center gap-1 font-mono text-[10.5px] tracking-wide text-accent-deep hover:underline"
-            >
-              review the submission <ArrowDownRight className="size-3" />
-            </a>
-          </Row>
-        ))}
-
-        {/* 3 — awaiting confirmation: proposed spec items + proposed units, with inline accept/reject */}
+        {/* 2 — awaiting confirmation: proposed spec items, with inline accept/reject */}
         {proposedItems.map(({ section, it }) => (
           <Row key={it.id} tone="pending" tag={ITEM_LABEL[section]}>
             <p className="font-mono text-[12.5px] leading-snug text-foreground">{it.text}</p>
@@ -148,17 +106,6 @@ export default function AttentionSurface({
           </Row>
         ))}
 
-        {proposedUnits.map((u) => (
-          <Row key={u.id} tone="pending" tag="unit">
-            <p className="text-[13px] leading-snug text-foreground">{u.title}</p>
-            <p className="mt-0.5 text-[12px] leading-snug text-muted-foreground">{u.scope}</p>
-            <AcceptReject
-              busy={unitBusy === u.id}
-              onAccept={() => unitAction(u.id, "confirm")}
-              onReject={() => unitAction(u.id, "reject")}
-            />
-          </Row>
-        ))}
       </div>
     </section>
   );

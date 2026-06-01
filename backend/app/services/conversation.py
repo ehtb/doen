@@ -59,34 +59,11 @@ def _memory_query(messages: list[Message], spec: Spec | None) -> str:
     return spec.title if spec else ""
 
 
-# --- 0013 u5: enrich the executor's view of a spec -----------------------------------
+# --- BD-5: enrich the executor's view of a spec ------------------------------------
 async def spec_enrichment(store: SpecStore, initiative_id: str) -> dict[str, Any]:
-    """The executor-facing enrichment for get_spec (0013 u5 / constraint 9a27): per-unit context
-    (the human's verification feedback) so the executor sees the reasoning around a unit, not just
-    the unit.
-
-    Conversations are browser-local now (spec uvama, decision dec_0397d7a8f45e/A), so the two
-    message-derived fields this used to carry — the Advisor's latest guidance note and the per-unit
-    Advisor review — are no longer available server-side. `advisor_summary` is therefore always
-    None, and `unit_context` narrows to the durable work-unit data (submission summary + the human's
-    verdict and feedback)."""
-    units = await store.list_units(initiative_id)
-    unit_context: dict[str, dict[str, Any]] = {}
-    for u in units:
-        ctx: dict[str, Any] = {}
-        if u.submission is not None:
-            ctx["submission_summary"] = u.submission.summary
-        if u.verdict is not None:
-            ctx["verdict"] = u.verdict.verdict
-            ctx["verification_feedback"] = u.verdict.feedback
-        if ctx:  # only units that actually carry feedback
-            ctx["title"] = u.title
-            ctx["status"] = u.status
-            unit_context[u.id] = ctx
-    return {
-        "advisor_summary": None,
-        "unit_context": unit_context,
-    }
+    """The executor-facing enrichment for get_spec. BD-5 removes unit_context; criteria
+    verification state is surfaced directly on the spec's acceptance criteria fields."""
+    return {"advisor_summary": None, "unit_context": {}}
 
 
 async def summarize_conversation(store: SpecStore, initiative_id: str) -> dict[str, Any]:

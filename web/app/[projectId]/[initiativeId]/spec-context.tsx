@@ -1,7 +1,11 @@
 "use client";
 
 import { createContext, useContext, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import type { Spec } from "@/lib/types";
+
+// States that make new sections appear in the server-rendered page layout.
+const ADVANCING_STATES = new Set(["learning", "complete"]);
 
 // One shared spec for the whole spec page (0012 u3, a6). The document surface and the rail's
 // guided review both read and write through this, so confirming or rejecting an item in the rail
@@ -47,6 +51,7 @@ export function SpecProvider({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [railPrompt, setRailPrompt] = useState<string | null>(null);
+  const router = useRouter();
 
   async function mutate(path: string, method: string, body: object): Promise<boolean> {
     setBusy(true);
@@ -66,7 +71,13 @@ export function SpecProvider({
         setError(`request failed (${res.status})`);
         return false;
       }
-      setSpec(await res.json());
+      const updated: Spec = await res.json();
+      setSpec(updated);
+      // When the lifecycle advances to a state that reveals new page sections (learning,
+      // complete), refresh the server component so those sections render immediately.
+      if (ADVANCING_STATES.has(updated.state) && !ADVANCING_STATES.has(spec.state)) {
+        router.refresh();
+      }
       return true;
     } catch (e) {
       setError((e as Error).message);

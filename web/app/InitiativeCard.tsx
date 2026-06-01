@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Check, GitBranch, ListChecks } from "lucide-react";
+import { ArrowRight, Check, GitBranch } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { Initiative, InitiativeAttention } from "@/lib/types";
@@ -74,7 +74,7 @@ export function InitiativeCard({
   href?: string;
 }) {
   const total = attention
-    ? attention.proposed_items + attention.open_decisions + attention.units_to_verify
+    ? attention.proposed_items + attention.open_decisions
     : 0;
   return (
     <Link
@@ -112,12 +112,6 @@ export function InitiativeCard({
                 icon={GitBranch}
                 n={attention.open_decisions}
                 label="to decide"
-                urgent
-              />
-              <AttentionChip
-                icon={ListChecks}
-                n={attention.units_to_verify}
-                label="to verify"
                 urgent
               />
               <AttentionChip icon={Check} n={attention.proposed_items} label="to confirm" />

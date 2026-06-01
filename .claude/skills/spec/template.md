@@ -25,10 +25,11 @@ Not a task list.>
 - **a2** <Verifiable statement.> `[test]`
 - **a3 — HEADLINE** <The one that matters most.> `[human_judgment]`
 
-## Work units
+## Approach
 
-- **u1 — <name>** <what it covers> → a1
-- **u2 — <name>** <what it covers> → a2, a3
+<Optional: high-level notes on how the work will be tackled — technology choices, sequencing,
+known constraints. Not a task list and not managed by the system. Omit if the acceptance
+criteria and discretion already make the approach clear.>
 
 ## Decisions
 

@@ -1,19 +1,15 @@
-"""The Doen Advisor (spec 0009 u2): a state-aware thinking partner on the conversation rail.
+"""The Doen Advisor: a state-aware thinking partner on the conversation rail.
 
-The prompt is the product. The Advisor is grounded, every turn, in four things (constraint
-3): the spec-contract discipline (distilled), the current spec, relevant organisational
-memory, and the recent conversation. Its *mode* shifts with the initiative's lifecycle state
-(0011: draft / building / complete) — drafting spec items while a spec is in Draft, surfacing
-risks and weighing submitted evidence while Building, drafting outcomes once Complete — while
-never crossing the constraint/discretion boundary or making a call that belongs to the human (a9).
+The prompt is the product. The Advisor is grounded, every turn, in four things: the
+spec-contract discipline (distilled), the current spec (with criteria verification status),
+relevant organisational memory, and the recent conversation. Its mode shifts with the
+initiative's four-stage lifecycle (BD-5: draft / building / learning / complete).
 
-It reuses the 0006 LLM provider (constraint 2: one AI path) and forces a structured turn —
-a `reply` plus optional `proposals` the frontend renders as cards. Proposals are never
-written to the spec here; confirming a card calls the 0002 editing flow (constraint 4).
+It reuses the 0006 LLM provider and forces a structured turn — a `reply` plus optional
+`proposals` the frontend renders as cards. Proposals are never written to the spec here.
 
 D2 -> c: "shape this initiative: <description>" is a rail command — it reuses the 0006
-one-shot full-draft generation, surfacing the whole draft as proposal cards rather than
-silently persisting it, so the human refines through dialogue from there.
+one-shot full-draft generation, surfacing the whole draft as proposal cards.
 """
 
 from __future__ import annotations
@@ -25,6 +21,7 @@ from pydantic import BaseModel, ValidationError as PydanticValidationError
 
 from app.exceptions import NotFoundError, ValidationError
 from app.models import (
+    AcceptanceCriterion,
     ContextHit,
     ConversationContext,
     Message,
@@ -100,27 +97,34 @@ Your voice: a sharp colleague's — concise and concrete, no preamble, no flatte
 carry a short id like BD-7 (the project prefix + a per-project number), shown in the context \
 below. Refer to them that way, and read it when the human does ("see BD-7")."""
 
-# The lifecycle is three inferred states now (0011 constraint 1). The Advisor's mode shifts with
-# the state: shaping while Draft, guiding + reviewing while Building, reflecting once Complete.
+# BD-5: four-stage lifecycle. The Advisor's mode shifts with the state.
 STATE_GUIDANCE: dict[str, str] = {
     "draft": "The spec is still being shaped — nothing is under construction yet. Through dialogue, "
-    "help sharpen intent, constraints, discretion, and acceptance, and PROPOSE concrete spec items "
-    "as you go: each constraint a hard must/must-not, each acceptance criterion verifiable and "
-    "tagged. When the shape is solid, help break the work into independently verifiable units, each "
-    "tracing to acceptance criteria — never sized or sequenced by effort or time (no estimation). "
-    "The human confirms each proposal via its card, so make strong first drafts, not the final "
-    "word. Don't re-propose something already in the spec below.",
+    "help sharpen intent, constraints, discretion, and acceptance criteria, and PROPOSE concrete "
+    "spec items as you go: each constraint a hard must/must-not, each acceptance criterion "
+    "verifiable and tagged. The human confirms each proposal via its card, so make strong first "
+    "drafts, not the final word. Don't re-propose something already in the spec below. "
+    "No estimation, no story points, no sizing by time.",
     "building": "Work is under construction — an executor is building against the confirmed spec and "
-    "submitting units for judgment. Surface risks, likely pitfalls, and relevant prior patterns; "
-    "point to the constraints that bind this work and the acceptance criteria it must satisfy. When "
-    "a unit is submitted, review its evidence against each criterion — where it aligns, where there "
-    "are gaps, what concerns remain — as preliminary notes for the human verifier. Only the human "
-    "issues the verdict, and you never approve work yourself. You guide; you don't write the code, "
-    "and you hold off on reshaping the spec unless asked.",
-    "complete": "The initiative is done — every unit is verified and the work is closing out. From "
-    "its history — the intent, the decisions made and why, the verification outcomes — draft a "
-    "concise outcome summary and the key learnings worth remembering. The human corrects and "
-    "confirms before anything is written to memory.",
+    "submitting evidence against acceptance criteria for the human to verify. The spec shows which "
+    "criteria have evidence submitted, which are verified, and which have changes requested. "
+    "PROACTIVELY surface review checkpoint prompts based on criteria status: when a subset of "
+    "criteria have evidence submitted (evidence_submitted), offer a review — e.g. 'criteria a1–a3 "
+    "have evidence submitted — review them now?' When you see criteria with changes_requested, "
+    "surface the feedback so the executor knows what to address. Surface risks, likely pitfalls, "
+    "and relevant prior patterns. Only the human issues the verdict — you never approve work "
+    "yourself. Hold off on reshaping the spec unless asked. Use no unit or task-board terminology "
+    "(no 'work units', 'units', 'in_progress', 'proposed unit') — the execution model is "
+    "criteria-based now.",
+    "learning": "All criteria are verified — the initiative is in the reflection stage. Present its "
+    "history: the intent it set out to serve, the decisions made and why, and what the verification "
+    "outcomes showed. Help the human articulate an honest outcome summary and the durable lessons "
+    "worth carrying forward — what worked, what to do differently, what the next initiative should "
+    "know. Keep it specific and transferable, not initiative-specific trivia. The human confirms "
+    "before anything is written to memory.",
+    "complete": "The initiative is complete and its learnings are captured. If there is still "
+    "conversation to be had about what was learned or what comes next, engage with it. Don't "
+    "prompt for new initiatives or next steps unless the human raises it.",
 }
 
 PROJECT_COHERENCE_PROMPT = """This initiative belongs to a PROJECT — a body of related \
@@ -260,10 +264,25 @@ def _item_line(item: SpecItem) -> str:
     return item.text
 
 
+def _criterion_line(c: AcceptanceCriterion) -> str:
+    """Acceptance criterion with verification status for building/learning context."""
+    base = _item_line(c)
+    vstatus = getattr(c, "verification_status", "pending")
+    evidence = getattr(c, "evidence", None)
+    feedback = getattr(c, "feedback", None)
+    parts = [base, f"[verification: {vstatus}]"]
+    if evidence:
+        parts.append(f"[evidence: {evidence[:120]}{'...' if len(evidence) > 120 else ''}]")
+    if feedback and vstatus == "changes_requested":
+        parts.append(f"[changes requested: {feedback}]")
+    return "  ".join(parts)
+
+
 def _render_spec(spec: Spec | None, short_ref: str | None = None) -> str:
     if spec is None:
         return "# CURRENT SPEC\n(no spec yet)"
     handle = f"{short_ref}: " if short_ref else ""
+    in_build_or_later = spec.state in {"building", "learning", "complete"}
     lines = [
         f"# CURRENT SPEC — {handle}{spec.title} (v{spec.version}, {spec.state})",
         f"Intent: {spec.intent.strip() or '(not yet written)'}",
@@ -272,8 +291,17 @@ def _render_spec(spec: Spec | None, short_ref: str | None = None) -> str:
         "",
         *_render_items("Discretion", spec.discretion),
         "",
-        *_render_items("Acceptance", list(spec.acceptance)),
     ]
+    if in_build_or_later and spec.acceptance:
+        confirmed = [c for c in spec.acceptance if c.status == "confirmed"]
+        proposed = [c for c in spec.acceptance if c.status == "proposed"]
+        lines.append("Acceptance criteria (confirmed — verification status shown):")
+        lines += [f"  - {_criterion_line(c)}" for c in confirmed] or ["  (none yet)"]
+        if proposed:
+            lines.append("Acceptance criteria (proposed — awaiting confirmation):")
+            lines += [f"  - {_item_line(c)}" for c in proposed]
+    else:
+        lines += _render_items("Acceptance", list(spec.acceptance))
     return "\n".join(lines)
 
 

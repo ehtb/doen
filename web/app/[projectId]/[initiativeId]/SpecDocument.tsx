@@ -115,7 +115,7 @@ export default function SpecDocument() {
 
   const [viewAll, setViewAll] = useState(false);
   const [openKey, setOpenKey] = useState<Section | null>(guidedActive);
-  const [latitudeOpen, setLatitudeOpen] = useState(false);
+  const [latitudeOpen, setLatitudeOpen] = useState(spec.state === "draft");
 
   // When a section is fully reviewed the guided step advances; follow it (a2) without clobbering a
   // manual toggle between advances — we only force-open on the *transition*.
