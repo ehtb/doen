@@ -22,11 +22,12 @@ Conversation is how things *get into* the spec. The spec is what *governs*. This
 
 ## The spec object
 
-Expressed as TypeScript interfaces for readability; maps directly to Pydantic on the FastAPI side.
+Expressed as TypeScript interfaces for readability; maps directly to Pydantic models in `backend/app/models.py`.
 
 ```typescript
 type Provenance = "human" | "ai_proposed" | "ai_confirmed_by_human";
 type ItemStatus = "proposed" | "confirmed" | "retired";
+type State      = "draft" | "building" | "complete";   // derived, never stored
 
 interface SpecItem {
   id: string;
@@ -44,33 +45,18 @@ interface AcceptanceCriterion extends SpecItem {
   };
 }
 
-interface Reference {                       // the "pointing" input — dense intent
+interface Reference {
   id: string;
   kind: "code" | "prior_initiative" | "design" | "doc" | "external";
   pointer: string;              // repo path, initiative id, url
   note: string;                 // the human's framing of why it's relevant
 }
 
-interface Decision {                        // append-only judgment log
-  id: string;
-  question: string;
-  options: string[];
-  recommendation?: string;      // the agent's suggested option when it raised this
-  chosen?: string;              // filled on resolution
-  rationale?: string;           // the human's reasoning — feeds memory later
-  raised_by: "agent" | "human";
-  decided_by?: string;
-  status: "open" | "resolved";
-  emitted_item_ids?: string[];  // constraints/criteria this decision wrote into the spec
-  created_at: string;
-  resolved_at?: string;
-}
-
 interface Spec {
   id: string;
   initiative_id: string;
-  version: number;              // bumps on every confirmed change — it is a living document
-  stage: "discover" | "shape" | "bet" | "decompose" | "implement" | "verify" | "learn";
+  version: number;              // optimistic lock; bumps on every confirmed change
+  state: State;                 // derived from work units + learn record (see derive_state)
   title: string;
 
   intent: string;               // the narrative human voice: the why and the what
@@ -78,18 +64,108 @@ interface Spec {
   discretion: SpecItem[];       // explicit latitude — agents decide freely here
   acceptance: AcceptanceCriterion[];
   references: Reference[];
-  decisions: Decision[];
   memory_links: string[];       // prior initiatives surfaced during shaping
 }
+```
 
-interface WorkUnit {                        // the decomposition — the demoted "board"
+Decisions are not embedded in the spec; they are durable rows in their own table:
+
+```typescript
+interface Decision {
+  id: string;
+  question: string;
+  options: string[];
+  recommendation?: string;      // the executor's suggested option when it raised this
+  chosen?: string;              // filled on resolution
+  rationale?: string;           // the human's reasoning — feeds memory later
+  raised_by: "agent" | "human";
+  decided_by?: string;
+  status: "open" | "resolved";
+  emitted_item_ids?: string[];  // constraints / criteria this decision wrote into the spec
+  created_at: string;
+  resolved_at?: string;
+}
+```
+
+Work units are the decomposition — also a separate table:
+
+```typescript
+type UnitStatus =
+  | "proposed"                  // executor proposed it; a human must confirm
+  | "ready"                     // confirmed and claimable
+  | "in_progress"               // claimed by an executor
+  | "blocked_on_decision"       // parked on an open decision
+  | "in_verification"           // submitted; awaiting human verdict
+  | "done";                     // human-approved
+
+interface CriterionResult {
+  criterion_id: string;
+  result: "pass" | "fail" | "needs_judgment";
+  evidence: string;
+}
+
+interface Submission {
+  summary: string;
+  criteria_results: CriterionResult[];
+  artifacts: string[];          // free-form pointers (paths, urls, notes)
+  submitted_at: string;
+}
+
+interface Verdict {
+  verdict: "approved" | "changes_requested";
+  feedback?: string;
+  decided_by: string;
+  decided_at: string;
+}
+
+interface WorkUnit {
   id: string;
   spec_id: string;
   title: string;
   scope: string;
-  satisfies: string[];          // acceptance criterion ids this unit contributes to
-  status: "ready" | "in_progress" | "blocked_on_decision" | "in_verification" | "done";
-  blocked_by?: string;          // decision id, when blocked
+  criterion_ids: string[];      // acceptance criteria this unit contributes to
+  status: UnitStatus;
+  blocked_on?: string;          // decision_id, when blocked
+  progress_note?: string;       // last heartbeat from report_progress
+  submission?: Submission;      // present after submit_for_verification
+  verdict?: Verdict;            // present after the human's verdict
+  created_at: string;
+  updated_at: string;
+}
+```
+
+Surrounding objects an executor will also encounter:
+
+```typescript
+interface Initiative {
+  id: string;                   // short, per-project slug
+  project_id: string;           // required — no orphan specs
+  seq: number;                  // per-project sequence number
+  title: string;
+  state: State;                 // mirrors the spec's derived state
+  archived_at?: string;
+  archived_reason?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface Project {
+  id: string;
+  name: string;
+  prefix: string;               // short handle derived from name (drives short IDs)
+  intent: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface Message {              // conversation history — Postgres, in the messages table
+  id: string;
+  initiative_id?: string;        // exactly one of initiative_id or project_id is set
+  project_id?: string;
+  role: "human" | "advisor";
+  content: string;
+  metadata: object;              // structured payloads (review notes, etc.)
+  created_at: string;
 }
 ```
 
@@ -99,43 +175,90 @@ Note what is **absent on purpose**: no story points, no effort estimate, no velo
 
 ## The MCP contract (executor-facing)
 
-This is the Implement ↔ Verify loop. The authoring side (the agent that helps *draft* the spec during shaping) is a separate, smaller toolset operating on the same objects; keeping the two surfaces distinct stops the executor from quietly rewriting intent.
+This is the Implement ↔ Verify loop. Thirteen tools, in `backend/app/mcp_server.py`. The authoring side (which helps *draft* the spec during shaping) is exposed via the HTTP API, not the MCP — keeping the two surfaces distinct stops the executor from quietly rewriting intent.
+
+### Ground yourself
 
 ```typescript
-// --- ground yourself ---
-get_spec(initiative_id): Spec
-// Read before acting. Returns the full living spec at its current version.
+get_spec(initiative_id): Spec & {
+  initiative: { id, title, state },
+  advisor_summary?: string,                       // latest Advisor note
+  unit_context?: { [unit_id]: {                   // submission summary + verdict + review notes
+    submission_summary?, verdict?, advisor_review?
+  }}
+}
+// Read before acting. The current version, the lifecycle state, and the reasoning around
+// each unit (submissions, verdicts, the Advisor's reviews).
+
+get_conversation_summary(initiative_id): {
+  key_decisions: { question, chosen, rationale }[],
+  rejected_alternatives: string[],
+  stated_priorities: string[],
+}
+// Read WHY this spec is the way it is. Pairs with get_spec — the spec tells you what to
+// build, this tells you what the human cared about and what was already decided.
 
 get_context(initiative_id, query): { snippets: ContextSnippet[] }
-// Semantic retrieval over the codebase's intent and prior initiatives (pgvector).
-// Use to learn WHY things are as they are before changing them — prevents "fixing"
-// what was deliberate.
+// Semantic retrieval (pgvector) over the codebase's intent and prior initiatives. Project-
+// scoped with fallback to global. Use to learn WHY established things are as they are
+// before changing them — prevents "fixing" what was deliberate.
 
 list_units(spec_id, status?): WorkUnit[]
-// Your assigned work.
+// Your assigned work. Filter by status to find what's ready or blocked.
 
-// --- when you hit a call that isn't yours to make ---
-raise_decision(initiative_id, question, context, options, recommendation?): Decision
-// For anything outside constraints + discretion that is a product/intent call.
-// Appears in the human's steering rail. Returns a Decision in status "open".
-// Do not guess. Continue other units or yield while it's open.
+get_guidance(unit_id): {
+  spec_excerpt: string, criteria: AcceptanceCriterion[],
+  memory: ContextSnippet[], pitfalls: string[],
+}
+// The Advisor's contextual briefing for a unit — what to look out for before you start.
+```
 
-get_decision(decision_id): Decision
-// Poll for resolution. When resolved, returns the chosen option and rationale; the spec
-// may have gained a constraint or criterion — re-fetch get_spec if `version` changed.
+### Escalate (when a call isn't yours to make)
 
-// --- progress and handoff ---
+```typescript
+raise_decision(
+  initiative_id, question, options,
+  recommendation?, unit_id?,
+): Decision
+// For anything outside constraints + discretion that bears on intent. Appears on the
+// human's steering rail. Returns the open Decision. Pass unit_id to park that unit on
+// it (blocked_on_decision) — resolving the decision auto-resumes the unit.
+
+resolve_decision(decision_id, chosen, rationale, decided_by): Decision
+// Record the human's verdict. Wakes anyone awaiting via wait_for_decision.
+
+wait_for_decision(decision_id, timeout?): Decision
+// Block until resolved. Redis pub/sub — no poll loop. Throws on timeout.
+```
+
+### Decompose
+
+```typescript
+propose_unit(spec_id, title, scope, criterion_ids): WorkUnit
+// Propose a unit naming the acceptance criteria it satisfies. Created `proposed`.
+// You cannot confirm your own unit — a human does that via the dashboard.
+```
+
+### Build and hand off
+
+```typescript
+claim_unit(unit_id): WorkUnit
+// ready → in_progress. Only a unit a human has confirmed can be claimed.
+
 report_progress(unit_id, note, percent?): { ok: boolean }
-// Lightweight heartbeat; keeps the agent strip on the rail honest.
+// Lightweight heartbeat; updates progress_note on the unit.
 
 submit_for_verification(unit_id, summary, criteria_results, artifacts): { queued: boolean }
-// Hand a unit back for human judgment. You map your own output to each criterion;
-// the human verifies intent-alignment, not your diff line-by-line.
+// in_progress → in_verification. Map your own output to each criterion; the human verifies
+// intent-alignment, not your diff line-by-line. Also auto-posts the Advisor's preliminary
+// review to the rail so the human walks in primed.
 //   criteria_results: { criterion_id, result: "pass" | "fail" | "needs_judgment", evidence }[]
-//   artifacts:        { kind: "diff" | "preview" | "test_run" | "note", pointer }[]
+//   artifacts:        string[]   // free-form pointers (paths, urls, notes)
 
-get_verification(unit_id): { verdict: "approved" | "changes_requested" | "pending", feedback?: string }
-// On "changes_requested", feedback returns and the unit reopens at "in_progress".
+get_verification(unit_id):
+  { verdict: "approved" | "changes_requested" | "pending", feedback?: string }
+// On `approved`, the unit is done. On `changes_requested`, the unit reopens at in_progress
+// with the human's feedback returned. Judged outcome-against-intent, not syntax.
 
 interface ContextSnippet { source: string; kind: Reference["kind"]; text: string; relevance: number; }
 ```
@@ -144,15 +267,15 @@ interface ContextSnippet { source: string; kind: Reference["kind"]; text: string
 
 ## The operating loop
 
-1. `get_spec` — ground in intent, constraints, discretion, criteria, references.
-2. `list_units` — take a unit that is `ready`.
-3. Build. Use `get_context` to understand prior intent before touching anything established.
-4. At every non-trivial choice, classify it: covered by a constraint → obey; within granted discretion → decide and move on; otherwise, if it's a product/intent call → `raise_decision` and either pick up another unit or yield. Never resolve it silently.
-5. `get_decision` to retrieve the human's call; re-`get_spec` if the version bumped (a decision may have added a constraint or criterion).
+1. `get_spec` and `get_conversation_summary` — ground in intent, constraints, discretion, criteria, _and the reasoning behind them_.
+2. `list_units` — find a unit that is `ready`. `get_guidance` on it for the Advisor's brief.
+3. `claim_unit`, then build. Use `get_context` to understand prior intent before touching anything established.
+4. At every non-trivial choice, classify it: covered by a constraint → obey; within granted discretion → decide and move on; otherwise, if it's a product/intent call → `raise_decision` (optionally with `unit_id` to park the unit). Never resolve it silently. `wait_for_decision` to resume.
+5. `report_progress` as you go — keeps the human's view of your work honest.
 6. When the unit satisfies its criteria, self-check each one, then `submit_for_verification` with per-criterion results and evidence.
-7. `get_verification` — `approved` closes the unit; `changes_requested` reopens it with feedback. The human judged outcome-against-intent, not syntax.
+7. `get_verification` — `approved` closes the unit; `changes_requested` reopens it with feedback. Stop after submission; do not claim the next unit until the human has issued the verdict.
 
-On `learn`, Doen embeds the resolved decisions and the outcome-vs-intent delta back into memory, where `get_context` and `memory_links` will surface them for the next initiative. That is the flywheel — and it compounds faster in an agentic world, because more gets built per unit of human time, so more is learned.
+On `complete` (every unit done + learn record written), Doen embeds the resolved decisions and the outcome-vs-intent delta back into memory, where `get_context` and `memory_links` will surface them for the next initiative. That is the flywheel — and it compounds faster in an agentic world, because more gets built per unit of human time, so more is learned.
 
 ---
 
@@ -160,14 +283,15 @@ On `learn`, Doen embeds the resolved decisions and the outcome-vs-intent delta b
 
 | Table | Holds | pgvector |
 |---|---|---|
-| `specs` | id, initiative_id, version, stage, title, intent | `intent_embedding` — powers memory similarity & `memory_links` |
-| `spec_items` | type (`constraint`/`discretion`/`acceptance`), text, provenance, status, verify_* | `scope_embedding` on constraints — powers live drift detection against incoming work |
-| `references` | kind, pointer, note | — |
-| `decisions` | append-only judgment log | `decision_embedding` — retrieved by `get_context` and at shaping time |
-| `work_units` | scope, satisfies[], status, blocked_by | — |
+| `initiatives` | one row per initiative: id, project_id, seq, title, archived_at, archived_reason | — |
+| `specs` | one JSONB document per initiative: intent, constraints[], discretion[], acceptance[], references[], memory_links[] | `intent_embedding` — powers memory similarity & `memory_links` |
+| `work_units` | scope, criterion_ids[], status, blocked_on, progress_note, submission, verdict | — |
+| `decisions` | append-only judgment log | `decision_embedding` — retrieved by `get_context` |
+| `messages` | conversation history (initiative- or project-scoped) | — |
+| `projects` | id, name, prefix, intent | — |
 | `memory` | completed-initiative summaries + outcomes | embedding for cross-initiative retrieval |
 
-Drift detection falls out for free: embed each confirmed constraint, then as units add scope, score the new scope against the constraint embeddings. A divergence above threshold is a drift signal on the rail — the same mechanism, reused.
+Spec items (constraints, discretion, acceptance) live inside the `specs` JSONB document — they are *not* a separate table. The spec is read whole. Drift detection runs by embedding confirmed constraints and scoring new scope against them; the same mechanism is reused for the Advisor's contextual briefings.
 
 ---
 
@@ -175,8 +299,9 @@ Drift detection falls out for free: embed each confirmed constraint, then as uni
 
 These omissions are the product. Each one keeps a decision human:
 
-- **No self-approval.** `submit_for_verification` only ever *queues*. A verdict can only come from a human via `get_verification`. An agent cannot mark its own work accepted.
+- **No self-approval.** `submit_for_verification` only ever *queues*. A verdict can only come from a human via `get_verification`. An agent cannot mark its own work accepted. Similarly, you cannot confirm a unit you proposed.
 - **No prioritisation.** Agents take assigned units; they never sequence bets or decide what's worth doing. That's the human Bet stage.
 - **No silent product decisions.** Anything outside constraints + discretion that bears on intent *must* go through `raise_decision`. Resolving it in code is the one unforgivable move.
 - **No estimation.** No points, no hours, no velocity — anywhere. Fake precision, especially under accelerated engineering, is worse than honest uncertainty.
+- **No manual lifecycle advance.** State is derived from work units + learn record. There is no "start building" or "mark complete" tool.
 - **No authority without the spec.** An agent acts only on confirmed spec items. Chat, tickets, and asides have no force until a human has confirmed them in. The spec is the contract.

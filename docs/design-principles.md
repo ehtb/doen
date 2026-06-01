@@ -73,6 +73,60 @@ onto the two modes:
 Keep the commercial auth vendor at the edge: the OSS core validates tokens from a *configurable*
 issuer, so self-hosters are never forced onto WorkOS. (Captured in specs/0007.)
 
+## Lifecycle is inferred, not authored
+
+Initiatives have three states — **draft**, **building**, **complete** — and the state is
+*derived* from work units + the learn record on every read, never stored. A spec is `draft`
+until a unit moves past `ready`; `building` while any unit is in motion; `complete` when every
+unit is `done` AND the human has written a learn record. The reason: the human's job is
+intent, not status-keeping. A status field invites status games (drag from "todo" to "in
+progress" to feel productive); a derived state can't be gamed because it just reads the work.
+This also makes "what stage are we at?" deterministic — there is no race between the lifecycle
+column and reality.
+
+## The Advisor — one voice, two rails
+
+A single Advisor service (`backend/app/services/conversation.py`) is the conversation partner
+on both the initiative rail and the project rail. It knows the spec, the units in flight, the
+memory across past initiatives, and the conversation it's a turn within. It is *not* a chat
+assistant — it is the voice that walks the human through shaping, guided review, kickoff,
+verification, and learning. Two rails, one voice, so the human builds one mental model of who
+they're talking to.
+
+## Progressive disclosure and guided review
+
+The spec page is long because the spec is the whole intent. To stop it being overwhelming:
+sections are collapsible, the **review** is conversation-led on the rail (the Advisor walks
+each proposed item past the human, building the document live as they go), and the page's
+attention follows the work — the rail goes quiet when there are no decisions, the kickoff
+surface appears when the spec is fully reviewed but no units exist yet, and after build the
+page steers to the learn step. The principle: every moment has a single clear next action,
+and the surfaces that aren't relevant recede.
+
+## Project as first-class container
+
+Every initiative belongs to a project — there are no orphan specs. A project carries an
+`intent` of its own (the standing context all its initiatives inherit), an attention view
+(open decisions, in-flight units, drafts you abandoned mid-shape), and project-scoped memory.
+`get_context` is project-aware: it retrieves from the project's prior initiatives first and
+falls back to the global memory. This is what makes Doen useful for a real org — multiple
+streams of work, each with their own accumulated learning, without bleed between them.
+
+## Description-first creation
+
+Initiatives start from a paragraph — the human's framing in their own voice — not a blank
+spec form. The Advisor reads the description and proposes a first-cut spec (intent,
+constraints, discretion, acceptance) which the human then reviews and corrects. This pushes
+the human's effort into the place they're best at (saying what they want and reacting to a
+draft) and away from places they're worst at (filling structured forms cold).
+
+## The conversation rail stays visible and light
+
+The rail is always present but always recessive — never dark, never auto-collapsing,
+never competing with the document for attention. It complements; it doesn't shout. When
+there are no open decisions, the rail says so plainly: "the build is unblocked." When the
+Advisor has something to surface, the surfacing is calm, not modal.
+
 ## The interface prototype
 
 `docs/prototypes/living-spec.jsx` is the **north-star design** for the eventual conversation-rail
@@ -82,6 +136,8 @@ UI is intentionally crude and read-only). Realise it later, in its own UI spec.
 
 ## Deliberately rejected — do not re-propose
 
+> Append-only. Existing entries do not get removed.
+
 - **Consultancy / delivery-intelligence framing.** Abandoned because it's a distribution trap:
   consultants are usually forced into the client's PM tool, so the buyer can't adopt it. The
   initiative-lifecycle framing replaced it.
@@ -90,3 +146,22 @@ UI is intentionally crude and read-only). Realise it later, in its own UI spec.
   which is the defensible, unowned ground.
 - **Redis as the sole durable store.** Tempting for speed, but it trades away the durable,
   queryable history that is the moat. Redis is the hot path; Postgres is the truth.
+- **A 7-stage manual lifecycle** (discover → shape → bet → decompose → implement → verify →
+  learn). Replaced in spec 0011 by the 3-state inferred model (draft / building / complete).
+  The 7-stage model put the human in the role of status-keeper and invited drift between the
+  field and reality. The inferred model can't lie because it just reads the units.
+- **Conversation storage in the browser only.** Considered (IndexedDB / localStorage) for
+  privacy and zero-server-state — rejected because it sacrifices the cross-device, cross-
+  session continuity the Advisor needs and the durable transcript that feeds memory. The
+  `messages` table in Postgres is the truth; resolved during spec BD-14 (Docs That Stay True).
+- **Auto-collapsing or dark conversation rail.** Tried briefly; it makes the rail feel modal
+  and competitive with the document. The rail stays visible and light — recessive, not absent.
+- **A separate "status" column or "stage" enum on the initiative.** Implied by the
+  inferred-state principle above, but worth its own line: no field, no setter, no migration
+  scaffolds it back in. State is computed from work units + learn record, full stop.
+- **Spec items as their own table.** Tempting for "queryable constraints," but the spec is
+  read whole on every load and the JSONB document keeps the optimistic-lock + version model
+  trivially correct. Work units and decisions live in their own tables; spec items do not.
+- **Self-confirming work units.** An executor proposing a unit and then immediately claiming
+  it would collapse the human's role at decomposition. Confirmation is the human's signal
+  that the decomposition matches their head; preserve it.

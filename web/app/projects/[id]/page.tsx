@@ -6,6 +6,7 @@ import { shortId, shortSlug } from "@/lib/utils";
 import { SetBreadcrumb } from "@/app/_shell/breadcrumb";
 import { InitiativeCard, STATES } from "../../InitiativeCard";
 import NewInitiative from "../../NewInitiative";
+import CopySyncDocsPrompt from "./CopySyncDocsPrompt";
 import ProjectIntent from "./ProjectIntent";
 import ConversationRail from "./specs/[specId]/ConversationRail";
 
@@ -74,6 +75,10 @@ export default async function ProjectDashboardPage({
               {open_decisions}
             </span>{" "}
             open decision{open_decisions === 1 ? "" : "s"}
+          </span>
+          {/* BD-14 u4: trigger a drift audit of the three constitution docs from any project. */}
+          <span className="ml-auto">
+            <CopySyncDocsPrompt />
           </span>
         </div>
       </header>
