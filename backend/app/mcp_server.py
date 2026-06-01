@@ -16,6 +16,7 @@ client (the human's rail), which is why pub/sub across connections matters.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -25,9 +26,13 @@ from mcp.server.fastmcp import Context, FastMCP
 from redis import asyncio as aioredis
 
 from app.config import DATABASE_URL, REDIS_URL
-from app.exceptions import DecisionTimeout, InvalidTransition
+from app.exceptions import DecisionTimeout, InvalidTransition, NotFoundError
 from app.models import CriterionResult, Decision, Submission, WorkUnit
+from app.services.guidance import generate_guidance
+from app.services.review import post_review
 from app.store import SpecStore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -180,13 +185,35 @@ async def submit_for_verification(
         criteria_results=[CriterionResult(**c) for c in criteria_results],
         artifacts=artifacts or [],
     )
+    store = _store(ctx)
     try:
-        unit = await _store(ctx).submit_for_verification(unit_id, submission)
+        unit = await store.submit_for_verification(unit_id, submission)
     except KeyError:
         raise ValueError(f"no work unit {unit_id}")
     except InvalidTransition as e:
         raise ValueError(str(e))
+    # D1 -> b: the one proactive moment — auto-post the Advisor's preliminary review to the
+    # rail so the human verifier reads it before judging. Best-effort: a review failure
+    # (e.g. no LLM key) must never undo a successful submission.
+    try:
+        await post_review(store, unit_id)
+    except Exception:
+        logger.warning("auto-review failed for unit %s", unit_id, exc_info=True)
     return unit.model_dump()
+
+
+@mcp.tool()
+async def get_guidance(unit_id: str, ctx: Context) -> dict:
+    """Read the Advisor's contextual briefing for a work unit BEFORE you build it (spec 0009).
+    Returns the constraints that bind this unit, the acceptance criteria it must satisfy,
+    relevant patterns from past initiatives, and the Advisor's synthesised briefing + known
+    pitfalls — all grounded in the current spec and organizational memory. Read-only: it never
+    changes the unit or the spec. Call it after claim_unit and before you start building."""
+    try:
+        guidance = await generate_guidance(_store(ctx), unit_id)
+    except NotFoundError as e:
+        raise ValueError(str(e))
+    return guidance.model_dump()
 
 
 @mcp.tool()

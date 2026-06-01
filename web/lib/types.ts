@@ -94,6 +94,32 @@ export interface LearnReview {
   memory: Memory[];
 }
 
+// A spec item the Advisor proposes on the rail (backend Proposal, schemas.py). Rendered as
+// a card; accepting it POSTs to the editing endpoint as an ai_proposed item (0009 a3).
+export interface Proposal {
+  section: "constraints" | "discretion" | "acceptance";
+  text: string;
+  verify_kind?: string | null;
+  verify_detail?: string | null;
+}
+
+// One turn on the conversation rail (backend Message, models.py). The Advisor's proposal
+// cards ride along in metadata.proposals.
+export interface Message {
+  id: string;
+  initiative_id: string;
+  role: "human" | "advisor";
+  content: string;
+  metadata: { proposals?: Proposal[] } & Record<string, unknown>;
+  created_at: string;
+}
+
+// The Advisor's response to a human turn (backend AdvisorTurn, schemas.py).
+export interface AdvisorTurn {
+  human: Message;
+  advisor: Message;
+}
+
 // An escalation on the steering rail. Mirrors backend Decision (store.py).
 export interface Decision {
   id: string;

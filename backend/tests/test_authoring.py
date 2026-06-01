@@ -43,6 +43,36 @@ def test_add_item_is_human_and_confirmed(client: TestClient, make_initiative: Ca
     assert added["confirmed_at"] is not None
 
 
+def test_accept_proposal_card_adds_ai_proposed_item(
+    client: TestClient, make_initiative: Callable[[], str]
+):
+    # 0009 a3 — accepting the Advisor's proposal card adds the item via the SAME editing
+    # endpoint, but born ai_proposed / proposed: a real spec item the human still confirms,
+    # not a governing one (constraint 4).
+    iid = make_initiative()
+    spec = _put_with_proposed(client, iid)  # v1
+    r = client.post(
+        f"/specs/{iid}/items",
+        json={
+            "section": "constraints", "text": "Magic links expire in 15 minutes.",
+            "version": spec["version"], "provenance": "ai_proposed",
+        },
+    )
+    assert r.status_code == 200, r.text
+    added = next(c for c in r.json()["constraints"] if c["text"].startswith("Magic links"))
+    assert added["provenance"] == "ai_proposed"
+    assert added["status"] == "proposed"          # does NOT govern yet
+    assert added["confirmed_at"] is None
+    # it then confirms through the normal flow (ai_proposed -> ai_confirmed_by_human)
+    saved = r.json()
+    c = client.post(
+        f"/specs/{iid}/items/{added['id']}/confirm", json={"version": saved["version"]}
+    )
+    assert c.status_code == 200, c.text
+    confirmed = next(x for x in c.json()["constraints"] if x["id"] == added["id"])
+    assert confirmed["status"] == "confirmed" and confirmed["provenance"] == "ai_confirmed_by_human"
+
+
 def test_add_acceptance_requires_verify(client: TestClient, make_initiative: Callable[[], str]):
     iid = make_initiative()
     spec = _put_with_proposed(client, iid)

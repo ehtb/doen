@@ -11,13 +11,21 @@ from fastapi import FastAPI, Request
 
 from app.database import lifespan
 from app.exceptions import register_exception_handlers
-from app.routers import decisions, initiatives, learn, shaping, specs, units
+from app.routers import (
+    conversation,
+    decisions,
+    initiatives,
+    learn,
+    shaping,
+    specs,
+    units,
+)
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Doen", lifespan=lifespan)
     register_exception_handlers(app)
-    for module in (initiatives, specs, decisions, units, learn, shaping):
+    for module in (initiatives, specs, decisions, units, learn, shaping, conversation):
         app.include_router(module.router)
 
     @app.get("/health")

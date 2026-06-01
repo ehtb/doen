@@ -36,8 +36,11 @@ from app.exceptions import (
 from app.models import (
     ContextHit,
     Decision,
+    Guidance,
     Initiative,
     Memory,
+    Message,
+    MessageRole,
     Spec,
     Submission,
     Verdict,
@@ -89,8 +92,21 @@ def _memory_from_row(row: asyncpg.Record) -> Memory:
     )
 
 
+def _message_from_row(row: asyncpg.Record) -> Message:
+    return Message(
+        id=row["id"],
+        initiative_id=row["initiative_id"],
+        role=row["role"],
+        content=row["content"],
+        metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+        created_at=row["created_at"].isoformat(),
+    )
+
+
 # ----------------------------------------------------------------------------- store
 SPEC_CACHE_TTL = 300  # seconds; cache is derived, so a short TTL is just a safety net
+MESSAGE_WINDOW = 30   # recent messages an Advisor context assembly includes (0009 discretion)
+GUIDANCE_CACHE_TTL = 300  # seconds; a unit briefing is regenerated on demand after it lapses
 
 
 class SpecStore:
@@ -467,6 +483,64 @@ class SpecStore:
             )
             for r in rows
         ]
+
+    # --- conversation: the rail's persisted history (0009 u1) ----------------
+    async def append_message(
+        self,
+        initiative_id: str,
+        role: MessageRole,
+        content: str,
+        metadata: dict | None = None,
+    ) -> Message:
+        """Append one message row (constraint 1: individual rows). created_at is taken from
+        the column default so the DB clock is the single source of truth for the timestamp."""
+        msg = Message(initiative_id=initiative_id, role=role, content=content, metadata=metadata or {})
+        row = await self.pg.fetchrow(
+            """INSERT INTO messages (id, initiative_id, role, content, metadata)
+               VALUES ($1, $2, $3, $4, $5)
+               RETURNING id, initiative_id, role, content, metadata, created_at""",
+            msg.id, initiative_id, role, content, json.dumps(msg.metadata),
+        )
+        return _message_from_row(row)
+
+    async def list_messages(
+        self, initiative_id: str, limit: int | None = None
+    ) -> list[Message]:
+        """An initiative's conversation, oldest-first. With no limit the rail gets the full
+        history (a4); with a limit it gets the most recent `limit` (still oldest-first) — the
+        Advisor's windowed context (constraint 1)."""
+        if limit is None:
+            rows = await self.pg.fetch(
+                """SELECT id, initiative_id, role, content, metadata, created_at
+                   FROM messages WHERE initiative_id = $1 ORDER BY seq""",
+                initiative_id,
+            )
+        else:
+            rows = await self.pg.fetch(
+                """SELECT id, initiative_id, role, content, metadata, created_at FROM (
+                       SELECT * FROM messages WHERE initiative_id = $1
+                       ORDER BY seq DESC LIMIT $2
+                   ) recent ORDER BY seq""",
+                initiative_id, limit,
+            )
+        return [_message_from_row(r) for r in rows]
+
+    # --- guidance cache: a derived, short-lived unit briefing (0009 u4) ------
+    def _guidance_key(self, unit_id: str, spec_version: int) -> str:
+        # spec_version in the key = automatic invalidation: a spec edit bumps the version, so
+        # the stale briefing's key is simply never read again (it expires on its own).
+        return f"guidance:{unit_id}:{spec_version}"
+
+    async def read_guidance_cache(self, unit_id: str, spec_version: int) -> Guidance | None:
+        cached = await self.redis.get(self._guidance_key(unit_id, spec_version))
+        return Guidance.model_validate_json(cached) if cached else None
+
+    async def write_guidance_cache(self, guidance: Guidance) -> None:
+        await self.redis.set(
+            self._guidance_key(guidance.unit_id, guidance.spec_version),
+            guidance.model_dump_json(),
+            ex=GUIDANCE_CACHE_TTL,
+        )
 
     # --- work units: durable rows in their own table (0003) ------------------
     async def create_unit(self, unit: WorkUnit) -> WorkUnit:

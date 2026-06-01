@@ -100,3 +100,10 @@ class OpenRouterClaude:
 def get_shaping_llm() -> StructuredLLM:
     """The dogfooding default. Swap the body (or branch on an env var) to self-host."""
     return OpenRouterClaude()
+
+
+def get_advisor_llm() -> StructuredLLM:
+    """The Doen Advisor (0009) reuses this same provider — same class, same env key, no
+    second AI integration path (0009 constraint 2). Kept as its own factory so the Advisor
+    has a clean monkeypatch seam in tests, mirroring get_shaping_llm."""
+    return OpenRouterClaude()

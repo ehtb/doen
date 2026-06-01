@@ -33,8 +33,11 @@ testpaths = ["tests"]
 
 [tool.pyright]
 # Type-check the application source. Tests are validated by running the suite — their
-# asyncio.run helpers and controlled None-access are idioms, not type bugs.
+# asyncio.run helpers and controlled None-access are idioms, not type bugs. seed_*.py are
+# throwaway bootstrap scripts (a spec's items spread from a shared **_DRAFT dict, which
+# erases the item Literals) — verified by running them, removed in periodic cleanups.
 include = ["app"]
+exclude = ["app/seed_*.py"]
 pythonVersion = "3.13"
 typeCheckingMode = "basic"
 venvPath = "."

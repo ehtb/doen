@@ -8,6 +8,8 @@ silently clobbering a concurrent change. Framework-agnostic: raises domain excep
 
 from __future__ import annotations
 
+from typing import Literal
+
 from app.exceptions import ConflictError, NotFoundError, ValidationError
 from app.models import AcceptanceCriterion, Section, Spec, SpecItem, Verify, _now
 from app.store import SpecStore
@@ -42,24 +44,32 @@ async def add_item(
     text: str,
     version: int,
     verify: Verify | None,
+    provenance: Literal["human", "ai_proposed"] = "human",
 ) -> Spec:
-    """A human authoring an item is itself the act of confirmation (dec_726cb3ab8f15): it
-    is born `human` + `confirmed`, governing immediately."""
+    """Add an item to the spec. A human authoring one is itself the act of confirmation
+    (dec_726cb3ab8f15): it's born `human` + `confirmed`, governing immediately. Accepting one
+    of the Advisor's proposal cards (0009 a3) instead lands it `ai_proposed` + `proposed` — a
+    real spec item, but one the human still confirms via the normal flow before it governs
+    (the Advisor never writes a governing item itself — 0009 constraint 4)."""
     if not text.strip():
         raise ValidationError("item text must not be empty")
     if section == "acceptance" and verify is None:
         raise ValidationError("an acceptance item needs a verify {kind, detail}")
+
+    confirmed = provenance == "human"
+    status: str = "confirmed" if confirmed else "proposed"
+    confirmed_at = _now() if confirmed else None
 
     spec = await _load_at(store, initiative_id, version)
     if section == "acceptance":
         assert verify is not None  # guarded above
         item: SpecItem = AcceptanceCriterion(
             text=text, verify=verify,
-            provenance="human", status="confirmed", confirmed_at=_now(),
+            provenance=provenance, status=status, confirmed_at=confirmed_at,
         )
     else:
         item = SpecItem(
-            text=text, provenance="human", status="confirmed", confirmed_at=_now(),
+            text=text, provenance=provenance, status=status, confirmed_at=confirmed_at,
         )
     getattr(spec, section).append(item)
     return await store.save_spec(spec)

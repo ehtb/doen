@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, BookOpen, Check, GitBranch, Sparkles } from "lucide-react";
+import { AlertTriangle, BookOpen, Check, GitBranch, Loader2, Sparkles } from "lucide-react";
 
 import type { AcceptanceCriterion, LearnReview } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -37,6 +37,7 @@ export default function LearnStage({
   const [summary, setSummary] = useState(() => buildDraft(intent, acceptance));
   const [learnings, setLearnings] = useState("");
   const [busy, setBusy] = useState(false);
+  const [drafting, setDrafting] = useState(false);
   const router = useRouter();
 
   const load = useCallback(async () => {
@@ -53,6 +54,23 @@ export default function LearnStage({
   useEffect(() => {
     load();
   }, [load]);
+
+  async function draftWithAI() {
+    if (drafting) return;
+    setDrafting(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/initiatives/${initiativeId}/learn/draft`, { method: "POST" });
+      if (!res.ok) throw new Error(`couldn't draft the outcome (${res.status})`);
+      const draft = await res.json();
+      setSummary(draft.summary); // the human corrects this before confirming (a8)
+      setLearnings(draft.learnings ?? "");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setDrafting(false);
+    }
+  }
 
   async function submit() {
     if (busy || !summary.trim()) return;
@@ -184,9 +202,20 @@ export default function LearnStage({
 
       {/* --- the outcome form (a5) --- */}
       <div className="mt-4 rounded-lg border border-border bg-background/60 p-4">
-        <p className="font-mono text-[10px] tracking-widest text-ink-faint uppercase">
-          {memory.length > 0 ? "Add another reflection" : "Outcome summary"}
-        </p>
+        <div className="flex items-center justify-between gap-3">
+          <p className="font-mono text-[10px] tracking-widest text-ink-faint uppercase">
+            {memory.length > 0 ? "Add another reflection" : "Outcome summary"}
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={drafting || busy}
+            onClick={draftWithAI}
+            className="h-7 px-2.5 font-mono text-[11px] tracking-wide"
+          >
+            {drafting ? <Loader2 className="animate-spin" /> : <Sparkles />} Draft with AI
+          </Button>
+        </div>
         <Textarea
           rows={7}
           value={summary}

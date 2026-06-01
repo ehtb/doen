@@ -155,6 +155,73 @@ class ContextHit(BaseModel):
     score: float
 
 
+# ----------------------------------------------------------------------------- conversation (0009)
+MessageRole = Literal["human", "advisor"]  # the two parties on the rail
+
+
+class Message(BaseModel):
+    """One turn in an initiative's conversation rail (0009 constraint 1): an individual row,
+    never folded into a JSONB blob. `metadata` carries structured payloads the Advisor
+    attaches — e.g. proposal cards the frontend renders (u2/u3)."""
+
+    id: str = Field(default_factory=lambda: _id("msg"))
+    initiative_id: str
+    role: MessageRole
+    content: str
+    metadata: dict = Field(default_factory=dict)
+    created_at: str = Field(default_factory=_now)
+
+
+class ConversationContext(BaseModel):
+    """The explicit, bounded context assembled for an Advisor LLM call (0009 constraint 1):
+    a recent-message window + the current spec + relevant memory. u2 renders this into the
+    prompt; keeping it a structured object makes the windowing testable without an LLM."""
+
+    initiative: Initiative
+    spec: Spec | None = None
+    messages: list[Message] = Field(default_factory=list)  # the recent window, oldest-first
+    memory: list[ContextHit] = Field(default_factory=list)
+
+
+class Guidance(BaseModel):
+    """A read-only briefing for an executor about to build a work unit (0009 u4, constraint
+    5). The grounded fields (constraints / criteria / memory) come straight from the spec and
+    memory corpus — never hallucinated; the Advisor adds the synthesis (briefing + pitfalls).
+    The executor reads it; it never writes back. `spec_version` is part of the cache key, so a
+    spec edit invalidates a stale briefing for free."""
+
+    unit_id: str
+    title: str
+    scope: str
+    spec_version: int
+    constraints: list[str] = Field(default_factory=list)    # the confirmed rules that bind it
+    criteria: list[str] = Field(default_factory=list)        # acceptance criteria it must meet
+    memory: list[ContextHit] = Field(default_factory=list)   # relevant prior patterns
+    briefing: str = ""                                       # the Advisor's synthesized notes
+    pitfalls: list[str] = Field(default_factory=list)        # known traps to avoid
+
+
+class CriterionReview(BaseModel):
+    """The Advisor's independent read of the evidence for one acceptance criterion (0009 u5)."""
+
+    criterion: str
+    assessment: Literal["aligned", "partial", "gap", "concern"]
+    note: str
+
+
+class ReviewNotes(BaseModel):
+    """The Advisor's preliminary review of a submitted unit (0009 u5, a7): evidence weighed
+    against the acceptance criteria, for the human verifier. These are notes, never a verdict
+    — only the human judges (no self-approval). Auto-posted to the rail on submit (D1 -> b)."""
+
+    unit_id: str
+    initiative_id: str
+    title: str
+    summary: str
+    criteria: list[CriterionReview] = Field(default_factory=list)
+    concerns: list[str] = Field(default_factory=list)
+
+
 # ----------------------------------------------------------------------------- work units (0003)
 # A fixed state machine. A unit is created `proposed`; a human confirms it to `ready`
 # before it's workable, and an executor can never confirm its own (no-self-confirm).

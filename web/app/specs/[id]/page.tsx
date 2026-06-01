@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { getSpec } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import ConversationRail from "./ConversationRail";
 import LearnStage from "./LearnStage";
 import SpecDocument from "./SpecDocument";
 import StageControls from "./StageControls";
@@ -94,7 +95,10 @@ export default async function SpecPage({ params }: { params: Promise<{ id: strin
             />
           )}
         </section>
-        <SteeringRail initiativeId={spec.initiative_id} />
+        <div className="sticky top-6 flex min-w-80 flex-[1_1_380px] flex-col gap-6 self-start">
+          <ConversationRail initiativeId={spec.initiative_id} stage={spec.stage} />
+          <SteeringRail initiativeId={spec.initiative_id} />
+        </div>
       </div>
     </main>
   );

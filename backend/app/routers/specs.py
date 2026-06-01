@@ -43,6 +43,7 @@ async def add_item(initiative_id: str, body: AddItem, store: _Store) -> Spec:
     return await authoring.add_item(
         store, initiative_id,
         section=body.section, text=body.text, version=body.version, verify=body.verify,
+        provenance=body.provenance,
     )
 
 
