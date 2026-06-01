@@ -28,3 +28,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "openai/text-embedding-3-small")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
+
+# AI-assisted spec shaping (spec 0006). The LLM provider is pluggable; the dogfooding
+# default routes Claude through OpenRouter, reusing OPENROUTER_API_KEY (no extra secret).
+SHAPING_MODEL = os.getenv("SHAPING_MODEL", "anthropic/claude-sonnet-4.6")

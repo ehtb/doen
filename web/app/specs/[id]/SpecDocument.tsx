@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, CircleCheck, CircleDot, Compass, Lock, Plus } from "lucide-react";
+import { Check, CircleCheck, CircleDot, Compass, Loader2, Lock, Plus, Sparkles } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { AcceptanceCriterion, Spec, SpecItem } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -76,8 +76,43 @@ export default function SpecDocument({ initialSpec }: { initialSpec: Spec }) {
   const [addText, setAddText] = useState("");
   const [verifyKind, setVerifyKind] = useState("behavior");
   const [verifyDetail, setVerifyDetail] = useState("");
+  const [shapeOpen, setShapeOpen] = useState(false);
+  const [shapeDesc, setShapeDesc] = useState("");
+  const [shapeBusy, setShapeBusy] = useState(false);
 
   const iid = spec.initiative_id;
+  const canShape = spec.stage === "discover" || spec.stage === "shape";
+
+  async function shapeWithAI() {
+    if (!shapeDesc.trim() || shapeBusy) return;
+    setShapeBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/specs/${iid}/shape`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ description: shapeDesc }),
+      });
+      if (!res.ok) {
+        let msg = `shaping failed (${res.status})`;
+        try {
+          const j = await res.json();
+          if (j?.detail) msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+        } catch {
+          /* keep the status-code message */
+        }
+        setError(msg);
+        return;
+      }
+      setSpec(await res.json()); // proposed items appear in the sections below, ready to confirm
+      setShapeOpen(false);
+      setShapeDesc("");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setShapeBusy(false);
+    }
+  }
 
   async function mutate(path: string, method: string, body: object): Promise<boolean> {
     setBusy(true);
@@ -289,6 +324,70 @@ export default function SpecDocument({ initialSpec }: { initialSpec: Spec }) {
           )}
         </Button>
       </div>
+
+      {canShape && (
+        <div className="mt-4 rounded-lg border border-primary/30 bg-primary/[0.04] p-4">
+          {!shapeOpen ? (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="font-mono text-[11.5px] tracking-wide text-ink-soft">
+                <Sparkles className="mr-1.5 inline size-3.5 text-primary" />
+                Describe the idea — the AI drafts a full spec, informed by past initiatives, for you
+                to correct.
+              </p>
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => {
+                  setShapeOpen(true);
+                  setShapeDesc("");
+                }}
+              >
+                <Sparkles /> Shape with AI
+              </Button>
+            </div>
+          ) : (
+            <div>
+              <Textarea
+                autoFocus
+                value={shapeDesc}
+                onChange={(e) => setShapeDesc(e.target.value)}
+                rows={4}
+                disabled={shapeBusy}
+                placeholder="Describe the initiative in a few sentences — the problem, who it's for, what success looks like."
+                className="text-[13px]"
+              />
+              <div className="mt-2.5 flex items-center gap-2">
+                <Button
+                  size="sm"
+                  disabled={shapeBusy || !shapeDesc.trim()}
+                  onClick={shapeWithAI}
+                >
+                  {shapeBusy ? (
+                    <>
+                      <Loader2 className="animate-spin" /> Drafting…
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles /> Generate spec
+                    </>
+                  )}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={shapeBusy}
+                  onClick={() => setShapeOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <span className="font-mono text-[10.5px] text-ink-faint">
+                  arrives as proposed items — confirm, edit, or reject each below
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {error && (
         <p className="mt-3 rounded-md border border-proposed/30 bg-proposed/10 px-3 py-1.5 font-mono text-xs text-proposed-foreground">

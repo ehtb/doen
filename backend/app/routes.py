@@ -26,6 +26,8 @@ from pydantic import BaseModel
 
 from app.config import DEV_USER_ID
 from app.deps import get_pool, get_store
+from app.llm import LLMError
+from app.shaping import shape_spec
 from app.store import (
     AcceptanceCriterion,
     Decision,
@@ -432,3 +434,38 @@ async def submit_learn(
         except InvalidStageTransition:
             pass
     return await _learn_review(store, initiative_id)
+
+
+# --- AI-assisted shaping (spec 0006 u3): description -> proposed spec ----------------
+# get_context feeds memory priors, the LLM drafts, and the proposals land as proposed items
+# the human confirms through the existing 0002 flow. A failed LLM call leaves the spec
+# untouched (constraint 7 / a6). Re-shaping refreshes the proposed draft but never touches
+# confirmed items, and only sets intent when it's still blank.
+class ShapeWithAI(BaseModel):
+    description: str
+
+
+@router.post("/specs/{initiative_id}/shape", status_code=201)
+async def shape_with_ai(
+    initiative_id: str,
+    body: ShapeWithAI,
+    store: Annotated[SpecStore, Depends(get_store)],
+) -> Spec:
+    if not body.description.strip():
+        raise HTTPException(422, "a description is required to shape a spec")
+    spec = await store.get_spec(initiative_id)
+    if spec is None:
+        raise HTTPException(404, f"no spec for initiative {initiative_id}")
+    try:
+        result = await shape_spec(store, initiative_id, body.description)
+    except LLMError as e:
+        # surfaced cleanly; save_spec is never reached, so the spec is unchanged (a6).
+        raise HTTPException(502, f"shaping failed: {e}")
+
+    keep = lambda items: [i for i in items if i.status != "proposed"]  # noqa: E731
+    spec.constraints = keep(spec.constraints) + result.constraints
+    spec.discretion = keep(spec.discretion) + result.discretion
+    spec.acceptance = keep(spec.acceptance) + result.acceptance
+    if not spec.intent.strip() and result.intent:
+        spec.intent = result.intent
+    return await store.save_spec(spec)
