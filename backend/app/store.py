@@ -85,6 +85,7 @@ def _project_from_row(row: asyncpg.Record) -> Project:
     return Project(
         id=row["id"], name=row["name"], prefix=row["prefix"], intent=row["intent"],
         onboarding_dismissed=row["onboarding_dismissed"],
+        archived=row["archived_at"] is not None,
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
     )
@@ -377,37 +378,63 @@ class SpecStore:
     async def create_project(
         self, name: str, intent: str = "", prefix: str | None = None
     ) -> Project:
-        """Create a project with a unique slug: a short random prefix + the name-derived part
-        (constraint 1), so distinct projects never collide. `prefix` overrides the auto-derived
-        short handle (0013 u2); whichever is used, a collision is disambiguated by suffixing."""
-        base = f"{slug_prefix()}-{slugify(name)}"
-        slug, n = base, 2
-        while await self.pg.fetchval("SELECT 1 FROM projects WHERE id = $1", slug):
-            slug, n = f"{base}-{n}", n + 1
+        """Create a project whose ID is the slug of its name (BD-11). The name must be unique
+        (enforced by idx_projects_name); a duplicate raises ValidationError. `prefix` overrides
+        the auto-derived initiative handle (0013 u2); collisions are disambiguated by suffixing."""
+        slug = slugify(name) or "project"
         # the short handle for this project's initiatives (0012 u5); keep it unique so BD-7 is
         # unambiguous — disambiguate a collision by appending a number (BD, BD2, BD3, …). A
         # user-supplied prefix is normalised to the same shape (uppercase alphanumerics).
         cleaned = re.sub(r"[^A-Za-z0-9]", "", prefix or "").upper()
         base_prefix = cleaned or derive_prefix(name)
-        prefix, m = base_prefix, 2
+        pfx, m = base_prefix, 2
         while await self.pg.fetchval(
-            "SELECT 1 FROM projects WHERE upper(prefix) = upper($1)", prefix
+            "SELECT 1 FROM projects WHERE upper(prefix) = upper($1)", pfx
         ):
-            prefix, m = f"{base_prefix}{m}", m + 1
-        proj = Project(id=slug, name=name, prefix=prefix, intent=intent)
-        await self.pg.execute(
-            """INSERT INTO projects (id, name, prefix, intent, created_at, updated_at)
-               VALUES ($1, $2, $3, $4, now(), now())""",
-            proj.id, proj.name, proj.prefix, proj.intent,
+            pfx, m = f"{base_prefix}{m}", m + 1
+        proj = Project(id=slug, name=name, prefix=pfx, intent=intent)
+        try:
+            await self.pg.execute(
+                """INSERT INTO projects (id, name, prefix, intent, created_at, updated_at)
+                   VALUES ($1, $2, $3, $4, now(), now())""",
+                proj.id, proj.name, proj.prefix, proj.intent,
+            )
+        except asyncpg.UniqueViolationError:
+            raise ValidationError(f"a project named '{name}' already exists")
+        return proj  # onboarding_dismissed and archived default to False/NULL on new projects
+
+    async def archive_project(self, project_id: str) -> Project:
+        """Archive a project (BD-11, item_cef8f182b12e). Idempotent — re-archiving is a no-op."""
+        row = await self.pg.fetchrow(
+            """UPDATE projects
+               SET archived_at = COALESCE(archived_at, now()), updated_at = now()
+               WHERE id = $1
+               RETURNING id, name, prefix, intent, onboarding_dismissed, archived_at, created_at, updated_at""",
+            project_id,
         )
-        return proj  # onboarding_dismissed defaults to False on new projects
+        if row is None:
+            raise NotFoundError(f"no project {project_id}")
+        return _project_from_row(row)
+
+    async def unarchive_project(self, project_id: str) -> Project:
+        """Restore an archived project to active state (BD-11, item_2e81fe09d18d)."""
+        row = await self.pg.fetchrow(
+            """UPDATE projects
+               SET archived_at = NULL, updated_at = now()
+               WHERE id = $1
+               RETURNING id, name, prefix, intent, onboarding_dismissed, archived_at, created_at, updated_at""",
+            project_id,
+        )
+        if row is None:
+            raise NotFoundError(f"no project {project_id}")
+        return _project_from_row(row)
 
     async def update_project(self, project_id: str, *, intent: str) -> Project:
         """Edit a project's intent inline from the dashboard (0013 u2). Raises if it's gone."""
         row = await self.pg.fetchrow(
             """UPDATE projects SET intent = $2, updated_at = now()
                WHERE id = $1
-               RETURNING id, name, prefix, intent, onboarding_dismissed, created_at, updated_at""",
+               RETURNING id, name, prefix, intent, onboarding_dismissed, archived_at, created_at, updated_at""",
             project_id, intent,
         )
         if row is None:
@@ -419,7 +446,7 @@ class SpecStore:
         row = await self.pg.fetchrow(
             """UPDATE projects SET onboarding_dismissed = TRUE, updated_at = now()
                WHERE id = $1
-               RETURNING id, name, prefix, intent, onboarding_dismissed, created_at, updated_at""",
+               RETURNING id, name, prefix, intent, onboarding_dismissed, archived_at, created_at, updated_at""",
             project_id,
         )
         if row is None:
@@ -431,7 +458,7 @@ class SpecStore:
         row = await self.pg.fetchrow(
             """UPDATE projects SET onboarding_dismissed = FALSE, updated_at = now()
                WHERE id = $1
-               RETURNING id, name, prefix, intent, onboarding_dismissed, created_at, updated_at""",
+               RETURNING id, name, prefix, intent, onboarding_dismissed, archived_at, created_at, updated_at""",
             project_id,
         )
         if row is None:
@@ -440,7 +467,7 @@ class SpecStore:
 
     async def get_project(self, project_id: str) -> Project | None:
         row = await self.pg.fetchrow(
-            "SELECT id, name, prefix, intent, onboarding_dismissed, created_at, updated_at FROM projects WHERE id = $1",
+            "SELECT id, name, prefix, intent, onboarding_dismissed, archived_at, created_at, updated_at FROM projects WHERE id = $1",
             project_id,
         )
         return _project_from_row(row) if row else None
@@ -448,7 +475,7 @@ class SpecStore:
     async def list_projects(self) -> list[Project]:
         """Every project, newest first — the level above the dashboard (0010 a2)."""
         rows = await self.pg.fetch(
-            """SELECT id, name, prefix, intent, onboarding_dismissed, created_at, updated_at
+            """SELECT id, name, prefix, intent, onboarding_dismissed, archived_at, created_at, updated_at
                FROM projects ORDER BY created_at DESC, id"""
         )
         return [_project_from_row(r) for r in rows]

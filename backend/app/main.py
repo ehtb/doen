@@ -7,8 +7,9 @@ Models, schemas, services, repository, and providers each live in their own modu
 
 from __future__ import annotations
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 
+from app.config import MCP_TRANSPORT
 from app.database import lifespan
 from app.exceptions import register_exception_handlers
 from app.routers import (
@@ -29,14 +30,26 @@ def create_app() -> FastAPI:
         app.include_router(module.router)
 
     @app.get("/health")
-    async def health(request: Request) -> dict:
-        pg_ok = await request.app.state.pg.fetchval("SELECT 1") == 1
-        redis_ok = bool(await request.app.state.redis.ping())
-        return {
-            "status": "ok" if pg_ok and redis_ok else "degraded",
-            "postgres": pg_ok,
-            "redis": redis_ok,
-        }
+    async def health(request: Request, response: Response) -> dict:
+        try:
+            pg_ok = await request.app.state.pg.fetchval("SELECT 1") == 1
+        except Exception:
+            pg_ok = False
+        try:
+            redis_ok = bool(await request.app.state.redis.ping())
+        except Exception:
+            redis_ok = False
+        ok = pg_ok and redis_ok
+        if not ok:
+            response.status_code = 503
+        return {"status": "ok" if ok else "degraded", "postgres": pg_ok, "redis": redis_ok}
+
+    if MCP_TRANSPORT == "http":
+        # WARNING: HTTP MCP is intended for VPC/private network deployment only.
+        # Do not expose to the public internet without authentication (see spec 0007).
+        from app.mcp_server import mcp  # imported here to avoid loading it in stdio mode
+
+        app.mount("/mcp", mcp.streamable_http_app())
 
     return app
 

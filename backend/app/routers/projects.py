@@ -58,6 +58,20 @@ async def get_project(project_id: str, store: _Store) -> Project:
     return project
 
 
+@router.post("/projects/{project_id}/archive", status_code=200)
+async def archive_project(project_id: str, store: _Store) -> Project:
+    """Archive a project (BD-11, item_cef8f182b12e). Idempotent. The project stays accessible
+    at its canonical URL; the archived flag signals the UI to show the archived indicator."""
+    return await store.archive_project(project_id)
+
+
+@router.post("/projects/{project_id}/unarchive", status_code=200)
+async def unarchive_project(project_id: str, store: _Store) -> Project:
+    """Restore an archived project to active state (BD-11, item_2e81fe09d18d). No data loss —
+    all initiatives, specs, and decisions are untouched."""
+    return await store.unarchive_project(project_id)
+
+
 @router.patch("/projects/{project_id}")
 async def update_project(project_id: str, body: UpdateProject, store: _Store) -> Project:
     """Edit a project's intent inline from its dashboard (0013 u2). A no-op PATCH just re-reads."""

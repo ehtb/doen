@@ -56,3 +56,16 @@ export async function getProjectDashboard(
   if (!res.ok) throw new Error(`project dashboard fetch failed (${res.status})`);
   return res.json();
 }
+
+// BD-11: archive / unarchive a project — both are client-side calls (not server-fetched).
+export async function archiveProject(projectId: string): Promise<Project> {
+  const res = await fetch(`/api/projects/${projectId}/archive`, { method: "POST" });
+  if (!res.ok) throw new Error(`archive failed (${res.status})`);
+  return res.json();
+}
+
+export async function unarchiveProject(projectId: string): Promise<Project> {
+  const res = await fetch(`/api/projects/${projectId}/unarchive`, { method: "POST" });
+  if (!res.ok) throw new Error(`unarchive failed (${res.status})`);
+  return res.json();
+}

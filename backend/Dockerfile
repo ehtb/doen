@@ -1,13 +1,18 @@
-# Doen backend — FastAPI + the stdio MCP server share this image.
-# Built from source (spec 0008). Migrations run on boot, then uvicorn serves :8000.
-FROM python:3.13-slim
-
-WORKDIR /app
-
+# Build stage — pip, hatchling, and build artefacts stay here only.
+# No build toolchains survive into the runtime layer.
+FROM python:3.13-slim AS builder
+WORKDIR /build
 COPY backend/ ./
-RUN pip install --no-cache-dir .
+RUN python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir .
 
+# Runtime stage — lean image with only the venv and app source.
+# No pip, no build toolchains, no dev packages.
+FROM python:3.13-slim AS runtime
+WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
+COPY backend/app ./app
+COPY backend/migrations ./migrations
+ENV PATH="/opt/venv/bin:$PATH" PYTHONUNBUFFERED=1
 EXPOSE 8000
-
-# Auto-migrate on boot (constraint 1: no manual migration step), then serve.
-CMD ["sh", "-c", "python -m app.migrate && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "python -m app.migrate && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level ${LOG_LEVEL:-info}"]

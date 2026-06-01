@@ -19,6 +19,7 @@ import {
   deleteMessage,
   loadConversation,
   recentWindow,
+  updateProposalVerdict,
 } from "@/lib/conversations";
 import { stashInitiativeDraft } from "@/lib/initiativeDraft";
 import { Button } from "@/components/ui/button";
@@ -86,7 +87,17 @@ export default function ConversationRail({
 
   const load = useCallback(async () => {
     try {
-      setMessages(await loadConversation(convo));
+      const loaded = await loadConversation(convo);
+      setMessages(loaded);
+      // Restore verdicts from persisted proposal state so dismissed/accepted cards survive reload.
+      const restoredCards: Record<string, CardVerdict> = {};
+      for (const msg of loaded) {
+        const proposals = msg.metadata?.proposals ?? [];
+        proposals.forEach((p, idx) => {
+          if (p.verdict) restoredCards[`${msg.id}#${idx}`] = p.verdict;
+        });
+      }
+      setCards(restoredCards);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -214,6 +225,7 @@ export default function ConversationRail({
       }
       if (!res.ok) throw new Error(`couldn't add the item (${res.status})`);
       setCards((c) => ({ ...c, [key]: "accepted" }));
+      await updateProposalVerdict(messageId, idx, "accepted");
       await specCtx?.refreshSpec(); // pull the updated spec into the context immediately
     } catch (e) {
       setError((e as Error).message);
@@ -224,6 +236,7 @@ export default function ConversationRail({
 
   function dismiss(messageId: string, idx: number) {
     setCards((c) => ({ ...c, [`${messageId}#${idx}`]: "dismissed" }));
+    updateProposalVerdict(messageId, idx, "dismissed").catch(() => {});
   }
 
   // Wipe every message for this conversation from IndexedDB and reset the rail to a fresh session.

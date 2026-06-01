@@ -50,7 +50,9 @@ async def lifespan(_: FastMCP) -> AsyncIterator[Lifespan]:
         await redis.aclose()
 
 
-mcp = FastMCP("doen", lifespan=lifespan)
+# streamable_http_path="/" so that when mounted at /mcp on FastAPI the endpoint
+# is reachable at http://host:8000/mcp (not /mcp/mcp).
+mcp = FastMCP("doen", lifespan=lifespan, streamable_http_path="/")
 
 
 def _store(ctx: Context) -> SpecStore:

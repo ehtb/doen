@@ -18,8 +18,8 @@ from fastapi.testclient import TestClient
 from redis import asyncio as aioredis
 
 from app.config import DATABASE_URL, REDIS_URL
-from app.exceptions import NotFoundError
-from app.models import CriterionResult, Decision, Initiative, Project, Submission, WorkUnit
+from app.exceptions import NotFoundError, ValidationError
+from app.models import Decision, Initiative, Project, slugify
 from app.store import SpecStore
 
 
@@ -93,7 +93,7 @@ def test_create_project_assign_initiative_persists(
     )
     track_projects.append(proj.id)
     assert isinstance(proj, Project)
-    assert proj.id.endswith("-launch-hosted-tier")  # random prefix + name-derived part
+    assert proj.id == slugify("Launch Hosted Tier")  # BD-11: ID is the full name slug
     assert proj.name == "Launch Hosted Tier"
     assert proj.intent == "Ship Doen as a hosted SaaS."
 
@@ -116,13 +116,17 @@ def test_create_project_assign_initiative_persists(
         pass
 
 
-# --- a1: same-named projects get distinct slugs via the random prefix ---------
-def test_duplicate_project_name_disambiguated(track_projects: list[str]):
+# --- BD-11: duplicate project names are rejected (name uniqueness enforced) ----
+def test_duplicate_project_name_rejected(track_projects: list[str]):
     a = _store_run(lambda s: s.create_project("Same Project", "x"))
-    b = _store_run(lambda s: s.create_project("Same Project", "y"))
-    track_projects.extend([a.id, b.id])
-    assert a.id != b.id  # distinct prefixes, no collision
-    assert a.id.endswith("-same-project") and b.id.endswith("-same-project")
+    track_projects.append(a.id)
+    assert a.id == "same-project"
+    try:
+        b = _store_run(lambda s: s.create_project("Same Project", "y"))
+        track_projects.append(b.id)
+        raise AssertionError("expected ValidationError for duplicate name")
+    except ValidationError:
+        pass
 
 
 # --- moving an initiative between projects (there is no detach) ---------------
@@ -194,7 +198,8 @@ def test_project_endpoints(
     assert r.status_code == 201, r.text
     proj = r.json()
     track_projects.append(proj["id"])
-    assert proj["id"].endswith("-api-project") and proj["intent"] == "via http"
+    assert proj["id"] == "api-project"  # BD-11: ID is the full name slug
+    assert proj["intent"] == "via http"
 
     # empty name rejected
     assert client.post("/projects", json={"name": "  "}).status_code == 422
@@ -256,35 +261,66 @@ def test_project_dashboard_attention_counts(
     iid = make_initiative()
     client.post(f"/initiatives/{iid}/project", json={"project_id": proj["id"]})
 
-    # one proposed spec item (awaiting confirm/reject)
-    client.put(
+    # set one proposed constraint + one acceptance criterion in a single PUT
+    r = client.put(
         f"/specs/{iid}",
         json={
             "initiative_id": iid, "title": "T", "version": 0,
             "constraints": [{"text": "c", "provenance": "ai_proposed", "status": "proposed"}],
+            "acceptance": [{"text": "ac", "provenance": "human", "status": "confirmed",
+                            "verify": {"kind": "behavior", "detail": "check it"}}],
         },
     )
+    assert r.status_code == 200, r.text
+    crit_id = r.json()["acceptance"][0]["id"]
+
     # one open decision (awaiting a verdict)
     _store_run(lambda s: s.raise_decision(Decision(question="q?", options=["a", "b"]), iid))
 
-    # one unit submitted for verification (awaiting the human's verdict)
-    async def submit_a_unit(s: SpecStore) -> None:
-        u = WorkUnit(spec_id=iid, title="u", scope="s")
-        await s.create_unit(u)
-        await s.confirm_unit(u.id)
-        await s.claim_unit(u.id)
-        await s.submit_for_verification(
-            u.id,
-            Submission(
-                summary="done",
-                criteria_results=[CriterionResult(criterion_id="c1", result="pass")],
-            ),
-        )
-
-    _store_run(submit_a_unit)
+    # submit evidence for the criterion (awaiting the human's verdict)
+    _store_run(
+        lambda s: s.submit_evidence(iid, [{"criterion_id": crit_id, "evidence": "done"}])
+    )
 
     d = client.get(f"/projects/{proj['id']}/dashboard").json()
     a = d["attention"][iid]
     assert a["proposed_items"] == 1
     assert a["open_decisions"] == 1
-    assert a["units_to_verify"] == 1
+    assert a["criteria_to_verify"] == 1
+
+
+
+
+# --- BD-11: archive and unarchive a project -----------------------------------
+def test_archive_unarchive_project(client: TestClient, track_projects: list[str]):
+    proj = client.post("/projects", json={"name": "Archivable", "intent": "x"}).json()
+    pid = proj["id"]
+    track_projects.append(pid)
+
+    assert not proj["archived"]
+
+    # archive it — returns the project with archived=True
+    r = client.post(f"/projects/{pid}/archive")
+    assert r.status_code == 200, r.text
+    assert r.json()["archived"] is True
+
+    # idempotent — archiving again is a no-op
+    r2 = client.post(f"/projects/{pid}/archive")
+    assert r2.status_code == 200 and r2.json()["archived"] is True
+
+    # still accessible at its canonical URL
+    got = client.get(f"/projects/{pid}")
+    assert got.status_code == 200 and got.json()["archived"] is True
+
+    # appears in the project list with archived=True
+    projects = client.get("/projects").json()
+    match = next((p for p in projects if p["id"] == pid), None)
+    assert match is not None and match["archived"] is True
+
+    # unarchive — restores active state, no data loss
+    r3 = client.post(f"/projects/{pid}/unarchive")
+    assert r3.status_code == 200 and r3.json()["archived"] is False
+
+    # 404 for an unknown project
+    assert client.post("/projects/ghost/archive").status_code == 404
+    assert client.post("/projects/ghost/unarchive").status_code == 404

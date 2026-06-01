@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from redis import asyncio as aioredis
 
 from app.config import DATABASE_URL, REDIS_URL
-from app.models import CriterionResult, Decision, Submission, WorkUnit
+from app.models import Decision
 from app.services.conversation import spec_enrichment, summarize_conversation
 from app.store import SpecStore
 
@@ -92,41 +92,19 @@ def test_conversation_summary_unknown_initiative_raises(
         _store_run(go)
 
 
-# --- 7f2c: get_spec enrichment — durable per-unit context ----------------------------
-def test_spec_enrichment_unit_context(
+# --- 7f2c: get_spec enrichment — work units dropped (spec uvama) ----------------------
+def test_spec_enrichment_returns_empty_context(
     client: TestClient, make_initiative: Callable[[], str]
 ):
-    # The message-derived fields (advisor_summary, per-unit advisor_review) are browser-local now
-    # (spec uvama, decision dec_0397d7a8f45e/A): advisor_summary is always None and advisor_review
-    # is gone. What remains is the durable work-unit context — submission summary + the human's
-    # verdict and feedback.
+    # Work units were removed (migration 0013, spec uvama). spec_enrichment now returns
+    # advisor_summary=None and unit_context={} always — the per-unit context is gone.
     iid = make_initiative()
 
-    def seed(store: SpecStore):
+    def run(store: SpecStore):
         async def go():
-            unit = await store.create_unit(
-                WorkUnit(spec_id=iid, title="Stream the export", scope="...", criterion_ids=[])
-            )
-            await store.confirm_unit(unit.id)  # proposed -> ready
-            await store.claim_unit(unit.id)  # ready -> in_progress
-            await store.submit_for_verification(
-                unit.id,
-                Submission(
-                    summary="Streams rows in constant memory.",
-                    criteria_results=[
-                        CriterionResult(criterion_id="x", result="pass", evidence="capped-heap run")
-                    ],
-                ),
-            )  # in_progress -> in_verification
-            await store.record_verdict(unit.id, "approved", "Ship it.", "Edo Balvers")  # -> done
-            return unit.id, await spec_enrichment(store, iid)
-
+            return await spec_enrichment(store, iid)
         return go()
 
-    unit_id, enr = _store_run(seed)
-    assert enr["advisor_summary"] is None  # browser-local now — no server-side advisor note
-    uc = enr["unit_context"][unit_id]
-    assert uc["submission_summary"] == "Streams rows in constant memory."
-    assert uc["verdict"] == "approved"
-    assert uc["verification_feedback"] == "Ship it."
-    assert "advisor_review" not in uc  # the per-unit Advisor review was retired with messages
+    enr = _store_run(run)
+    assert enr["advisor_summary"] is None
+    assert enr["unit_context"] == {}

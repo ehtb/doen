@@ -56,6 +56,7 @@ export interface Project {
   prefix: string; // 0012 u5: the short handle for this project's initiatives (BD -> BD-7)
   intent: string;
   onboarding_dismissed: boolean; // BD-9: server-side dismissal state for the onboarding hint
+  archived: boolean; // BD-11: derived from archived_at IS NOT NULL; explicit archive/unarchive only
   created_at: string;
   updated_at: string;
 }
@@ -102,6 +103,7 @@ export interface Proposal {
   text: string;
   verify_kind?: string | null;
   verify_detail?: string | null;
+  verdict?: "accepted" | "dismissed";
 }
 
 // One turn on the conversation rail (backend Message, models.py). The Advisor's proposal

@@ -23,13 +23,19 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
   // BD-1 u3: the project rail's "Create initiative from this" hands a synthesised description here
   // (description only — every other part of the spec is still drafted from it). Pre-fill it, bring
   // the form into view, and focus, so the deliberate act stays the human's but the typing is saved.
-  const prefill = useCallback((text: string) => {
-    setDescription(text);
-    requestAnimationFrame(() => {
-      formRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-      document.getElementById(fieldId)?.focus();
-    });
-  }, [fieldId]);
+  const prefill = useCallback(
+    (text: string) => {
+      setDescription(text);
+      requestAnimationFrame(() => {
+        formRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+        document.getElementById(fieldId)?.focus();
+      });
+    },
+    [fieldId],
+  );
 
   useEffect(() => {
     // survives a route transition / reload: consume any draft stashed before this mounted.
@@ -37,9 +43,12 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
     if (stashed) prefill(stashed);
     // same-page hand-off: the rail dispatches this when the form is already mounted beside it.
     const onPrefill = (e: Event) => {
-      const detail = (e as CustomEvent<{ projectId: string; description?: string }>).detail;
+      const detail = (
+        e as CustomEvent<{ projectId: string; description?: string }>
+      ).detail;
       if (detail?.projectId !== projectId) return;
-      const draft = consumeInitiativeDraft(projectId) ?? detail.description ?? null;
+      const draft =
+        consumeInitiativeDraft(projectId) ?? detail.description ?? null;
       if (draft) prefill(draft);
     };
     window.addEventListener(PREFILL_EVENT, onPrefill);
@@ -90,19 +99,24 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
             shape();
           }
         }}
-        className="text-[13px]"
+        className="resize-none border-rail-border bg-rail-card text-rail-foreground placeholder:text-rail-muted"
       />
       <div className="flex items-center gap-3">
-        <Button type="submit" disabled={busy || description.trim().length === 0}>
+        <Button
+          type="submit"
+          disabled={busy || description.trim().length === 0}
+        >
           {busy ? <Loader2 className="animate-spin" /> : <Sparkles />}
           {busy ? "Shaping…" : "Shape a new initiative"}
         </Button>
         {error ? (
-          <span className="font-mono text-xs text-proposed-foreground">{error}</span>
+          <span className="font-mono text-xs text-proposed-foreground">
+            {error}
+          </span>
         ) : (
           <span className="font-mono text-[10.5px] text-ink-faint">
-            the Advisor sizes the spec to the work — a fix stays light, a feature gets the full
-            structure
+            the Advisor sizes the spec to the work — a fix stays light, a
+            feature gets the full structure
           </span>
         )}
       </div>

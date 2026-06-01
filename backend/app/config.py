@@ -32,3 +32,10 @@ EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
 # AI-assisted spec shaping (spec 0006). The LLM provider is pluggable; the dogfooding
 # default routes Claude through OpenRouter, reusing OPENROUTER_API_KEY (no extra secret).
 SHAPING_MODEL = os.getenv("SHAPING_MODEL", "anthropic/claude-sonnet-4.6")
+
+# MCP transport (BD-10). "stdio" (default) keeps the dev behaviour unchanged — run
+# `python -m app.mcp_server` as a subprocess. "http" mounts the MCP server on the FastAPI
+# app at /mcp so remote Claude Code instances can connect without a local subprocess.
+# WARNING: HTTP MCP is intended for VPC/private network deployment only.
+# Do not expose to the public internet without authentication (see spec 0007).
+MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "stdio")

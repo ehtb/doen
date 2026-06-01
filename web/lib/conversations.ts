@@ -149,6 +149,21 @@ export async function recentWindow(
   return all.slice(-n).map((m) => ({ role: m.role, content: m.content }));
 }
 
+/** Persist a proposal verdict (accepted/dismissed) onto the stored message so it survives reload. */
+export async function updateProposalVerdict(
+  messageId: string,
+  proposalIdx: number,
+  verdict: "accepted" | "dismissed",
+): Promise<void> {
+  const db = await getDB();
+  const stored = await db.get(STORE, messageId);
+  if (!stored) return;
+  const proposals = stored.metadata.proposals ? [...stored.metadata.proposals] : [];
+  if (proposalIdx >= proposals.length) return;
+  proposals[proposalIdx] = { ...proposals[proposalIdx], verdict };
+  await db.put(STORE, { ...stored, metadata: { ...stored.metadata, proposals } });
+}
+
 /** Drop a single message (used to roll back an optimistic human turn when the Advisor call fails). */
 export async function deleteMessage(id: string): Promise<void> {
   const db = await getDB();

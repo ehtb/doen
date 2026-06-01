@@ -42,6 +42,7 @@ def slugify(title: str) -> str:
     return s or "initiative"
 
 
+
 def derive_prefix(name: str) -> str:
     """A short uppercase project prefix from its name's first letters (0012 u5): 'Build Doen' ->
     'BD'. With the per-project sequence it forms the short id (BD-7). Single-word names fall back
@@ -163,6 +164,7 @@ class Project(BaseModel):
     prefix: str = ""  # short handle for the project's initiatives (0012 u5): 'BD' -> BD-7
     intent: str = ""  # the strategic goal, prose
     onboarding_dismissed: bool = False  # BD-9: server-side dismissal of the onboarding hint
+    archived: bool = False  # BD-11: derived from archived_at IS NOT NULL; never manually set
     created_at: str = Field(default_factory=_now)
     updated_at: str = Field(default_factory=_now)
 

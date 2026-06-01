@@ -5,6 +5,7 @@ import { listInitiatives, listProjects } from "@/lib/api";
 import type { Initiative, Project } from "@/lib/types";
 import { SetBreadcrumb } from "@/app/_shell/breadcrumb";
 import NewProject from "./NewProject";
+import ArchivedProjects from "./ArchivedProjects";
 
 // The dashboard reflects live state — projects + initiatives change out of band.
 export const dynamic = "force-dynamic";
@@ -40,6 +41,8 @@ function ProjectCard({ project, count }: { project: Project; count: number }) {
 
 export default async function Home() {
   const [projects, initiatives] = await Promise.all([listProjects(), listInitiatives()]);
+  const activeProjects = projects.filter((p: Project) => !p.archived);
+  const archivedProjects = projects.filter((p: Project) => p.archived);
   const countFor = (projectId: string) =>
     initiatives.filter((i: Initiative) => i.project_id === projectId).length;
 
@@ -64,11 +67,11 @@ export default async function Home() {
         <h2 className="flex items-center gap-2 font-mono text-[11.5px] font-semibold tracking-[0.13em] text-ink-soft uppercase">
           Projects
           <span className="font-normal tracking-normal text-ink-faint normal-case">
-            · {projects.length}
+            · {activeProjects.length}
           </span>
         </h2>
 
-        {projects.length === 0 ? (
+        {activeProjects.length === 0 && archivedProjects.length === 0 ? (
           // First visit (0013 u4): the Advisor itself greets and walks the user from zero — no
           // tour, no modal. The next step (creating a project) is inline and prominent.
           <div className="animate-rise mt-5 rounded-2xl border border-rail-border bg-rail p-6 text-rail-foreground">
@@ -98,7 +101,7 @@ export default async function Home() {
               <NewProject />
             </div>
             <ul className="mt-5 space-y-2.5">
-              {projects.map((p: Project) => (
+              {activeProjects.map((p: Project) => (
                 <li key={p.id}>
                   <ProjectCard project={p} count={countFor(p.id)} />
                 </li>
@@ -107,6 +110,15 @@ export default async function Home() {
           </>
         )}
       </section>
+
+      {/* BD-11: archived projects — collapsed by default, follows the same pattern as
+          the completed initiatives section in DashboardContent (BD-7). */}
+      {archivedProjects.length > 0 && (
+        <ArchivedProjects
+          projects={archivedProjects}
+          counts={Object.fromEntries(archivedProjects.map((p: Project) => [p.id, countFor(p.id)]))}
+        />
+      )}
     </main>
   );
 }

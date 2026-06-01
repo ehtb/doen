@@ -1,5 +1,5 @@
-# Doen web — Next.js, built from source (spec 0008). Two stages: build, then a lean
-# runtime that serves the production build on :3000.
+# Build stage — compiles Next.js, including devDependencies needed for the build.
+# No devDependencies survive into the runtime layer.
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY web/package.json web/package-lock.json ./
@@ -7,10 +7,12 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM node:22-alpine AS run
+# Runtime stage — standalone Next.js output only.
+# Contains only the minimal node_modules required at runtime (no devDependencies).
+FROM node:22-alpine AS runtime
 WORKDIR /app
-ENV NODE_ENV=production
-ENV HOSTNAME=0.0.0.0
-COPY --from=build /app ./
+ENV NODE_ENV=production HOSTNAME=0.0.0.0 PORT=3000
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
 EXPOSE 3000
-CMD ["npm", "run", "start"]
+CMD ["node", "server.js"]

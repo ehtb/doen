@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, FileText } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
@@ -49,7 +49,8 @@ Hard rules: rejected directions in design-principles.md are append-only; agents.
       title="Copy a prompt that audits the three constitution docs against the codebase"
       className="h-7 px-2.5 font-mono text-[11px] tracking-wide"
     >
-      {copied ? <Check /> : <FileText />} {copied ? "Copied" : "Copy /sync-docs prompt"}
+      {copied ? <Check /> : <Copy />}{" "}
+      {copied ? "Copied" : "Copy /sync-docs prompt"}
     </Button>
   );
 }
