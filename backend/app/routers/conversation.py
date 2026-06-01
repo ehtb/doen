@@ -34,7 +34,7 @@ async def post_message(initiative_id: str, body: PostMessage, store: _Store) -> 
 
 @router.post("/initiatives/{initiative_id}/advisor", status_code=201)
 async def advise(initiative_id: str, body: PostMessage, store: _Store) -> AdvisorTurn:
-    """A conversational turn: persist the human message, generate the Advisor's stage-aware
+    """A conversational turn: persist the human message, generate the Advisor's state-aware
     reply (with any proposal cards), and return both. The Advisor's reply generation (LLM)
     is u2; a failed call maps to 502 with no message persisted."""
     return await advisor_service.advise(store, initiative_id, body.content)

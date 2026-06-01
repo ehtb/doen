@@ -1,17 +1,18 @@
-"""Learn-stage service (spec 0005 u2): assemble the outcome review, capture memory.
+"""Learn service (spec 0005 u2): assemble the outcome review, capture memory.
 
 The review (a4) gathers intent, the resolved decisions (the calls + why), and the per-unit
 verification outcomes so the human can judge what happened against what was intended.
 Submitting (a5) writes one append-only memory row (embedded for the cross-initiative
-flywheel) and marks the initiative done — a soft gate (constraint 8): incomplete units
-don't block it.
+flywheel). The captured learnings feed the inferred lifecycle state (0011): once every unit is
+done and learnings are captured, the initiative is Complete — a soft gate (constraint 8): the
+capture itself never blocks on incomplete units.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from app.exceptions import InvalidStageTransition, NotFoundError, ValidationError
+from app.exceptions import NotFoundError, ValidationError
 from app.providers.llm import StructuredLLM, get_advisor_llm
 from app.schemas import LearnReview, OutcomeDraft
 from app.store import SpecStore
@@ -109,14 +110,8 @@ async def submit_learn(
     if init is None:
         raise NotFoundError(f"no initiative {initiative_id}")
     if not summary.strip():
-        raise ValidationError("the Learn stage needs a human-written outcome summary")
+        raise ValidationError("capturing the outcome needs a human-written summary")
+    # create_memory recomputes the inferred state (0011): with every unit done this completes
+    # the initiative; otherwise the learnings are still captured and the state stays as-is.
     await store.create_memory(initiative_id, summary.strip(), learnings, outcome)
-    # Advance into Learn when we're one step away (from verify). The gate is soft — if the
-    # initiative is further back than verify the memory is still captured; the stage move
-    # stays with the human.
-    if init.stage != "learn":
-        try:
-            await store.set_stage(initiative_id, "learn")
-        except InvalidStageTransition:
-            pass
     return await learn_review(store, initiative_id)

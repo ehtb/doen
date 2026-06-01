@@ -184,7 +184,7 @@ _REFERENCES = [
 def build_spec() -> Spec:
     return Spec(
         initiative_id=INITIATIVE_ID,
-        stage="shape",
+        state="draft",
         title=TITLE,
         intent=_INTENT,
         constraints=[SpecItem(text=t, **_DRAFT) for t in _CONSTRAINTS],
@@ -203,8 +203,8 @@ async def seed() -> None:
     store = SpecStore(pg, redis)
     try:
         await pg.execute(
-            """INSERT INTO initiatives (id, org_id, owner_id, appetite, stage, title, project_id)
-               VALUES ($1, $2, $3, $4, 'shape', $5, 'build-doen')
+            """INSERT INTO initiatives (id, org_id, owner_id, appetite, state, title, project_id)
+               VALUES ($1, $2, $3, $4, 'draft', $5, 'build-doen')
                ON CONFLICT (id) DO NOTHING""",
             INITIATIVE_ID, DEV_ORG_ID, DEV_USER_ID, "small", TITLE,
         )

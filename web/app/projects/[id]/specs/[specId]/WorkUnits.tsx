@@ -211,7 +211,7 @@ export default function WorkUnits({
   }
 
   return (
-    <section className="mt-10 animate-rise border-t border-border pt-7 [animation-delay:320ms]">
+    <section id="work-units" className="mt-10 animate-rise scroll-mt-6 border-t border-border pt-7 [animation-delay:320ms]">
       <h2 className="flex items-center gap-2 font-mono text-[11.5px] font-semibold tracking-[0.13em] text-ink-soft uppercase">
         <Hammer className="size-3.5" /> Work units
         <span className="font-normal tracking-normal text-ink-faint normal-case">

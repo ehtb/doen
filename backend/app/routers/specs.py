@@ -64,6 +64,13 @@ async def retire_item(initiative_id: str, item_id: str, body: ItemVersion, store
     return await authoring.retire_item(store, initiative_id, item_id, body.version)
 
 
+@router.post("/specs/{initiative_id}/items/{item_id}/reject")
+async def reject_item(initiative_id: str, item_id: str, body: ItemVersion, store: _Store) -> Spec:
+    """Reject a proposed item (0011 a6): remove it from the spec and log the rejection to the
+    rail (D1 -> c). Only a proposed item is rejectable (ValidationError -> 422)."""
+    return await authoring.reject_item(store, initiative_id, item_id, body.version)
+
+
 @router.post("/specs/{initiative_id}/confirm-all")
 async def confirm_all(initiative_id: str, body: ConfirmAll, store: _Store) -> Spec:
     return await authoring.confirm_all(

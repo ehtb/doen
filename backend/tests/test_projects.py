@@ -19,7 +19,7 @@ from redis import asyncio as aioredis
 
 from app.config import DATABASE_URL, REDIS_URL
 from app.exceptions import NotFoundError
-from app.models import Decision, Initiative, Project
+from app.models import CriterionResult, Decision, Initiative, Project, Submission, WorkUnit
 from app.store import SpecStore
 
 
@@ -241,7 +241,50 @@ def test_project_dashboard_endpoint(
     d = r.json()
     assert d["project"]["id"] == proj["id"] and d["project"]["intent"] == "the strategic goal"
     assert any(i["id"] == iid for i in d["initiatives"])  # grouped initiative present
-    assert all("stage" in i and "title" in i for i in d["initiatives"])  # nav fields
+    assert all("state" in i and "title" in i for i in d["initiatives"])  # nav fields
     assert d["open_decisions"] >= 1  # the escalation is counted project-wide
 
     assert client.get("/projects/ghost/dashboard").status_code == 404
+
+
+# --- 0011 a8: the dashboard carries per-initiative attention indicators --------
+def test_project_dashboard_attention_counts(
+    client: TestClient, make_initiative: Callable[[], str], track_projects: list[str]
+):
+    proj = client.post("/projects", json={"name": "Attn Project", "intent": "x"}).json()
+    track_projects.append(proj["id"])
+    iid = make_initiative()
+    client.post(f"/initiatives/{iid}/project", json={"project_id": proj["id"]})
+
+    # one proposed spec item (awaiting confirm/reject)
+    client.put(
+        f"/specs/{iid}",
+        json={
+            "initiative_id": iid, "title": "T", "version": 0,
+            "constraints": [{"text": "c", "provenance": "ai_proposed", "status": "proposed"}],
+        },
+    )
+    # one open decision (awaiting a verdict)
+    _store_run(lambda s: s.raise_decision(Decision(question="q?", options=["a", "b"]), iid))
+
+    # one unit submitted for verification (awaiting the human's verdict)
+    async def submit_a_unit(s: SpecStore) -> None:
+        u = WorkUnit(spec_id=iid, title="u", scope="s")
+        await s.create_unit(u)
+        await s.confirm_unit(u.id)
+        await s.claim_unit(u.id)
+        await s.submit_for_verification(
+            u.id,
+            Submission(
+                summary="done",
+                criteria_results=[CriterionResult(criterion_id="c1", result="pass")],
+            ),
+        )
+
+    _store_run(submit_a_unit)
+
+    d = client.get(f"/projects/{proj['id']}/dashboard").json()
+    a = d["attention"][iid]
+    assert a["proposed_items"] == 1
+    assert a["open_decisions"] == 1
+    assert a["units_to_verify"] == 1

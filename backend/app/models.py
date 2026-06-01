@@ -44,22 +44,34 @@ def slugify(title: str) -> str:
     return s or "initiative"
 
 
-# ----------------------------------------------------------------------------- enums + stages
+# ----------------------------------------------------------------------------- enums + lifecycle
 Provenance = Literal["human", "ai_proposed", "ai_confirmed_by_human"]
 ItemStatus = Literal["proposed", "confirmed", "retired"]
 Section = Literal["constraints", "discretion", "acceptance"]  # the editable spec sections
-Stage = Literal["discover", "shape", "bet", "decompose", "implement", "verify", "learn"]
-STAGES: tuple[str, ...] = (
-    "discover", "shape", "bet", "decompose", "implement", "verify", "learn",
+
+# The lifecycle (0011 constraint 1): three states, never manually advanced. They are INFERRED
+# from the work units + learn record, so the state can't drift from reality (D2 -> c). Draft:
+# the spec is being shaped, nothing under construction. Building: at least one unit has started.
+# Complete: every unit is done and a learn record is captured.
+State = Literal["draft", "building", "complete"]
+STATES: tuple[str, ...] = ("draft", "building", "complete")
+
+# A unit "has started" once it leaves the proposed/ready prelude — work has actually begun.
+_STARTED_UNIT_STATUSES = frozenset(
+    {"in_progress", "blocked_on_decision", "in_verification", "done"}
 )
 
 
-def is_adjacent_stage(current: str, target: str) -> bool:
-    """A legal lifecycle move is exactly one step — forward, or back for rework (0004 c3).
-    No skipping; no arbitrary jumps."""
-    if current not in STAGES or target not in STAGES:
-        return False
-    return abs(STAGES.index(current) - STAGES.index(target)) == 1
+def derive_state(unit_statuses: list[str], has_learn: bool) -> State:
+    """The inferred lifecycle state (0011 constraint 1 / a2). Pure: state is a function of the
+    work units and whether a learn record exists — no stored label to forget or drift.
+    Complete only once there ARE units, all are done, and learnings are captured; Building once
+    any unit has started; Draft otherwise (no units, or all still proposed/ready)."""
+    if unit_statuses and all(s == "done" for s in unit_statuses) and has_learn:
+        return "complete"
+    if any(s in _STARTED_UNIT_STATUSES for s in unit_statuses):
+        return "building"
+    return "draft"
 
 
 # ----------------------------------------------------------------------------- spec models
@@ -94,7 +106,7 @@ class Spec(BaseModel):
     id: str = Field(default_factory=lambda: _id("spec"))
     initiative_id: str
     version: int = 0  # 0 = unsaved; save_spec bumps to 1 on first write
-    stage: Stage = "shape"
+    state: State = "draft"  # inferred lifecycle (0011); mirrored from the initiative
     title: str
     intent: str = ""
     constraints: list[SpecItem] = Field(default_factory=list)
@@ -112,14 +124,14 @@ class Spec(BaseModel):
 class Initiative(BaseModel):
     """The parent entity (0004): a spec, its decisions, and its work units all belong to
     one initiative. `id` is a human-readable slug. org/owner exist but are unused until
-    auth (0007). `stage` is the tracked lifecycle position, kept in sync with the spec.
-    `project_id` (0010) is the required link to the parent Project — every initiative belongs
-    to a project; there are no orphan specs."""
+    auth (0007). `state` is the inferred lifecycle position (0011), recomputed from the work
+    units + learn record — never advanced by hand. `project_id` (0010) is the required link to
+    the parent Project — every initiative belongs to a project; there are no orphan specs."""
 
     id: str  # slug
     project_id: str  # FK to projects.id — required; every initiative belongs to a project
     title: str | None = None
-    stage: Stage = "discover"
+    state: State = "draft"
     org_id: str | None = None
     owner_id: str | None = None
     created_at: str = Field(default_factory=_now)
@@ -207,13 +219,13 @@ class Message(BaseModel):
 class SiblingSummary(BaseModel):
     """A compact, token-conscious summary of one sibling initiative in the same project
     (0010 constraint 3): enough for the Advisor to spot contradictions and patterns — title,
-    stage, the headline confirmed constraints (+ their total count), and the most recent
-    resolved decision — without serialising the whole sibling spec. Specifics are retrieved
-    on demand via project-scoped get_context (u4)."""
+    lifecycle state, the headline confirmed constraints (+ their total count), and the most
+    recent resolved decision — without serialising the whole sibling spec. Specifics are
+    retrieved on demand via project-scoped get_context (u4)."""
 
     initiative_id: str
     title: str
-    stage: str
+    state: str
     constraint_count: int = 0                              # total confirmed constraints
     constraints: list[str] = Field(default_factory=list)   # the headline confirmed constraints
     latest_decision: str | None = None                     # the most recent resolved decision
@@ -228,6 +240,20 @@ class ProjectContext(BaseModel):
     name: str
     intent: str = ""
     siblings: list[SiblingSummary] = Field(default_factory=list)
+
+
+class InitiativeAttention(BaseModel):
+    """What needs the human on one initiative (0011 a8): the attention indicators the project
+    screen shows per card, so where work is waiting is visible without opening a spec. The
+    three things only a human can clear — confirm proposals, resolve decisions, verify units."""
+
+    proposed_items: int = 0      # ai_proposed spec items awaiting confirm / reject
+    open_decisions: int = 0      # escalations awaiting a verdict
+    units_to_verify: int = 0     # work units submitted, awaiting the human's verdict
+
+    @property
+    def total(self) -> int:
+        return self.proposed_items + self.open_decisions + self.units_to_verify
 
 
 class ConversationContext(BaseModel):

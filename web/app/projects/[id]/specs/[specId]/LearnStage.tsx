@@ -83,7 +83,7 @@ export default function LearnStage({
       });
       if (!res.ok) throw new Error(`couldn't save the outcome (${res.status})`);
       setReview(await res.json());
-      router.refresh(); // reflect stage -> learn in the stepper
+      router.refresh(); // capturing learn may complete the initiative — reflect the inferred state
     } catch (e) {
       setError((e as Error).message);
     } finally {

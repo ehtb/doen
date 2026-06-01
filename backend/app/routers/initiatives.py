@@ -1,4 +1,5 @@
-"""Initiatives + lifecycle: the dashboard feed, creation, and stage progression."""
+"""Initiatives: the dashboard feed and creation. The lifecycle state is inferred from the work
+units + learn record (0011), never advanced by hand — so there is no stage endpoint."""
 
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ from fastapi import APIRouter, Depends
 from app.database import get_store
 from app.exceptions import ValidationError
 from app.models import Initiative
-from app.schemas import CreateInitiative, SetStage
+from app.schemas import CreateInitiative
 from app.store import SpecStore
 
 router = APIRouter(tags=["initiatives"])
@@ -31,14 +32,3 @@ async def create_initiative(
     if not body.title.strip():
         raise ValidationError("initiative title must not be empty")
     return await store.create_initiative(body.title, body.project_id)
-
-
-@router.post("/initiatives/{initiative_id}/stage")
-async def set_stage(
-    initiative_id: str,
-    body: SetStage,
-    store: Annotated[SpecStore, Depends(get_store)],
-) -> Initiative:
-    """Advance or retreat an initiative by one lifecycle step (0004 a4/a5); the spec's stage
-    is kept in sync. A skip or arbitrary jump is rejected (InvalidStageTransition -> 422)."""
-    return await store.set_stage(initiative_id, body.stage)

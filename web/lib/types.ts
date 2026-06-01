@@ -17,7 +17,7 @@ export interface Spec {
   id: string;
   initiative_id: string;
   version: number;
-  stage: string;
+  state: string; // inferred lifecycle (0011): draft / building / complete
   title: string;
   intent: string;
   constraints: SpecItem[];
@@ -31,7 +31,7 @@ export interface Spec {
 export interface Initiative {
   id: string;
   title: string | null;
-  stage: string;
+  state: string; // inferred lifecycle (0011): draft / building / complete
   project_id: string; // the parent project (0010) — every initiative belongs to one
   org_id?: string | null;
   owner_id?: string | null;
@@ -48,11 +48,20 @@ export interface Project {
   updated_at: string;
 }
 
+// Per-initiative attention indicators (backend InitiativeAttention, models.py) — what the
+// project screen surfaces per card so where work is waiting is visible without opening a spec.
+export interface InitiativeAttention {
+  proposed_items: number;
+  open_decisions: number;
+  units_to_verify: number;
+}
+
 // The project dashboard payload (backend ProjectDashboard, schemas.py).
 export interface ProjectDashboard {
   project: Project;
   initiatives: Initiative[];
   open_decisions: number;
+  attention: Record<string, InitiativeAttention>;
 }
 
 // A work unit decomposed from the spec (backend WorkUnit, store.py). The executor

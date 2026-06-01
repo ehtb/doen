@@ -1,10 +1,10 @@
-"""u1 — initiatives as the parent entity: table, model, slug, scaffolded spec, migration.
+"""Initiatives as the parent entity: table, model, slug, scaffolded spec, lifecycle state.
 
-Covers a1 (create persists an initiative row + scaffolds an empty v0 spec), a2 (slug
-derived from the title, unique, duplicate disambiguated), a6 (the lifecycle migration
-backfills title + stage from each spec). Also the D1 fold-in: get_initiative surfaces the
-{id, title, stage} that the MCP get_spec response now carries. Integration tests over the
-real docker-compose Postgres + Redis.
+Covers create (persists an initiative row + scaffolds an empty v0 spec at state=draft), the
+slug derivation (unique, duplicate disambiguated), and the 0011 lifecycle: a1 (three states;
+the migration maps the old stages correctly) and a2 (state is inferred from the work units +
+learn record, with no manual advance). get_initiative surfaces the {id, title, state} the MCP
+get_spec response carries. Integration tests over the real docker-compose Postgres + Redis.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 
 import asyncpg
 import pytest
@@ -20,12 +19,15 @@ from fastapi.testclient import TestClient
 from redis import asyncio as aioredis
 
 from app.config import DATABASE_URL, REDIS_URL
-from app.models import Initiative, slugify
-from app.store import SpecStore
-
-MIGRATION = (
-    Path(__file__).resolve().parent.parent / "migrations" / "0003_initiative_lifecycle.sql"
+from app.models import (
+    CriterionResult,
+    Initiative,
+    Submission,
+    WorkUnit,
+    derive_state,
+    slugify,
 )
+from app.store import SpecStore
 
 
 def _store_run(fn: Callable[[SpecStore], Awaitable[object]]) -> object:
@@ -78,23 +80,23 @@ def test_slugify_kebab_cases_the_title():
     assert slugify("") == "initiative"
 
 
-# --- a1: create persists an initiative + scaffolds an empty v0/discover spec ---
+# --- create persists an initiative + scaffolds an empty v0/draft spec ----------
 def test_create_initiative_scaffolds_empty_spec(track_initiatives: list[str]):
     init = _store_run(lambda s: s.create_initiative("Passwordless Sign-In", "build-doen"))
     track_initiatives.append(init.id)
     # a random ~5-letter prefix keeps slugs unique; the title-derived part follows
     assert re.fullmatch(r"[a-z]{5}-passwordless-sign-in", init.id)
     assert init.title == "Passwordless Sign-In"
-    assert init.stage == "discover"
+    assert init.state == "draft"  # nothing under construction yet (0011)
 
-    row = _sql("SELECT title, stage FROM initiatives WHERE id = $1", init.id)
+    row = _sql("SELECT title, state FROM initiatives WHERE id = $1", init.id)
     assert row["title"] == "Passwordless Sign-In"
-    assert row["stage"] == "discover"
+    assert row["state"] == "draft"
 
     spec = _store_run(lambda s: s.get_spec(init.id))
     assert spec is not None
     assert spec.version == 0
-    assert spec.stage == "discover"
+    assert spec.state == "draft"
     assert spec.title == "Passwordless Sign-In"
     assert spec.constraints == [] and spec.discretion == [] and spec.acceptance == []
 
@@ -115,32 +117,42 @@ def test_get_initiative_returns_lifecycle_metadata(track_initiatives: list[str])
     got = _store_run(lambda s: s.get_initiative(init.id))
     assert isinstance(got, Initiative)
     assert got.id == init.id and got.id.endswith("-lifecycle-meta")
-    assert (got.title, got.stage) == ("Lifecycle Meta", "discover")
+    assert (got.title, got.state) == ("Lifecycle Meta", "draft")
     assert _store_run(lambda s: s.get_initiative("does-not-exist")) is None
 
 
-# --- a6: the migration backfills title + stage from the spec -------------------
-def test_migration_backfills_title_and_stage(
-    client: TestClient, make_initiative: Callable[[], str], track_initiatives: list[str]
-):
-    iid = make_initiative()  # created via the legacy endpoint: no title
-    track_initiatives.append(iid)
-    r = client.put(
-        f"/specs/{iid}",
-        json={"initiative_id": iid, "title": "Backfill Me", "version": 0, "stage": "bet"},
+# --- a1: three states; the migration mapped the old 7-stage data correctly -----
+def test_lifecycle_has_three_states_and_migration_mapped():
+    # the 7-stage model is replaced: every initiative carries one of exactly three states.
+    rows = _sql("SELECT array_agg(DISTINCT state) AS states FROM initiatives")
+    assert set(rows["states"]) <= {"draft", "building", "complete"}
+    assert _sql("SELECT count(*) AS n FROM initiatives WHERE state IS NULL")["n"] == 0
+
+    # the migration maps the old stages: a learn-era initiative became Complete (learn ->
+    # complete), a shaping-era one stayed Draft (discover/shape/bet/decompose -> draft).
+    learn_era = _sql(
+        "SELECT state FROM initiatives WHERE id = 'build-doen-0005-memory-learn-stage'"
     )
-    assert r.status_code == 200, r.text
-
-    # simulate the pre-0004 state, then re-run the (idempotent) migration SQL
-    _sql("UPDATE initiatives SET title = NULL, stage = 'shape' WHERE id = $1", iid)
-    _sql(MIGRATION.read_text())
-
-    row = _sql("SELECT title, stage FROM initiatives WHERE id = $1", iid)
-    assert row["title"] == "Backfill Me"  # filled from the spec
-    assert row["stage"] == "bet"          # synced from the spec
+    assert learn_era["state"] == "complete"
+    shaping_era = _sql(
+        "SELECT state FROM initiatives WHERE id = 'build-doen-0002-spec-editing'"
+    )
+    assert shaping_era["state"] == "draft"
 
 
-# --- a3: the dashboard feed lists spec-bearing initiatives with title + stage --
+# --- a1/a2: the inferred-state rule is pure (no DB) -----------------------------
+def test_derive_state_rule():
+    assert derive_state([], False) == "draft"               # nothing yet
+    assert derive_state(["proposed", "ready"], False) == "draft"   # not started
+    assert derive_state(["in_progress"], False) == "building"
+    assert derive_state(["blocked_on_decision"], False) == "building"
+    assert derive_state(["done", "ready"], False) == "building"    # some built, not all done
+    assert derive_state(["done"], False) == "building"             # done but no learnings
+    assert derive_state(["done", "done"], True) == "complete"      # all done + learn
+    assert derive_state([], True) == "draft"                       # learn alone doesn't complete
+
+
+# --- the dashboard feed lists spec-bearing initiatives with title + state ------
 def test_list_initiatives_includes_created_one(
     client: TestClient, track_initiatives: list[str]
 ):
@@ -153,9 +165,9 @@ def test_list_initiatives_includes_created_one(
     found = next((i for i in items if i["id"] == init.id), None)
     assert found is not None  # the new initiative appears on the dashboard feed
     assert found["title"] == "Dashboard Listing"
-    assert found["stage"] == "discover"
+    assert found["state"] == "draft"
     # every entry carries what the dashboard renders + links on
-    assert all(i["id"] and "stage" in i for i in items)
+    assert all(i["id"] and "state" in i for i in items)
 
 
 # --- a1 / a7: the create endpoint scaffolds an initiative + spec in one act -----
@@ -167,14 +179,14 @@ def test_create_initiative_endpoint_scaffolds(
     init = r.json()
     track_initiatives.append(init["id"])
     assert init["id"].endswith("-endpoint-made")
-    assert init["stage"] == "discover"
+    assert init["state"] == "draft"
     assert init["project_id"] == "build-doen"  # every initiative belongs to a project
 
-    # land straight in the empty spec (a7) — readable immediately, v0/discover, empty
+    # land straight in the empty spec (a7) — readable immediately, v0/draft, empty
     g = client.get(f"/specs/{init['id']}")
     assert g.status_code == 200, g.text
     spec = g.json()
-    assert spec["version"] == 0 and spec["stage"] == "discover"
+    assert spec["version"] == 0 and spec["state"] == "draft"
     assert spec["constraints"] == [] and spec["acceptance"] == []
 
     # an empty title is rejected
@@ -188,34 +200,44 @@ def test_create_initiative_endpoint_scaffolds(
     ).status_code == 404
 
 
-# --- a5: advance/retreat one step; the spec's stage stays in sync --------------
-def test_stage_advance_and_retreat_sync_spec(
+# --- a2: state is inferred from the units + learn; no manual advance ------------
+def test_state_inferred_from_units_and_learn(
     client: TestClient, track_initiatives: list[str]
 ):
-    init = _store_run(lambda s: s.create_initiative("Stage Sync", "build-doen"))
+    init = _store_run(lambda s: s.create_initiative("Auto State", "build-doen"))
     track_initiatives.append(init.id)
 
-    r = client.post(f"/initiatives/{init.id}/stage", json={"stage": "shape"})  # discover -> shape
-    assert r.status_code == 200, r.text
-    assert r.json()["stage"] == "shape"
-    assert client.get(f"/specs/{init.id}").json()["stage"] == "shape"  # spec synced
+    def state() -> str:
+        got = _store_run(lambda s: s.get_initiative(init.id))
+        assert isinstance(got, Initiative)
+        return got.state
 
-    r = client.post(f"/initiatives/{init.id}/stage", json={"stage": "discover"})  # retreat
-    assert r.status_code == 200, r.text
-    assert r.json()["stage"] == "discover"
-    assert client.get(f"/specs/{init.id}").json()["stage"] == "discover"
+    # no manual advance endpoint exists any more (the lifecycle is inferred)
+    assert client.post(f"/initiatives/{init.id}/stage", json={"stage": "shape"}).status_code == 404
 
+    # draft: no units yet, and a proposed/ready unit hasn't started the work
+    assert state() == "draft"
+    unit = WorkUnit(spec_id=init.id, title="ship it", scope="the whole thing")
+    _store_run(lambda s: s.create_unit(unit))
+    assert state() == "draft"
+    _store_run(lambda s: s.confirm_unit(unit.id))  # proposed -> ready
+    assert state() == "draft"
 
-# --- a4: skips and arbitrary jumps are rejected; nothing moves -----------------
-def test_stage_rejects_skips(client: TestClient, track_initiatives: list[str]):
-    init = _store_run(lambda s: s.create_initiative("Stage Skip", "build-doen"))
-    track_initiatives.append(init.id)
+    # building: the first unit reaching in_progress flips it
+    _store_run(lambda s: s.claim_unit(unit.id))  # ready -> in_progress
+    assert state() == "building"
+    assert client.get(f"/specs/{init.id}").json()["state"] == "building"  # mirrored onto the doc
 
-    # discover -> implement skips four stages -> 422
-    assert client.post(
-        f"/initiatives/{init.id}/stage", json={"stage": "implement"}
-    ).status_code == 422
-    # unknown initiative -> 404
-    assert client.post("/initiatives/nope/stage", json={"stage": "shape"}).status_code == 404
-    # the rejected jump left the stage untouched
-    assert client.get(f"/specs/{init.id}").json()["stage"] == "discover"
+    # still building while the unit is in verification, and even once approved (no learn yet)
+    sub = Submission(
+        summary="done", criteria_results=[CriterionResult(criterion_id="c1", result="pass")]
+    )
+    _store_run(lambda s: s.submit_for_verification(unit.id, sub))
+    assert state() == "building"
+    _store_run(lambda s: s.record_verdict(unit.id, "approved", "", "tester"))  # -> done
+    assert state() == "building"
+
+    # complete: every unit done AND a learn record captured
+    _store_run(lambda s: s.create_memory(init.id, "shipped passwordless sign-in"))
+    assert state() == "complete"
+    assert client.get(f"/specs/{init.id}").json()["state"] == "complete"

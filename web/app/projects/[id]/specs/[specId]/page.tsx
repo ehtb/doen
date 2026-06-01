@@ -1,21 +1,22 @@
 import Link from "next/link";
 
 import { getSpec } from "@/lib/api";
-import { cn, stageMode } from "@/lib/utils";
+import { cn, stateMode } from "@/lib/utils";
 import ConversationRail from "./ConversationRail";
 import LearnStage from "./LearnStage";
 import SpecDocument from "./SpecDocument";
-import StageControls from "./StageControls";
 import SteeringRail from "./SteeringRail";
 import WorkUnits from "./WorkUnits";
 
-const STAGES = ["discover", "shape", "bet", "decompose", "implement", "verify", "learn"];
+// The three inferred lifecycle states (0011). There is no manual advance — the state is a read
+// of the work units + learn record, so this stepper only reflects where the initiative sits.
+const STATES = ["draft", "building", "complete"];
 
-function LifecycleStepper({ stage }: { stage: string }) {
-  const current = Math.max(0, STAGES.indexOf(stage));
+function StateStepper({ state }: { state: string }) {
+  const current = Math.max(0, STATES.indexOf(state));
   return (
-    <nav aria-label="lifecycle" className="flex flex-wrap gap-x-1 gap-y-2">
-      {STAGES.map((s, i) => {
+    <nav aria-label="lifecycle" className="flex flex-wrap items-center gap-x-1 gap-y-2">
+      {STATES.map((s, i) => {
         const done = i < current;
         const active = i === current;
         return (
@@ -89,8 +90,10 @@ export default async function SpecPage({
           {spec.title}
         </h1>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3.5">
-          <LifecycleStepper stage={spec.stage} />
-          <StageControls initiativeId={spec.initiative_id} stage={spec.stage} />
+          <StateStepper state={spec.state} />
+          <span className="font-mono text-[10px] tracking-wide text-ink-faint lowercase">
+            state follows the work — no manual advance
+          </span>
         </div>
       </header>
 
@@ -98,7 +101,7 @@ export default async function SpecPage({
         <section className="min-w-80 flex-[1_1_560px]">
           <SpecDocument initialSpec={spec} />
           <WorkUnits initiativeId={spec.initiative_id} acceptance={spec.acceptance} />
-          {(spec.stage === "verify" || spec.stage === "learn") && (
+          {(spec.state === "building" || spec.state === "complete") && (
             <LearnStage
               initiativeId={spec.initiative_id}
               intent={spec.intent}
@@ -110,9 +113,9 @@ export default async function SpecPage({
           <ConversationRail
             messagesUrl={`/api/initiatives/${spec.initiative_id}/messages`}
             advisorUrl={`/api/initiatives/${spec.initiative_id}/advisor`}
-            mode={stageMode(spec.stage)}
-            intro="Talk to the Advisor — it knows this spec, the stage, and what past initiatives learned."
-            shapeHint={spec.stage === "shape" || spec.stage === "discover"}
+            mode={stateMode(spec.state)}
+            intro="Talk to the Advisor — it knows this spec, where it stands, and what past initiatives learned."
+            shapeHint={spec.state === "draft"}
             specId={spec.initiative_id}
           />
           <SteeringRail initiativeId={spec.initiative_id} />

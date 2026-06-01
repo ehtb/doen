@@ -78,7 +78,7 @@ def _project_block(pctx: ProjectContext) -> str:
         "(reuse what applies; flag any contradiction or dependency):",
     ]
     for s in pctx.siblings:
-        lines.append(f"- {s.title} [{s.initiative_id}] · stage {s.stage}")
+        lines.append(f"- {s.title} [{s.initiative_id}] · {s.state}")
         lines += [f"    constraint: {c}" for c in s.constraints]
         if s.latest_decision:
             lines.append(f"    decision: {s.latest_decision}")

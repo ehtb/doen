@@ -13,8 +13,16 @@ from fastapi import APIRouter, Depends
 from app.database import get_store
 from app.exceptions import NotFoundError, ValidationError
 from app.models import Initiative, Message, Project
-from app.schemas import AdvisorTurn, AssignProject, CreateProject, PostMessage, ProjectDashboard
+from app.schemas import (
+    AdvisorTurn,
+    AssignProject,
+    CreateProject,
+    PostMessage,
+    ProjectDashboard,
+    ShapeWithAI,
+)
 from app.services import advisor as advisor_service
+from app.services import shaping as shaping_service
 from app.store import SpecStore
 
 router = APIRouter(tags=["projects"])
@@ -63,7 +71,21 @@ async def project_dashboard(project_id: str, store: _Store) -> ProjectDashboard:
         project=project,
         initiatives=await store.list_project_initiatives(project_id),
         open_decisions=await store.count_open_decisions(project_id),
+        attention=await store.get_project_attention(project_id),
     )
+
+
+@router.post("/projects/{project_id}/initiatives/shape", status_code=201)
+async def create_initiative_from_description(
+    project_id: str, body: ShapeWithAI, store: _Store
+) -> Initiative:
+    """Description-first creation (0011 C2/a3): the human describes what they want; the Advisor
+    drafts the whole spec (title, intent, constraints, discretion, acceptance, units) — all
+    proposed — and the initiative is scaffolded under it, ready to confirm item by item. A failed
+    LLM call -> 502 leaves nothing created; an unknown project -> 404."""
+    if not body.description.strip():
+        raise ValidationError("a description is required to start an initiative")
+    return await shaping_service.create_from_description(store, project_id, body.description)
 
 
 @router.post("/initiatives/{initiative_id}/project")

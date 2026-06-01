@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { Check, CircleCheck, CircleDot, Compass, Loader2, Lock, Plus, Sparkles } from "lucide-react";
+import { Check, CircleCheck, CircleDot, Compass, Loader2, Lock, Plus, Sparkles, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { AcceptanceCriterion, Spec, SpecItem } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import AttentionSurface from "./AttentionSurface";
 import {
   Select,
   SelectContent,
@@ -81,7 +82,7 @@ export default function SpecDocument({ initialSpec }: { initialSpec: Spec }) {
   const [shapeBusy, setShapeBusy] = useState(false);
 
   const iid = spec.initiative_id;
-  const canShape = spec.stage === "discover" || spec.stage === "shape";
+  const canShape = spec.state === "draft"; // shaping happens while the spec is still a draft (0011)
 
   async function shapeWithAI() {
     if (!shapeDesc.trim() || shapeBusy) return;
@@ -144,6 +145,11 @@ export default function SpecDocument({ initialSpec }: { initialSpec: Spec }) {
 
   const retireItem = (it: SpecItem) =>
     mutate(`/api/specs/${iid}/items/${it.id}/retire`, "POST", {});
+  // a6: per-item accept (confirm -> governing) and reject (delete + log to rail, D1 -> c)
+  const confirmItem = (it: SpecItem) =>
+    mutate(`/api/specs/${iid}/items/${it.id}/confirm`, "POST", {});
+  const rejectItem = (it: SpecItem) =>
+    mutate(`/api/specs/${iid}/items/${it.id}/reject`, "POST", {});
   const confirmAll = () => mutate(`/api/specs/${iid}/confirm-all`, "POST", {});
   const confirmSection = (section: Section) =>
     mutate(`/api/specs/${iid}/confirm-all`, "POST", { section });
@@ -215,7 +221,42 @@ export default function SpecDocument({ initialSpec }: { initialSpec: Spec }) {
                 </span>
               )}
             </p>
-            {it.status !== "retired" && (
+            {it.status === "proposed" && (
+              // a6: Accept / Reject are prominent on every proposed item — not buried in a menu.
+              // Confirming makes it governing; rejecting removes it (and logs to the rail).
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => confirmItem(it)}
+                  className="h-7 bg-confirmed px-2.5 text-white shadow-sm hover:bg-confirmed/90"
+                >
+                  <Check /> Accept
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => rejectItem(it)}
+                  className="h-7 px-2.5 text-proposed-foreground hover:bg-proposed/10"
+                >
+                  <X /> Reject
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-xs text-ink-faint"
+                  disabled={busy}
+                  onClick={() => {
+                    setEditingId(it.id);
+                    setDraft(it.text);
+                  }}
+                >
+                  Edit
+                </Button>
+              </div>
+            )}
+            {it.status === "confirmed" && (
               <div className="mt-2.5 flex gap-1 opacity-70 transition-opacity group-hover:opacity-100">
                 <Button
                   size="sm"
@@ -306,6 +347,17 @@ export default function SpecDocument({ initialSpec }: { initialSpec: Spec }) {
 
   return (
     <div>
+      {/* lead with what needs the human (0011 C4/a5); the full spec below is the reference */}
+      <div className="mb-6">
+        <AttentionSurface
+          spec={spec}
+          initiativeId={iid}
+          onConfirmItem={confirmItem}
+          onRejectItem={rejectItem}
+          busy={busy}
+        />
+      </div>
+
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <p className="font-mono text-[11px] tracking-wide text-ink-faint">
           the living spec · v{spec.version} — only confirmed items bind executors

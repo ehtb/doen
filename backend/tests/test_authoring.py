@@ -215,3 +215,45 @@ def test_confirm_all_scoped_to_one_section(client: TestClient, make_initiative: 
     saved = r.json()
     assert saved["constraints"][0]["status"] == "confirmed"
     assert saved["discretion"][0]["status"] == "proposed"  # other section untouched
+
+
+# --- 0011 a6 / D1 -> c: rejecting a proposed item deletes it + logs to the rail ---------
+def test_reject_proposed_item_deletes_and_logs_to_rail(
+    client: TestClient, make_initiative: Callable[[], str]
+):
+    iid = make_initiative()
+    spec = _put_with_proposed(client, iid)  # v1, one ai_proposed constraint
+    item = spec["constraints"][0]
+
+    r = client.post(f"/specs/{iid}/items/{item['id']}/reject", json={"version": spec["version"]})
+    assert r.status_code == 200, r.text
+    after = r.json()
+    # gone from the spec entirely (a clean contract, not a dimmed/retired row), version bumped
+    assert after["version"] == spec["version"] + 1
+    assert all(c["id"] != item["id"] for c in after["constraints"])
+
+    # D1 -> c: the rejection is preserved in the conversation rail (the Advisor's history)
+    msgs = client.get(f"/initiatives/{iid}/messages").json()
+    assert any(
+        m["role"] == "advisor" and "rejected" in m["content"] and item["text"] in m["content"]
+        for m in msgs
+    )
+
+
+def test_reject_only_applies_to_proposed_items(
+    client: TestClient, make_initiative: Callable[[], str]
+):
+    # a confirmed item is governed — it's retired/edited, never "rejected" (422); unknown -> 404
+    iid = make_initiative()
+    spec = _put_with_proposed(client, iid)  # v1
+    item = spec["constraints"][0]
+    confirmed = client.post(
+        f"/specs/{iid}/items/{item['id']}/confirm", json={"version": spec["version"]}
+    ).json()  # v2, now confirmed
+    r = client.post(
+        f"/specs/{iid}/items/{item['id']}/reject", json={"version": confirmed["version"]}
+    )
+    assert r.status_code == 422, r.text
+    assert client.post(
+        f"/specs/{iid}/items/nope/reject", json={"version": confirmed["version"]}
+    ).status_code == 404

@@ -16,17 +16,26 @@ from typing import Any
 from pydantic import BaseModel
 
 from app.exceptions import NotFoundError, ValidationError
-from app.models import AcceptanceCriterion, ContextHit, Spec, SpecItem, Verify
+from app.models import (
+    AcceptanceCriterion,
+    ContextHit,
+    Initiative,
+    Spec,
+    SpecItem,
+    Verify,
+    WorkUnit,
+)
 from app.providers.llm import LLMError, StructuredLLM, get_shaping_llm
 from app.store import SpecStore
 
 SHAPING_SYSTEM_PROMPT = """You are shaping a Doen spec — the living-spec artifact that governs \
 how a feature gets built. A good spec lets an executor build the right thing and lets a human \
-verify it without reading diffs. From a plain-language feature description (and any relevant \
-patterns from past initiatives), draft a complete, well-formed spec. The human will confirm, \
-edit, or reject each item — so make it a strong first draft, not the final word.
+verify it without reading diffs. From a plain-language description (and any relevant patterns \
+from past initiatives), draft a complete, well-formed spec. The human will confirm, edit, or \
+reject each item — so make it a strong first draft, not the final word.
 
 Fill each section with discipline:
+- title: a short, imperative name for the initiative — a few words, drawn from the description.
 - intent: one short paragraph, plain prose — the problem and the desired outcome, in the human \
 voice. Not a task list.
 - constraints: hard must / must-not lines the executor will not cross. Each a clear assertion — \
@@ -41,9 +50,18 @@ resolve silently.
 test, behavior, metric, or human_judgment — with a short detail of how it's checked. Avoid vague \
 criteria. Mark the single most important one as the HEADLINE by appending " [HEADLINE]" to its \
 text.
+- units: independently verifiable slices of the work, each with a short title and a concrete \
+scope, plus the acceptance criteria it satisfies (by 0-based index into the acceptance list). \
+The executor builds one unit at a time.
+
+Size the spec to the work — infer the scale from the description, never ask and never use a size \
+label. A small bug fix or tweak ("fix the misaligned login button") gets a LIGHTWEIGHT spec: \
+about one constraint, one acceptance criterion, and one unit. A substantial feature gets the FULL \
+structure: several constraints, multiple criteria, and a handful of units. Don't pad a small \
+change into a heavy spec, and don't compress a large one — match the structure to the real size.
 
 Hard rules:
-- No estimation anywhere — no story points, hours, or velocity.
+- No estimation anywhere — no story points, hours, or velocity. Units are sized by scope, not time.
 - Verifiable acceptance criteria only — if you can't say how it's checked, it doesn't belong.
 - Don't invent intent the description doesn't support. Keep it tight: a spec is a contract, not \
 an essay.
@@ -53,6 +71,10 @@ Return the draft via the proposed_spec tool, matching its schema exactly."""
 SPEC_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
+        "title": {
+            "type": "string",
+            "description": "A short imperative name for the initiative — a few words.",
+        },
         "intent": {
             "type": "string",
             "description": "One short paragraph, plain prose: the problem and the desired outcome.",
@@ -85,19 +107,53 @@ SPEC_SCHEMA: dict[str, Any] = {
                 "required": ["text", "verify_kind", "verify_detail"],
             },
         },
+        "units": {
+            "type": "array",
+            "description": "Independently verifiable work units. Size to the work: ~1 for a bug "
+            "fix, several for a feature.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "A short title for the unit."},
+                    "scope": {
+                        "type": "string",
+                        "description": "What this unit covers, concretely.",
+                    },
+                    "criteria": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "0-based indexes into the acceptance list this unit satisfies.",
+                    },
+                },
+                "required": ["title", "scope"],
+            },
+        },
     },
-    "required": ["intent", "constraints", "discretion", "acceptance"],
+    "required": ["title", "intent", "constraints", "discretion", "acceptance", "units"],
 }
+
+
+class ProposedUnit(BaseModel):
+    """A work unit the Advisor proposes during shaping (0011 C2): title + scope, and which
+    acceptance criteria it satisfies (by 0-based index into the acceptance list, resolved to
+    real criterion ids once the spec is persisted)."""
+
+    title: str
+    scope: str
+    criterion_indexes: list[int] = []
 
 
 class ShapingResult(BaseModel):
     """The proposed spec components — all ai_proposed/proposed, not yet persisted — plus the
-    memory priors that informed them (for transparency / a4)."""
+    memory priors that informed them (for transparency / a4). title + units are 0011 (C2): the
+    Advisor names the initiative and decomposes it, sized to the work (C6/a7)."""
 
+    title: str = ""
     intent: str
     constraints: list[SpecItem]
     discretion: list[SpecItem]
     acceptance: list[AcceptanceCriterion]
+    units: list[ProposedUnit] = []
     context_used: list[ContextHit]
 
 
@@ -134,29 +190,41 @@ def _parse(raw: dict[str, Any], hits: list[ContextHit]) -> ShapingResult:
             )
             for a in raw["acceptance"]
         ]
+        units = [
+            ProposedUnit(
+                title=str(u["title"]).strip(),
+                scope=str(u["scope"]).strip(),
+                criterion_indexes=[int(i) for i in (u.get("criteria") or [])],
+            )
+            for u in (raw.get("units") or [])
+        ]
     except (KeyError, TypeError, ValueError) as e:
         raise LLMError(f"shaping output did not match the spec schema: {e}") from e
     return ShapingResult(
+        title=str(raw.get("title", "")).strip(),
         intent=str(raw.get("intent", "")).strip(),
         constraints=constraints,
         discretion=discretion,
         acceptance=acceptance,
+        units=units,
         context_used=hits,
     )
 
 
 async def shape_spec(
     store,
-    initiative_id: str,
     description: str,
     *,
+    project_id: str | None = None,
     llm: StructuredLLM | None = None,
     context_limit: int = 6,
 ) -> ShapingResult:
     """Draft a proposed spec from a description. get_context runs first (constraint 6 / a4);
-    if the corpus is empty it returns nothing and shaping proceeds without priors."""
+    when the initiative belongs to a project the search is project-scoped (0010 constraint 4),
+    so sibling patterns surface first. An empty corpus returns nothing and shaping proceeds
+    without priors."""
     llm = llm or get_shaping_llm()
-    hits = await store.get_context(description, limit=context_limit)
+    hits = await store.get_context(description, limit=context_limit, project_id=project_id)
     raw = await llm.complete_structured(
         system=SHAPING_SYSTEM_PROMPT,
         user=_build_user_message(description, hits),
@@ -175,10 +243,59 @@ async def shape_and_persist(store: SpecStore, initiative_id: str, description: s
     spec = await store.get_spec(initiative_id)
     if spec is None:
         raise NotFoundError(f"no spec for initiative {initiative_id}")
-    result = await shape_spec(store, initiative_id, description)
+    init = await store.get_initiative(initiative_id)
+    project_id = init.project_id if init else None
+    result = await shape_spec(store, description, project_id=project_id)
     spec.constraints = [i for i in spec.constraints if i.status != "proposed"] + result.constraints
     spec.discretion = [i for i in spec.discretion if i.status != "proposed"] + result.discretion
     spec.acceptance = [i for i in spec.acceptance if i.status != "proposed"] + result.acceptance
     if not spec.intent.strip() and result.intent:
         spec.intent = result.intent
     return await store.save_spec(spec)
+
+
+def _fallback_title(description: str) -> str:
+    """A title when the model didn't return one — the first few words of the description, so the
+    initiative is still named (and gets a sensible slug)."""
+    words = description.split()
+    return " ".join(words[:8]) or "Untitled initiative"
+
+
+async def create_from_description(
+    store: SpecStore,
+    project_id: str,
+    description: str,
+    *,
+    llm: StructuredLLM | None = None,
+) -> Initiative:
+    """Creation IS shaping (0011 C2): from a free-text description, the Advisor drafts the whole
+    spec — title, intent, constraints, discretion, acceptance, and proposed units — all
+    ai_proposed for the human to confirm item by item. Shapes first (a failed LLM call -> 502
+    leaves nothing created), then scaffolds the initiative under its generated title, persists the
+    proposed items, and proposes the units. Every initiative belongs to a project (no orphan
+    specs) — an unknown project_id -> 404."""
+    if not description.strip():
+        raise ValidationError("a description is required to start an initiative")
+    if await store.get_project(project_id) is None:
+        raise NotFoundError(f"no project {project_id}")
+
+    result = await shape_spec(store, description, project_id=project_id, llm=llm)
+    title = result.title.strip() or _fallback_title(description)
+
+    init = await store.create_initiative(title, project_id)
+    spec = await store.get_spec(init.id)
+    assert spec is not None  # just scaffolded by create_initiative
+    spec.intent = result.intent
+    spec.constraints = result.constraints
+    spec.discretion = result.discretion
+    spec.acceptance = result.acceptance
+    saved = await store.save_spec(spec)
+
+    # propose the units, resolving each unit's criterion indexes to the now-persisted ids
+    criterion_ids = [a.id for a in saved.acceptance]
+    for u in result.units:
+        cids = [criterion_ids[i] for i in u.criterion_indexes if 0 <= i < len(criterion_ids)]
+        await store.create_unit(
+            WorkUnit(spec_id=init.id, title=u.title, scope=u.scope, criterion_ids=cids)
+        )
+    return init

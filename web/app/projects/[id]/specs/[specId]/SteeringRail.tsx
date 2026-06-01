@@ -59,7 +59,7 @@ export default function SteeringRail({ initiativeId }: { initiativeId: string })
   const waiting = decisions?.length ?? 0;
 
   return (
-    <aside className="animate-rise [animation-delay:120ms] overflow-hidden rounded-2xl bg-rail text-rail-foreground shadow-2xl ring-1 ring-black/20">
+    <aside id="steering-rail" className="animate-rise [animation-delay:120ms] scroll-mt-6 overflow-hidden rounded-2xl bg-rail text-rail-foreground shadow-2xl ring-1 ring-black/20">
       <div className="border-b border-rail-border px-5 py-4">
         <div className="flex items-baseline justify-between">
           <span className="font-serif text-[15px] font-semibold">Steering rail</span>

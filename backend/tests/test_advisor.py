@@ -1,7 +1,7 @@
 """u2 — the Doen Advisor core (spec 0009).
 
-Covers a2 (responses grounded in the confirmed spec, the stage, and relevant memory),
-a5 (the prompt adapts to the lifecycle stage; shape produces proposals), and D2 -> c
+Covers a2 (responses grounded in the confirmed spec, the lifecycle state, and relevant memory),
+a5 (the prompt adapts to the lifecycle state; the draft state produces proposals), and D2 -> c
 (the "shape this initiative:" rail command reuses the 0006 full-draft generation, surfaced
 as proposal cards, with NO silent spec write — constraint 4).
 
@@ -119,24 +119,25 @@ def _store_run(
     return asyncio.run(go())
 
 
-# --- a5: the prompt is stage-aware (pure) -------------------------------------
-def test_system_prompt_adapts_to_stage():
-    shape = build_system_prompt("shape")
-    verify = build_system_prompt("verify")
-    learn = build_system_prompt("learn")
-    assert "**shape** stage" in shape and "PROPOSE concrete spec items" in shape
-    assert "**verify** stage" in verify and "verdict" in verify and "never approve work" in verify
-    assert "**learn** stage" in learn and "outcome summary" in learn
-    # the spec-contract discipline is present at every stage (constraint 3)
-    for prompt in (shape, verify, learn):
+# --- a5: the prompt is state-aware (pure) -------------------------------------
+def test_system_prompt_adapts_to_state():
+    draft = build_system_prompt("draft")
+    building = build_system_prompt("building")
+    complete = build_system_prompt("complete")
+    assert "**draft** state" in draft and "PROPOSE concrete spec items" in draft
+    assert "**building** state" in building and "verdict" in building
+    assert "never approve work yourself" in building
+    assert "**complete** state" in complete and "outcome summary" in complete
+    # the spec-contract discipline is present in every state (constraint 3)
+    for prompt in (draft, building, complete):
         assert "No estimation" in prompt and "constraints" in prompt
-    assert shape != verify != learn
+    assert draft != building != complete
 
 
 # --- a2: the user message grounds in spec + memory + history (pure) -----------
 def test_user_message_grounds_in_spec_memory_history():
     spec = Spec(
-        initiative_id="x", title="Passwordless", version=2, stage="shape",
+        initiative_id="x", title="Passwordless", version=2, state="draft",
         intent="Sign in without a password.",
         constraints=[
             SpecItem(text="No password is ever stored.", provenance="human", status="confirmed"),
@@ -150,7 +151,7 @@ def test_user_message_grounds_in_spec_memory_history():
         ],
     )
     ctx = ConversationContext(
-        initiative=Initiative(id="x", title="Passwordless", stage="shape", project_id="build-doen"),
+        initiative=Initiative(id="x", title="Passwordless", state="draft", project_id="build-doen"),
         spec=spec,
         messages=[
             Message(initiative_id="x", role="human", content="how should sign-in work?"),
@@ -166,16 +167,15 @@ def test_user_message_grounds_in_spec_memory_history():
     assert "how should sign-in work?" in um               # conversation history
 
 
-# --- a2/a5: a live turn feeds the grounded, stage-named context to the LLM ----
+# --- a2/a5: a live turn feeds the grounded, state-named context to the LLM ----
 def test_advise_grounds_and_persists(make_initiative: Callable[[], str]):
-    iid = make_initiative()
+    iid = make_initiative()  # born in draft (0011) — the Advisor's shaping mode
     other = make_initiative()
     distinctive = "single-use magic-link sign-in that expires after ten minutes"
     fake = FakeLLM()
 
     def go(store: SpecStore):
         async def inner():
-            await store.set_stage(iid, "shape")
             spec = await store.get_spec(iid)
             assert spec is not None
             spec.constraints.append(
@@ -197,7 +197,7 @@ def test_advise_grounds_and_persists(make_initiative: Callable[[], str]):
 
     call = fake.calls[0]
     assert call["schema_name"] == "advisor_turn"
-    assert "**shape** stage" in call["system"]                 # a5 — current stage drives the mode
+    assert "**draft** state" in call["system"]                 # a5 — current state drives the mode
     assert "No password is ever stored." in call["user"]       # a2 — confirmed spec
     assert distinctive in call["user"]                         # a2 — relevant memory retrieved
 
@@ -209,7 +209,6 @@ def test_advise_proposals_become_cards(make_initiative: Callable[[], str]):
 
     def go(store: SpecStore):
         async def inner():
-            await store.set_stage(iid, "shape")
             return await advise(store, iid, "help me shape the constraints", llm=fake)
 
         return inner()

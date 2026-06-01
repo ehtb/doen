@@ -36,16 +36,6 @@ class StaleSpecError(ConflictError):
         self.initiative_id, self.expected, self.found = initiative_id, expected, found
 
 
-class InvalidStageTransition(ValidationError):
-    """An initiative was asked to jump stages — only one step (fwd/back) is legal -> 422."""
-
-    def __init__(self, initiative_id: str, current: str, target: str):
-        super().__init__(
-            f"initiative {initiative_id}: {current} -> {target} is not a one-step lifecycle move"
-        )
-        self.initiative_id, self.current, self.target = initiative_id, current, target
-
-
 class InvalidTransition(ValidationError):
     """A work unit was asked to make a status change the state machine forbids -> 422."""
 

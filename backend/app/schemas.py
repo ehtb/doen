@@ -16,24 +16,20 @@ from app.config import DEV_USER_ID
 from app.models import (
     Decision,
     Initiative,
+    InitiativeAttention,
     Memory,
     Message,
     Project,
     Section,
-    Stage,
     Verify,
     WorkUnit,
 )
 
 
-# --- initiatives + lifecycle ---------------------------------------------------------
+# --- initiatives ---------------------------------------------------------------------
 class CreateInitiative(BaseModel):
     title: str
     project_id: str  # every initiative belongs to a project (0010, no orphan specs)
-
-
-class SetStage(BaseModel):
-    stage: Stage  # the target stage — must be one lifecycle step from the current one
 
 
 # --- projects (0010) -----------------------------------------------------------------
@@ -47,13 +43,15 @@ class AssignProject(BaseModel):
 
 
 class ProjectDashboard(BaseModel):
-    """The project dashboard view (0010 a2): the project, its grouped initiatives, and a
-    project-wide aggregate (open decisions across all of them). Stage distribution is derived
-    on the client from the initiatives list."""
+    """The project dashboard view (0010 a2 / 0011 a8): the project, its grouped initiatives, a
+    project-wide aggregate (open decisions across all of them), and per-initiative attention
+    counts keyed by initiative id. State distribution is derived on the client from the
+    initiatives list."""
 
     project: Project
     initiatives: list[Initiative]
     open_decisions: int  # open escalations across every initiative in the project
+    attention: dict[str, InitiativeAttention] = {}
 
 
 # --- steering rail -------------------------------------------------------------------

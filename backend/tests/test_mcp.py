@@ -40,8 +40,8 @@ async def _flow() -> None:
     # Seed an initiative + spec for get_spec to find. Every initiative belongs to a project
     # (no orphan specs) — the always-present build-doen project owns this test one.
     await pool.execute(
-        "INSERT INTO initiatives (id, org_id, owner_id, stage, project_id) "
-        "VALUES ($1,$2,$3,'shape','build-doen')",
+        "INSERT INTO initiatives (id, org_id, owner_id, state, project_id) "
+        "VALUES ($1,$2,$3,'draft','build-doen')",
         iid, DEV_ORG_ID, DEV_USER_ID,
     )
     await store.save_spec(Spec(initiative_id=iid, title="MCP demo", intent="prove a4"))

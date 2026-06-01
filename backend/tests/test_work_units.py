@@ -343,3 +343,36 @@ def test_resolving_decision_resumes_blocked_unit(
     resumed = _store_run(lambda s: s.get_unit(u.id))
     assert resumed.status == "in_progress"
     assert resumed.blocked_on is None
+
+
+# --- 0011 a6 / D1 -> c: rejecting a proposed unit deletes it + logs to the rail ---------
+def test_reject_proposed_unit_deletes_and_logs(
+    client: TestClient, make_initiative: Callable[[], str]
+):
+    iid = make_initiative()
+    _spec_row(client, iid)
+    unit = WorkUnit(spec_id=iid, title="throwaway unit", scope="not wanted")
+    _store_run(lambda s: s.create_unit(unit))
+
+    r = client.post(f"/units/{unit.id}/reject")
+    assert r.status_code == 200, r.text
+    assert _store_run(lambda s: s.get_unit(unit.id)) is None  # deleted
+
+    msgs = _store_run(lambda s: s.list_messages(iid))
+    assert any(
+        m.role == "advisor" and "rejected" in m.content and "throwaway unit" in m.content
+        for m in msgs
+    )
+
+
+def test_reject_only_applies_to_proposed_units(
+    client: TestClient, make_initiative: Callable[[], str]
+):
+    iid = make_initiative()
+    _spec_row(client, iid)
+    unit = WorkUnit(spec_id=iid, title="started unit", scope="x")
+    _store_run(lambda s: s.create_unit(unit))
+    _store_run(lambda s: s.confirm_unit(unit.id))  # proposed -> ready (no longer a proposal)
+
+    assert client.post(f"/units/{unit.id}/reject").status_code == 422
+    assert client.post("/units/nope/reject").status_code == 404

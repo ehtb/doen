@@ -16,6 +16,13 @@ from app.store import SpecStore
 
 _SECTIONS: tuple[Section, ...] = ("constraints", "discretion", "acceptance")
 
+# Human-readable section label for the rail note left when a proposal is rejected (0011 D1 -> c).
+_ITEM_LABEL: dict[Section, str] = {
+    "constraints": "constraint",
+    "discretion": "discretion item",
+    "acceptance": "acceptance criterion",
+}
+
 
 def _find_item(spec: Spec, item_id: str) -> SpecItem | None:
     for section in _SECTIONS:
@@ -23,6 +30,14 @@ def _find_item(spec: Spec, item_id: str) -> SpecItem | None:
             if it.id == item_id:
                 return it
     return None
+
+
+def _locate_item(spec: Spec, item_id: str) -> tuple[Section | None, SpecItem | None]:
+    for section in _SECTIONS:
+        for it in getattr(spec, section):
+            if it.id == item_id:
+                return section, it
+    return None, None
 
 
 async def _load_at(store: SpecStore, initiative_id: str, expected_version: int) -> Spec:
@@ -120,6 +135,29 @@ async def retire_item(store: SpecStore, initiative_id: str, item_id: str, versio
     # Soft state: it stays in the document for history but no longer governs an executor.
     it.status = "retired"
     return await store.save_spec(spec)
+
+
+async def reject_item(store: SpecStore, initiative_id: str, item_id: str, version: int) -> Spec:
+    """Reject a proposed item (0011 C5/a6): remove it from the spec entirely. Per D1 -> c the
+    spec stays a clean contract — the rejection isn't kept as a dimmed/retired row — but the
+    context is preserved by logging it to the conversation rail, so the Advisor's history records
+    what it proposed and that the human said no (and won't re-propose it). Only a proposed item
+    can be rejected; a confirmed item is governed and uses retire/edit instead."""
+    spec = await _load_at(store, initiative_id, version)
+    section, it = _locate_item(spec, item_id)
+    if it is None or section is None:
+        raise NotFoundError(f"no item {item_id} on this spec")
+    if it.status != "proposed":
+        raise ValidationError(f"only a proposed item can be rejected (it is {it.status})")
+    getattr(spec, section).remove(it)
+    saved = await store.save_spec(spec)
+    await store.append_message(
+        initiative_id,
+        "advisor",
+        f'Noted — you rejected the proposed {_ITEM_LABEL[section]}: "{it.text}". '
+        "I've removed it from the spec and won't re-propose it.",
+    )
+    return saved
 
 
 async def confirm_all(

@@ -33,6 +33,13 @@ async def confirm_unit(unit_id: str, store: _Store) -> WorkUnit:
     return await store.confirm_unit(unit_id)
 
 
+@router.post("/units/{unit_id}/reject")
+async def reject_unit(unit_id: str, store: _Store) -> WorkUnit:
+    """Reject a proposed unit (0011 a6): delete it and log to the rail (D1 -> c). Only a
+    proposed unit is rejectable (ValidationError -> 422). Returns the removed unit."""
+    return await store.reject_unit(unit_id)
+
+
 @router.post("/units/{unit_id}/verdict")
 async def record_verdict(unit_id: str, body: UnitVerdict, store: _Store) -> WorkUnit:
     return await store.record_verdict(unit_id, body.verdict, body.feedback, body.decided_by)

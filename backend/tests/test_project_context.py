@@ -165,8 +165,8 @@ def test_sibling_summary_is_compact(
     assert ctx is not None
     assert ctx.name == "Webhook Delivery" and ctx.intent
     sib = next(s for s in ctx.siblings if s.title == "Retry Queue")
-    # title + stage + constraint headlines (capped) + total count + latest resolved decision
-    assert sib.stage == "discover"
+    # title + state + constraint headlines (capped) + total count + latest resolved decision
+    assert sib.state == "draft"
     assert sib.constraint_count == 3
     assert len(sib.constraints) == 3  # capped at the headline limit (SIBLING_CONSTRAINT_HEADLINES)
     assert any("Postgres + Redis" in c for c in sib.constraints)
@@ -209,7 +209,7 @@ def test_prompt_renders_project_and_coherence(
 
     ctx = _store_run(go)
     user = build_user_message(ctx)
-    system = build_system_prompt(ctx.initiative.stage, in_project=ctx.project is not None)
+    system = build_system_prompt(ctx.initiative.state, in_project=ctx.project is not None)
 
     # the user message carries the compact sibling block — title, the decision, a constraint
     assert "# PROJECT CONTEXT — Webhook Delivery" in user
@@ -223,7 +223,7 @@ def test_prompt_renders_project_and_coherence(
     # with no project context, the render is empty + the coherence block is omitted (defensive)
     ctx.project = None
     assert "# PROJECT CONTEXT" not in build_user_message(ctx)
-    assert PROJECT_COHERENCE_PROMPT not in build_system_prompt(ctx.initiative.stage)
+    assert PROJECT_COHERENCE_PROMPT not in build_system_prompt(ctx.initiative.state)
 
 
 # --- a4: get_context is project-first, source-tagged, with a global fallback --

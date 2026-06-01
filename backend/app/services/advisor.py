@@ -1,11 +1,11 @@
-"""The Doen Advisor (spec 0009 u2): a stage-aware thinking partner on the conversation rail.
+"""The Doen Advisor (spec 0009 u2): a state-aware thinking partner on the conversation rail.
 
 The prompt is the product. The Advisor is grounded, every turn, in four things (constraint
 3): the spec-contract discipline (distilled), the current spec, relevant organisational
-memory, and the recent conversation. Its *mode* shifts with the initiative's lifecycle stage
-— drafting spec items in shape, surfacing risks in implement, weighing evidence in verify,
-drafting outcomes in learn — while never crossing the constraint/discretion boundary or
-making a call that belongs to the human (a9).
+memory, and the recent conversation. Its *mode* shifts with the initiative's lifecycle state
+(0011: draft / building / complete) — drafting spec items while a spec is in Draft, surfacing
+risks and weighing submitted evidence while Building, drafting outcomes once Complete — while
+never crossing the constraint/discretion boundary or making a call that belongs to the human (a9).
 
 It reuses the 0006 LLM provider (constraint 2: one AI path) and forces a structured turn —
 a `reply` plus optional `proposals` the frontend renders as cards. Proposals are never
@@ -64,31 +64,27 @@ don't decide. Surface options and a recommendation — never make the call that 
 human, and never approve work yourself.
 - Be concise and concrete, in a sharp colleague's voice. Say what matters; skip the preamble."""
 
-STAGE_GUIDANCE: dict[str, str] = {
-    "discover": "The initiative is still being framed. Help the human articulate the problem and "
-    "whether it's worth a spec at all. Ask the sharp questions; surface what's unclear or unstated. "
-    "Hold off on drafting spec items unless asked.",
-    "shape": "This is where the spec is authored. Through dialogue, help sharpen intent, "
-    "constraints, discretion, and acceptance — and PROPOSE concrete spec items as you go. Each "
-    "constraint a hard must/must-not; each acceptance criterion verifiable and tagged. The human "
-    "confirms each proposal via its card, so make strong first drafts, not the final word. Don't "
-    "re-propose something already in the spec below.",
-    "bet": "Help the human decide whether to commit to building this. Weigh the intent against the "
-    "risks; name the biggest unknowns and what would make this not worth doing. Hold off on new "
-    "spec items unless asked.",
-    "decompose": "Help break the work into independently verifiable units, each tracing to "
-    "acceptance criteria. Propose a unit breakdown when asked. Never size or sequence by effort or "
-    "time — no estimation.",
-    "implement": "An executor is building against the confirmed spec. Surface risks, likely "
-    "pitfalls, and relevant prior patterns; point to the constraints that bind this work and the "
-    "acceptance criteria it must satisfy. You guide — you don't write the code or the spec.",
-    "verify": "Work has been submitted for judgment. Review the evidence against each acceptance "
-    "criterion: where it aligns, where there are gaps, what concerns remain. Frame these as "
-    "preliminary notes for the human verifier — only the human issues the verdict, and you never "
-    "approve work yourself.",
-    "learn": "The initiative is closing. From its history — the intent, the decisions made and "
-    "why, the verification outcomes — draft a concise outcome summary and the key learnings worth "
-    "remembering. The human corrects and confirms before anything is written to memory.",
+# The lifecycle is three inferred states now (0011 constraint 1). The Advisor's mode shifts with
+# the state: shaping while Draft, guiding + reviewing while Building, reflecting once Complete.
+STATE_GUIDANCE: dict[str, str] = {
+    "draft": "The spec is still being shaped — nothing is under construction yet. Through dialogue, "
+    "help sharpen intent, constraints, discretion, and acceptance, and PROPOSE concrete spec items "
+    "as you go: each constraint a hard must/must-not, each acceptance criterion verifiable and "
+    "tagged. When the shape is solid, help break the work into independently verifiable units, each "
+    "tracing to acceptance criteria — never sized or sequenced by effort or time (no estimation). "
+    "The human confirms each proposal via its card, so make strong first drafts, not the final "
+    "word. Don't re-propose something already in the spec below.",
+    "building": "Work is under construction — an executor is building against the confirmed spec and "
+    "submitting units for judgment. Surface risks, likely pitfalls, and relevant prior patterns; "
+    "point to the constraints that bind this work and the acceptance criteria it must satisfy. When "
+    "a unit is submitted, review its evidence against each criterion — where it aligns, where there "
+    "are gaps, what concerns remain — as preliminary notes for the human verifier. Only the human "
+    "issues the verdict, and you never approve work yourself. You guide; you don't write the code, "
+    "and you hold off on reshaping the spec unless asked.",
+    "complete": "The initiative is done — every unit is verified and the work is closing out. From "
+    "its history — the intent, the decisions made and why, the verification outcomes — draft a "
+    "concise outcome summary and the key learnings worth remembering. The human corrects and "
+    "confirms before anything is written to memory.",
 }
 
 PROJECT_COHERENCE_PROMPT = """This initiative belongs to a PROJECT — a body of related \
@@ -177,15 +173,15 @@ class AdvisorReply(BaseModel):
         return {"proposals": [p.model_dump() for p in self.proposals]} if self.proposals else {}
 
 
-def build_system_prompt(stage: str, *, in_project: bool = False) -> str:
-    """Identity + spec-contract discipline + the stage's mode (+ project coherence when the
-    initiative is in a project) + the output contract. The stage line makes the same Advisor
+def build_system_prompt(state: str, *, in_project: bool = False) -> str:
+    """Identity + spec-contract discipline + the state's mode (+ project coherence when the
+    initiative is in a project) + the output contract. The state line makes the same Advisor
     shift behaviour across the lifecycle (a5); the project block widens it to reason across
     siblings (0010 a3/a5) — one Advisor, scoped (D2 -> a)."""
-    guidance = STAGE_GUIDANCE.get(stage, STAGE_GUIDANCE["shape"])
+    guidance = STATE_GUIDANCE.get(state, STATE_GUIDANCE["draft"])
     parts = [
         ADVISOR_BASE_PROMPT,
-        f"This initiative is at the **{stage}** stage. {guidance}",
+        f"This initiative is in the **{state}** state. {guidance}",
     ]
     if in_project:
         parts.append(PROJECT_COHERENCE_PROMPT)
@@ -215,7 +211,7 @@ def _render_spec(spec: Spec | None) -> str:
     if spec is None:
         return "# CURRENT SPEC\n(no spec yet)"
     lines = [
-        f"# CURRENT SPEC — {spec.title} (v{spec.version}, stage {spec.stage})",
+        f"# CURRENT SPEC — {spec.title} (v{spec.version}, {spec.state})",
         f"Intent: {spec.intent.strip() or '(not yet written)'}",
         "",
         *_render_items("Constraints", spec.constraints),
@@ -241,7 +237,7 @@ def _render_project_block(proj: ProjectContext, *, header: str, lead: str) -> st
         lines.append("  (none yet)")
     for s in proj.siblings:
         lines.append(
-            f"- {s.title} [{s.initiative_id}] · stage {s.stage} · "
+            f"- {s.title} [{s.initiative_id}] · {s.state} · "
             f"{s.constraint_count} confirmed constraint(s)"
         )
         lines += [f"    constraint: {c}" for c in s.constraints]
@@ -317,7 +313,7 @@ def _coerce_proposal(p: dict[str, Any]) -> Proposal:
 
 async def _converse(ctx: ConversationContext, llm: StructuredLLM) -> AdvisorReply:
     raw = await llm.complete_structured(
-        system=build_system_prompt(ctx.initiative.stage, in_project=ctx.project is not None),
+        system=build_system_prompt(ctx.initiative.state, in_project=ctx.project is not None),
         user=build_user_message(ctx),
         schema=ADVISOR_SCHEMA,
         schema_name="advisor_turn",
@@ -341,11 +337,11 @@ def _proposals_from_draft(draft: ShapingResult) -> list[Proposal]:
 
 
 async def _shape_via_rail(
-    store: SpecStore, initiative_id: str, description: str, llm: StructuredLLM
+    store: SpecStore, project_id: str | None, description: str, llm: StructuredLLM
 ) -> AdvisorReply:
     """D2 -> c: reuse the 0006 full-draft generation, but surface the whole draft as proposal
     cards instead of persisting it. The human confirms what fits, then refines by talking."""
-    draft = await shape_spec(store, initiative_id, description, llm=llm)
+    draft = await shape_spec(store, description, project_id=project_id, llm=llm)
     proposals = _proposals_from_draft(draft)
     intent_note = f' Proposed intent: "{draft.intent}".' if draft.intent else ""
     reply = (
@@ -370,7 +366,7 @@ async def advise(
     *,
     llm: StructuredLLM | None = None,
 ) -> AdvisorTurn:
-    """One rail turn: ground the Advisor, generate a stage-aware reply (with any proposal
+    """One rail turn: ground the Advisor, generate a state-aware reply (with any proposal
     cards), and persist the exchange. The human turn + Advisor reply are stored only after a
     successful generation, so a failed LLM call (-> 502) leaves no orphan message."""
     init = await store.get_initiative(initiative_id)
@@ -381,8 +377,8 @@ async def advise(
     llm = llm or get_advisor_llm()
 
     description = _shape_command(content)
-    if description is not None and init.stage in ("discover", "shape"):
-        reply = await _shape_via_rail(store, initiative_id, description, llm)
+    if description is not None and init.state == "draft":
+        reply = await _shape_via_rail(store, init.project_id, description, llm)
     else:
         ctx = await assemble_context(store, initiative_id, pending_human=content)
         reply = await _converse(ctx, llm)

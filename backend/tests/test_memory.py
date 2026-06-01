@@ -190,13 +190,13 @@ def test_create_memory_embeds(make_initiative: Callable[[], str]):
 
 
 def test_learn_review_and_submit(client, make_initiative: Callable[[], str], monkeypatch):
-    # a4 — review shows resolved decisions; a5 — submit records memory + advances to learn.
-    # Embeddings are faked (monkeypatch) so the API path stays offline.
+    # a4 — review shows resolved decisions; a5 — submit records a memory row. The lifecycle
+    # state is inferred (0011): with no work units this initiative stays Draft after capture —
+    # the all-units-done + learn -> Complete rule is covered in test_initiatives. Embeddings are
+    # faked (monkeypatch) so the API path stays offline.
     monkeypatch.setattr("app.store.get_embedding_provider", lambda: FakeEmbedder())
     iid = make_initiative()
     _run(_raise_resolve(iid))
-    for target in ["shape", "bet", "decompose", "implement", "verify"]:
-        assert client.post(f"/initiatives/{iid}/stage", json={"stage": target}).status_code == 200
 
     # a4 — the review carries the resolved decision with its chosen option + rationale
     review = client.get(f"/initiatives/{iid}/learn").json()
@@ -207,14 +207,13 @@ def test_learn_review_and_submit(client, make_initiative: Callable[[], str], mon
     )
     assert review["memory"] == []
 
-    # a5 — submitting an outcome writes a memory row and marks the initiative done (learn)
+    # a5 — submitting an outcome writes a memory row
     r = client.post(
         f"/initiatives/{iid}/learn",
         json={"summary": "Closed out the lifecycle slice.", "learnings": "the loop compounds"},
     )
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["initiative"]["stage"] == "learn"
     assert len(body["memory"]) == 1
     assert body["memory"][0]["summary"].startswith("Closed out")
 

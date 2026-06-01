@@ -6,7 +6,7 @@ Architecture:
              rebuildable from Postgres, never the other way round.
 
 Relational surface (see migrations/):
-  initiatives (id pk, org_id, owner_id, appetite, stage, title, created_at, updated_at)
+  initiatives (id pk, org_id, owner_id, appetite, state, title, created_at, updated_at)
   specs       (initiative_id pk, version int, doc jsonb, updated_at)
   decisions   (id pk, initiative_id, payload jsonb, status, embedding vector(1536), ...)
   memory      (id pk, initiative_id, summary, learnings, outcome jsonb, embedding, ...)
@@ -29,15 +29,16 @@ from redis import asyncio as aioredis
 
 from app.exceptions import (
     DecisionTimeout,
-    InvalidStageTransition,
     NotFoundError,
     StaleSpecError,
+    ValidationError,
 )
 from app.models import (
     ContextHit,
     Decision,
     Guidance,
     Initiative,
+    InitiativeAttention,
     Memory,
     Message,
     MessageRole,
@@ -49,7 +50,7 @@ from app.models import (
     Verdict,
     WorkUnit,
     _now,
-    is_adjacent_stage,
+    derive_state,
     slug_prefix,
     slugify,
 )
@@ -78,7 +79,7 @@ def _decision_text(d: Decision) -> str:
 
 def _initiative_from_row(row: asyncpg.Record) -> Initiative:
     return Initiative(
-        id=row["id"], title=row["title"], stage=row["stage"],
+        id=row["id"], title=row["title"], state=row["state"],
         project_id=row["project_id"],
         org_id=row["org_id"], owner_id=row["owner_id"],
         created_at=row["created_at"].isoformat(),
@@ -107,7 +108,7 @@ def _sibling_summary(
     return SiblingSummary(
         initiative_id=row["id"],
         title=spec.title,
-        stage=row["stage"],
+        state=row["state"],
         constraint_count=len(confirmed),
         constraints=[c.text for c in confirmed[:max_constraints]],
         latest_decision=latest_decisions.get(row["id"]),
@@ -227,19 +228,19 @@ class SpecStore:
         owner_id: str | None = None,
     ) -> Initiative:
         """Create an initiative under a project and scaffold its empty spec in one act
-        (constraint 2): the spec is born at version 0, stage=discover, with empty item lists.
+        (constraint 2): the spec is born at version 0, state=draft (0011), with empty item lists.
         The id is a unique slug derived from the title. Every initiative belongs to a project —
         `project_id` is required and must exist (no orphan specs)."""
         if await self.get_project(project_id) is None:
             raise NotFoundError(f"no project {project_id}")
         slug = await self._unique_slug(f"{slug_prefix()}-{slugify(title)}")
-        spec = Spec(initiative_id=slug, title=title, stage="discover")
+        spec = Spec(initiative_id=slug, title=title, state="draft")
         async with self.pg.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
                     """INSERT INTO initiatives
-                           (id, title, project_id, org_id, owner_id, stage, created_at, updated_at)
-                       VALUES ($1, $2, $3, $4, $5, 'discover', now(), now())""",
+                           (id, title, project_id, org_id, owner_id, state, created_at, updated_at)
+                       VALUES ($1, $2, $3, $4, $5, 'draft', now(), now())""",
                     slug, title, project_id, org_id, owner_id,
                 )
                 # Scaffold the spec at version 0 directly. A brand-new spec has no prior
@@ -252,15 +253,15 @@ class SpecStore:
                 )
         await self.redis.set(f"spec:{slug}", spec.model_dump_json(), ex=SPEC_CACHE_TTL)
         return Initiative(
-            id=slug, title=title, stage="discover",
+            id=slug, title=title, state="draft",
             project_id=project_id, org_id=org_id, owner_id=owner_id,
         )
 
     async def get_initiative(self, initiative_id: str) -> Initiative | None:
         """The initiative's lifecycle context — surfaced alongside the spec on MCP get_spec
-        so an executor grounds itself in stage before acting (D1 / 0004)."""
+        so an executor grounds itself in the lifecycle state before acting (D1 / 0004)."""
         row = await self.pg.fetchrow(
-            """SELECT id, title, stage, project_id, org_id, owner_id, created_at, updated_at
+            """SELECT id, title, state, project_id, org_id, owner_id, created_at, updated_at
                FROM initiatives WHERE id = $1""",
             initiative_id,
         )
@@ -270,7 +271,7 @@ class SpecStore:
         """Every initiative that has a spec — the dashboard's feed (0004 a3). Most recently
         updated first."""
         rows = await self.pg.fetch(
-            """SELECT i.id, i.title, i.stage, i.project_id, i.org_id, i.owner_id,
+            """SELECT i.id, i.title, i.state, i.project_id, i.org_id, i.owner_id,
                       i.created_at, i.updated_at
                FROM initiatives i
                JOIN specs s ON s.initiative_id = i.id
@@ -278,25 +279,28 @@ class SpecStore:
         )
         return [_initiative_from_row(r) for r in rows]
 
-    async def set_stage(self, initiative_id: str, target: str) -> Initiative:
-        """Advance or retreat an initiative by one lifecycle step (0004 a4/a5), keeping the
-        spec doc's stage in sync. The stage mirror onto the doc is metadata, not a content
-        edit, so it does not bump the spec version (a stage move never 409s a live editor)."""
-        init = await self.get_initiative(initiative_id)
-        if init is None:
-            raise NotFoundError(f"no initiative {initiative_id}")
-        if not is_adjacent_stage(init.stage, target):
-            raise InvalidStageTransition(initiative_id, init.stage, target)
+    async def _recompute_state(self, initiative_id: str) -> None:
+        """Re-infer the initiative's lifecycle state from its work units + learn record and
+        persist it (0011 constraint 1 / a2). Called on every unit transition and learn capture —
+        there is no manual setter, so the state can't drift (D2 -> c). The state is mirrored onto
+        the spec doc (metadata, not a content edit — it never bumps the spec version)."""
+        rows = await self.pg.fetch(
+            "SELECT status FROM work_units WHERE spec_id = $1", initiative_id
+        )
+        has_learn = await self.pg.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM memory WHERE initiative_id = $1)", initiative_id
+        )
+        state = derive_state([r["status"] for r in rows], bool(has_learn))
         async with self.pg.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
-                    "UPDATE initiatives SET stage = $2, updated_at = now() WHERE id = $1",
-                    initiative_id, target,
+                    "UPDATE initiatives SET state = $2, updated_at = now() WHERE id = $1",
+                    initiative_id, state,
                 )
                 await conn.execute(
-                    """UPDATE specs SET doc = jsonb_set(doc, '{stage}', to_jsonb($2::text)),
+                    """UPDATE specs SET doc = jsonb_set(doc, '{state}', to_jsonb($2::text)),
                        updated_at = now() WHERE initiative_id = $1""",
-                    initiative_id, target,
+                    initiative_id, state,
                 )
         # refresh the derived spec cache from PG truth
         doc = await self.pg.fetchval(
@@ -304,9 +308,6 @@ class SpecStore:
         )
         if doc is not None:
             await self.redis.set(f"spec:{initiative_id}", doc, ex=SPEC_CACHE_TTL)
-        updated = await self.get_initiative(initiative_id)
-        assert updated is not None  # it exists — we just updated it in the transaction above
-        return updated
 
     async def _unique_slug(self, base: str) -> str:
         slug, n = base, 2
@@ -348,7 +349,7 @@ class SpecStore:
     async def list_project_initiatives(self, project_id: str) -> list[Initiative]:
         """The initiatives grouped under a project (0010 a2/a7), most recently updated first."""
         rows = await self.pg.fetch(
-            """SELECT i.id, i.title, i.stage, i.project_id, i.org_id, i.owner_id,
+            """SELECT i.id, i.title, i.state, i.project_id, i.org_id, i.owner_id,
                       i.created_at, i.updated_at
                FROM initiatives i
                JOIN specs s ON s.initiative_id = i.id
@@ -367,7 +368,7 @@ class SpecStore:
         max_constraints: int = SIBLING_CONSTRAINT_HEADLINES,
     ) -> ProjectContext | None:
         """Compact project context for an Advisor turn (0010 constraint 2/3): the project's
-        strategic intent + token-conscious summaries of its sibling initiatives (title, stage,
+        strategic intent + token-conscious summaries of its sibling initiatives (title, state,
         headline confirmed constraints + count, most recent resolved decision). `exclude` drops
         the initiative in focus. Returns None if the project is gone. NOT full specs — the
         Advisor retrieves specifics on demand via project-scoped get_context (u4)."""
@@ -375,7 +376,7 @@ class SpecStore:
         if proj is None:
             return None
         rows = await self.pg.fetch(
-            """SELECT i.id, i.stage, s.doc
+            """SELECT i.id, i.state, s.doc
                FROM initiatives i
                JOIN specs s ON s.initiative_id = i.id
                WHERE i.project_id = $1 AND ($2::text IS NULL OR i.id <> $2)
@@ -411,6 +412,51 @@ class SpecStore:
                WHERE i.project_id = $1 AND d.status = 'open'""",
             project_id,
         )
+
+    async def get_project_attention(
+        self, project_id: str
+    ) -> dict[str, InitiativeAttention]:
+        """Per-initiative attention counts for the project screen (0011 a8): for each initiative
+        in the project, how many proposed spec items await confirm/reject, how many decisions are
+        open, and how many units are submitted awaiting a verdict. Computed in three set-based
+        passes (no N+1): proposed items from the spec JSONB, decisions + units grouped."""
+        item_rows = await self.pg.fetch(
+            """SELECT i.id,
+                      (SELECT count(*) FROM jsonb_array_elements(s.doc->'constraints') e
+                         WHERE e->>'status' = 'proposed')
+                    + (SELECT count(*) FROM jsonb_array_elements(s.doc->'discretion') e
+                         WHERE e->>'status' = 'proposed')
+                    + (SELECT count(*) FROM jsonb_array_elements(s.doc->'acceptance') e
+                         WHERE e->>'status' = 'proposed') AS proposed_items
+               FROM initiatives i
+               JOIN specs s ON s.initiative_id = i.id
+               WHERE i.project_id = $1""",
+            project_id,
+        )
+        dec_rows = await self.pg.fetch(
+            """SELECT d.initiative_id AS id, count(*) AS n
+               FROM decisions d JOIN initiatives i ON i.id = d.initiative_id
+               WHERE i.project_id = $1 AND d.status = 'open'
+               GROUP BY d.initiative_id""",
+            project_id,
+        )
+        unit_rows = await self.pg.fetch(
+            """SELECT w.spec_id AS id, count(*) AS n
+               FROM work_units w JOIN initiatives i ON i.id = w.spec_id
+               WHERE i.project_id = $1 AND w.status = 'in_verification'
+               GROUP BY w.spec_id""",
+            project_id,
+        )
+        decisions = {r["id"]: r["n"] for r in dec_rows}
+        units = {r["id"]: r["n"] for r in unit_rows}
+        return {
+            r["id"]: InitiativeAttention(
+                proposed_items=r["proposed_items"],
+                open_decisions=decisions.get(r["id"], 0),
+                units_to_verify=units.get(r["id"], 0),
+            )
+            for r in item_rows
+        }
 
     async def assign_initiative_to_project(
         self, initiative_id: str, project_id: str
@@ -584,6 +630,8 @@ class SpecStore:
             mem.id, initiative_id, summary, learnings,
             json.dumps(outcome) if outcome is not None else None,
         )
+        # a learn record can complete the initiative (all units done + learnings captured — 0011 a2)
+        await self._recompute_state(initiative_id)
         self._spawn(self.embed_memory(mem.id))
         return mem
 
@@ -794,6 +842,7 @@ class SpecStore:
                VALUES ($1, $2, $3, $4, now(), now())""",
             unit.id, unit.spec_id, unit.model_dump_json(), unit.status,
         )
+        await self._recompute_state(unit.spec_id)  # a new unit may flip the inferred state (0011)
         return unit
 
     async def get_unit(self, unit_id: str) -> WorkUnit | None:
@@ -804,13 +853,15 @@ class SpecStore:
 
     async def save_unit(self, unit: WorkUnit) -> WorkUnit:
         """Persist a unit after a transition. payload is the truth; status is a promoted
-        column so list_units can filter without parsing JSON."""
+        column so list_units can filter without parsing JSON. Every unit status change routes
+        through here, so this is where the initiative's inferred state is recomputed (0011 a2)."""
         unit.updated_at = _now()
         await self.pg.execute(
             """UPDATE work_units SET payload = $2, status = $3, updated_at = now()
                WHERE id = $1""",
             unit.id, unit.model_dump_json(), unit.status,
         )
+        await self._recompute_state(unit.spec_id)
         return unit
 
     async def list_units(self, spec_id: str, status: str | None = None) -> list[WorkUnit]:
@@ -863,6 +914,22 @@ class SpecStore:
         unit = await self._require_unit(unit_id)
         unit.transition("ready")
         return await self.save_unit(unit)
+
+    async def reject_unit(self, unit_id: str) -> WorkUnit:
+        """Reject a proposed work unit (0011 a6): delete it and log the rejection to the rail
+        (D1 -> c) — the same lightweight 'no thanks' the proposed spec items get. Only a proposed
+        unit can be rejected; a confirmed/started unit is real work, not a proposal."""
+        unit = await self._require_unit(unit_id)
+        if unit.status != "proposed":
+            raise ValidationError(f"only a proposed work unit can be rejected (it is {unit.status})")
+        await self.pg.execute("DELETE FROM work_units WHERE id = $1", unit_id)
+        await self._recompute_state(unit.spec_id)
+        await self.append_message(
+            unit.spec_id,
+            "advisor",
+            f'Noted — you rejected the proposed work unit: "{unit.title}". I\'ve removed it.',
+        )
+        return unit
 
     async def record_verdict(
         self,

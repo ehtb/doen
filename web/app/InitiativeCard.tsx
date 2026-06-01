@@ -1,33 +1,74 @@
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Check, GitBranch, ListChecks } from "lucide-react";
 
-import type { Initiative } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import type { Initiative, InitiativeAttention } from "@/lib/types";
 
-export const STAGES = [
-  "discover",
-  "shape",
-  "bet",
-  "decompose",
-  "implement",
-  "verify",
-  "learn",
-];
+// The three inferred lifecycle states (0011), in order — Draft -> Building -> Complete.
+export const STATES = ["draft", "building", "complete"];
 
-export function StageBadge({ stage }: { stage: string }) {
-  const i = STAGES.indexOf(stage);
-  const pos = i < 0 ? "" : `${i + 1}/${STAGES.length}`;
+const STATE_STYLE: Record<string, string> = {
+  draft: "text-ink-soft",
+  building: "text-accent-deep",
+  complete: "text-confirmed-foreground",
+};
+
+export function StateBadge({ state }: { state: string }) {
   return (
-    <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10px] tracking-widest text-accent-deep uppercase">
-      <span className="size-1.5 rounded-full bg-primary" />
-      {stage}
-      {pos && <span className="text-ink-faint normal-case">· {pos}</span>}
+    <span
+      className={cn(
+        "flex shrink-0 items-center gap-1.5 font-mono text-[10px] tracking-widest uppercase",
+        STATE_STYLE[state] ?? "text-ink-faint",
+      )}
+    >
+      <span className="size-1.5 rounded-full bg-current" />
+      {state}
+    </span>
+  );
+}
+
+// A small "needs you" chip — only shown when its count is non-zero (0011 a8).
+function AttentionChip({
+  icon: Icon,
+  n,
+  label,
+  urgent,
+}: {
+  icon: typeof Check;
+  n: number;
+  label: string;
+  urgent?: boolean;
+}) {
+  if (n <= 0) return null;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[10px] tracking-wide",
+        urgent
+          ? "bg-primary/15 text-accent-deep"
+          : "bg-proposed/15 text-proposed-foreground",
+      )}
+      title={`${n} ${label}`}
+    >
+      <Icon className="size-3" />
+      {n} {label}
     </span>
   );
 }
 
 // One initiative on a feed — the home dashboard and the project dashboard render the same
-// card, linking into the initiative's living spec.
-export function InitiativeCard({ initiative }: { initiative: Initiative }) {
+// card, linking into the initiative's living spec. On the project screen it also carries
+// attention indicators (0011 a8): what needs the human, visible without opening the spec.
+export function InitiativeCard({
+  initiative,
+  attention,
+}: {
+  initiative: Initiative;
+  attention?: InitiativeAttention;
+}) {
+  const total = attention
+    ? attention.proposed_items + attention.open_decisions + attention.units_to_verify
+    : 0;
   return (
     <Link
       href={`/projects/${initiative.project_id}/specs/${initiative.id}`}
@@ -41,10 +82,36 @@ export function InitiativeCard({ initiative }: { initiative: Initiative }) {
           <p className="mt-1 font-mono text-[11px] text-ink-faint">{initiative.id}</p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
-          <StageBadge stage={initiative.stage} />
+          <StateBadge state={initiative.state} />
           <ArrowRight className="size-4 text-ink-faint transition-transform group-hover:translate-x-0.5" />
         </div>
       </div>
+
+      {attention && (
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+          {total === 0 ? (
+            <span className="inline-flex items-center gap-1 font-mono text-[10px] tracking-wide text-ink-faint">
+              <Check className="size-3" /> nothing waiting
+            </span>
+          ) : (
+            <>
+              <AttentionChip
+                icon={GitBranch}
+                n={attention.open_decisions}
+                label="to decide"
+                urgent
+              />
+              <AttentionChip
+                icon={ListChecks}
+                n={attention.units_to_verify}
+                label="to verify"
+                urgent
+              />
+              <AttentionChip icon={Check} n={attention.proposed_items} label="to confirm" />
+            </>
+          )}
+        </div>
+      )}
     </Link>
   );
 }

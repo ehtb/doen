@@ -13,11 +13,15 @@ import hashlib
 import random
 from collections.abc import Callable
 
+import asyncpg
+
+from app.config import DATABASE_URL
 from app.models import AcceptanceCriterion, ContextHit, SpecItem
 from app.providers.llm import LLMError
-from app.services.shaping import shape_spec
+from app.services.shaping import create_from_description, shape_spec
 
 PAYLOAD = {
+    "title": "Passwordless sign-in",
     "intent": "Let users sign in without a password using a single-use email magic link.",
     "constraints": [
         "Links are single-use and expire within 15 minutes.",
@@ -34,6 +38,18 @@ PAYLOAD = {
             "text": "A human signs in end to end via the emailed link. [HEADLINE]",
             "verify_kind": "human_judgment",
             "verify_detail": "Walk the full flow in the UI.",
+        },
+    ],
+    "units": [
+        {
+            "title": "Token issuance + email",
+            "scope": "Generate single-use tokens and email the magic link.",
+            "criteria": [1],
+        },
+        {
+            "title": "Link verification + expiry",
+            "scope": "Verify, consume, and expire links.",
+            "criteria": [0],
         },
     ],
 }
@@ -62,9 +78,13 @@ class FakeStore:
     def __init__(self, hits: list[ContextHit]) -> None:
         self._hits = hits
         self.last_query: str | None = None
+        self.last_project: str | None = None
 
-    async def get_context(self, query: str, limit: int = 8) -> list[ContextHit]:
+    async def get_context(
+        self, query: str, limit: int = 8, *, project_id: str | None = None
+    ) -> list[ContextHit]:
         self.last_query = query
+        self.last_project = project_id
         return self._hits
 
 
@@ -83,8 +103,9 @@ class FakeEmbedder:
 # --- shape_spec unit tests (no DB / no network) ------------------------------------
 def test_shape_spec_produces_valid_proposed_items():
     # a2 — structured items are produced; a5 — valid models with verify populated;
-    # a3 (model level) — everything is ai_proposed / proposed.
-    res = _run(shape_spec(FakeStore([]), "iid", "passwordless sign-in", llm=FakeLLM(PAYLOAD)))
+    # a3 (model level) — everything is ai_proposed / proposed; 0011 C2 — a title + units too.
+    res = _run(shape_spec(FakeStore([]), "passwordless sign-in", llm=FakeLLM(PAYLOAD)))
+    assert res.title == "Passwordless sign-in"
     assert res.intent
     assert res.constraints and all(isinstance(i, SpecItem) for i in res.constraints)
     assert res.discretion and all(isinstance(i, SpecItem) for i in res.discretion)
@@ -94,6 +115,9 @@ def test_shape_spec_produces_valid_proposed_items():
     )
     everything = res.constraints + res.discretion + res.acceptance
     assert all(i.provenance == "ai_proposed" and i.status == "proposed" for i in everything)
+    # 0011 C2 — proposed units, each carrying the acceptance indexes it satisfies
+    assert [u.title for u in res.units] == ["Token issuance + email", "Link verification + expiry"]
+    assert res.units[0].criterion_indexes == [1] and res.units[1].criterion_indexes == [0]
 
 
 def test_shape_spec_feeds_context_before_llm():
@@ -104,7 +128,7 @@ def test_shape_spec_feeds_context_before_llm():
     )
     store = FakeStore([hit])
     llm = FakeLLM(PAYLOAD)
-    res = _run(shape_spec(store, "iid", "rules for editing spec items", llm=llm))
+    res = _run(shape_spec(store, "rules for editing spec items", llm=llm))
     assert store.last_query == "rules for editing spec items"
     assert "reverts it to proposed" in llm.calls[0]["user"]
     assert res.context_used == [hit]
@@ -113,7 +137,7 @@ def test_shape_spec_feeds_context_before_llm():
 def test_shape_spec_no_context_still_succeeds():
     # a4 — graceful degradation: empty corpus, shaping still produces a spec.
     llm = FakeLLM(PAYLOAD)
-    res = _run(shape_spec(FakeStore([]), "iid", "anything", llm=llm))
+    res = _run(shape_spec(FakeStore([]), "anything", llm=llm))
     assert res.context_used == []
     assert res.constraints and res.acceptance
 
@@ -122,7 +146,7 @@ def test_shape_spec_malformed_output_raises():
     # a6 (service level) — output missing required fields -> LLMError, nothing returned.
     bad = FakeLLM({"intent": "x", "constraints": ["c"]})  # no discretion / acceptance keys
     try:
-        _run(shape_spec(FakeStore([]), "iid", "desc", llm=bad))
+        _run(shape_spec(FakeStore([]), "desc", llm=bad))
         raise AssertionError("expected LLMError")
     except LLMError:
         pass
@@ -159,3 +183,54 @@ def test_shape_endpoint_llm_failure_leaves_spec_untouched(
     assert after["version"] == before["version"]
     assert after["intent"] == before["intent"]
     assert len(after["constraints"]) == len(before["constraints"])
+
+
+def _drop(iid: str) -> None:
+    async def go() -> None:
+        c = await asyncpg.connect(DATABASE_URL)
+        try:
+            await c.execute("DELETE FROM initiatives WHERE id = $1", iid)  # cascade: spec + units
+        finally:
+            await c.close()
+
+    asyncio.run(go())
+
+
+# --- 0011 a3: description-first creation IS shaping (TestClient; LLM + embedder faked) -----
+def test_create_from_description_endpoint(client, monkeypatch):
+    monkeypatch.setattr("app.services.shaping.get_shaping_llm", lambda: FakeLLM(PAYLOAD))
+    monkeypatch.setattr("app.store.get_embedding_provider", lambda: FakeEmbedder())
+
+    r = client.post(
+        "/projects/build-doen/initiatives/shape",
+        json={"description": "passwordless sign-in via single-use email links"},
+    )
+    assert r.status_code == 201, r.text
+    init = r.json()
+    try:
+        # the Advisor named the initiative (title from shaping) and it's born Draft, in the project
+        assert init["id"].endswith("-passwordless-sign-in")
+        assert init["state"] == "draft" and init["project_id"] == "build-doen"
+
+        # the whole spec is drafted as proposals to confirm item by item (a3)
+        spec = client.get(f"/specs/{init['id']}").json()
+        assert spec["intent"]
+        items = spec["constraints"] + spec["discretion"] + spec["acceptance"]
+        assert len(spec["constraints"]) == 2 and len(spec["acceptance"]) == 2
+        assert all(i["provenance"] == "ai_proposed" and i["status"] == "proposed" for i in items)
+
+        # proposed units came with it, mapped to the persisted acceptance criteria
+        units = client.get(f"/specs/{init['id']}/units").json()
+        assert len(units) == 2 and all(u["status"] == "proposed" for u in units)
+        acc_ids = {a["id"] for a in spec["acceptance"]}
+        assert all(cid in acc_ids for u in units for cid in u["criterion_ids"])
+
+        # an empty description is rejected; an unknown project -> 404
+        assert client.post(
+            "/projects/build-doen/initiatives/shape", json={"description": "  "}
+        ).status_code == 422
+        assert client.post(
+            "/projects/ghost/initiatives/shape", json={"description": "x"}
+        ).status_code == 404
+    finally:
+        _drop(init["id"])

@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, GitBranch, Layers } from "lucide-react";
 
 import { getProjectDashboard } from "@/lib/api";
-import { InitiativeCard, STAGES } from "../../InitiativeCard";
+import { InitiativeCard, STATES } from "../../InitiativeCard";
 import NewInitiative from "../../NewInitiative";
 import ConversationRail from "./specs/[specId]/ConversationRail";
 
@@ -19,13 +19,20 @@ export default async function ProjectDashboardPage({
   const data = await getProjectDashboard(id);
   if (!data) notFound();
 
-  const { project, initiatives, open_decisions } = data;
+  const { project, initiatives, open_decisions, attention } = data;
 
-  // Stage distribution across the project — a whole-project read of where the work sits.
-  const byStage = STAGES.map((s) => ({
-    stage: s,
-    count: initiatives.filter((i) => i.stage === s).length,
+  // State distribution across the project — a whole-project read of where the work sits (0011).
+  const byState = STATES.map((s) => ({
+    state: s,
+    count: initiatives.filter((i) => i.state === s).length,
   })).filter((s) => s.count > 0);
+
+  // The dot colour per lifecycle state — echoes the StateBadge so the groups read at a glance.
+  const STATE_DOT: Record<string, string> = {
+    draft: "bg-ink-soft",
+    building: "bg-primary",
+    complete: "bg-confirmed",
+  };
 
   return (
     <main className="relative z-10 mx-auto max-w-[1180px] px-5 py-12 md:px-8">
@@ -55,9 +62,9 @@ export default async function ProjectDashboardPage({
             <span className="text-foreground">{initiatives.length}</span> initiative
             {initiatives.length === 1 ? "" : "s"}
           </span>
-          {byStage.map((s) => (
-            <span key={s.stage} className="tracking-widest uppercase">
-              <span className="text-accent-deep">{s.count}</span> {s.stage}
+          {byState.map((s) => (
+            <span key={s.state} className="tracking-widest uppercase">
+              <span className="text-accent-deep">{s.count}</span> {s.state}
             </span>
           ))}
           <span className="flex items-center gap-1.5">
@@ -86,16 +93,35 @@ export default async function ProjectDashboardPage({
 
           {initiatives.length === 0 ? (
             <p className="mt-4 text-sm text-muted-foreground">
-              No initiatives in this project yet — start one above.
+              No initiatives in this project yet — describe one above and the Advisor shapes it.
             </p>
           ) : (
-            <ul className="mt-4 space-y-2.5">
-              {initiatives.map((i) => (
-                <li key={i.id}>
-                  <InitiativeCard initiative={i} />
-                </li>
-              ))}
-            </ul>
+            // grouped by lifecycle state (0011 a8) — where everything stands, at a glance, with
+            // per-initiative attention indicators showing what needs the human.
+            <div className="mt-5 space-y-7">
+              {STATES.map((st) => {
+                const group = initiatives.filter((i) => i.state === st);
+                if (group.length === 0) return null;
+                return (
+                  <div key={st}>
+                    <h3 className="flex items-center gap-2 font-mono text-[11px] font-semibold tracking-[0.16em] text-ink-soft uppercase">
+                      <span className={`size-2 rounded-full ${STATE_DOT[st] ?? "bg-border"}`} />
+                      {st}
+                      <span className="font-normal tracking-normal text-ink-faint normal-case">
+                        · {group.length}
+                      </span>
+                    </h3>
+                    <ul className="mt-3 space-y-2.5">
+                      {group.map((i) => (
+                        <li key={i.id}>
+                          <InitiativeCard initiative={i} attention={attention[i.id]} />
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </section>
 
