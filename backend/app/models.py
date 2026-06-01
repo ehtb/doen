@@ -44,6 +44,29 @@ def slugify(title: str) -> str:
     return s or "initiative"
 
 
+def derive_prefix(name: str) -> str:
+    """A short uppercase project prefix from its name's first letters (0012 u5): 'Build Doen' ->
+    'BD'. With the per-project sequence it forms the short id (BD-7). Single-word names fall back
+    to the first two letters; store.create_project disambiguates collisions."""
+    words = re.findall(r"[A-Za-z0-9]+", name)
+    if not words:
+        return "P"
+    initials = "".join(w[0] for w in words).upper()
+    return (initials if len(initials) >= 2 else words[0][:2].upper()) or "P"
+
+
+def short_id(prefix: str, seq: int) -> str:
+    """The canonical short identifier shown to humans and understood by the Advisor: BD-7 (0012
+    u5 / constraint 8). Prefix from the project, number from the initiative's per-project seq."""
+    return f"{prefix}-{seq}"
+
+
+def short_slug(prefix: str, seq: int, title: str | None) -> str:
+    """The URL key (0012 a10): the short id, lowercased, + a human-readable title slug —
+    bd-7-csv-export. Decorative beyond the prefix+number, which is what actually resolves."""
+    return f"{prefix.lower()}-{seq}-{slugify(title or 'initiative')}"
+
+
 # ----------------------------------------------------------------------------- enums + lifecycle
 Provenance = Literal["human", "ai_proposed", "ai_confirmed_by_human"]
 ItemStatus = Literal["proposed", "confirmed", "retired"]
@@ -128,8 +151,9 @@ class Initiative(BaseModel):
     units + learn record — never advanced by hand. `project_id` (0010) is the required link to
     the parent Project — every initiative belongs to a project; there are no orphan specs."""
 
-    id: str  # slug
+    id: str  # slug — the stable internal key everything references
     project_id: str  # FK to projects.id — required; every initiative belongs to a project
+    seq: int = 0  # immutable per-project sequence (0012 u5): with the project prefix -> BD-7
     title: str | None = None
     state: State = "draft"
     org_id: str | None = None
@@ -147,6 +171,7 @@ class Project(BaseModel):
 
     id: str  # slug
     name: str
+    prefix: str = ""  # short handle for the project's initiatives (0012 u5): 'BD' -> BD-7
     intent: str = ""  # the strategic goal, prose
     created_at: str = Field(default_factory=_now)
     updated_at: str = Field(default_factory=_now)
@@ -224,6 +249,7 @@ class SiblingSummary(BaseModel):
     retrieved on demand via project-scoped get_context (u4)."""
 
     initiative_id: str
+    seq: int = 0                                           # per-project number -> short id (BD-7)
     title: str
     state: str
     constraint_count: int = 0                              # total confirmed constraints
@@ -238,6 +264,7 @@ class ProjectContext(BaseModel):
 
     project_id: str
     name: str
+    prefix: str = ""  # the project's short handle, so the Advisor can render BD-7 (0012 a11)
     intent: str = ""
     siblings: list[SiblingSummary] = Field(default_factory=list)
 

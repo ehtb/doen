@@ -31,6 +31,7 @@ from app.models import (
     ProjectContext,
     Spec,
     SpecItem,
+    short_id,
 )
 from app.providers.llm import LLMError, StructuredLLM, get_advisor_llm
 from app.schemas import AdvisorTurn, Proposal
@@ -62,7 +63,9 @@ contradict a past decision.
 - The human authors intent and issues every verdict; the executor builds. You contribute, you \
 don't decide. Surface options and a recommendation — never make the call that belongs to the \
 human, and never approve work yourself.
-- Be concise and concrete, in a sharp colleague's voice. Say what matters; skip the preamble."""
+- Be concise and concrete, in a sharp colleague's voice. Say what matters; skip the preamble.
+- Initiatives carry a short id like BD-7 (the project prefix + a per-project number), shown in \
+the context below. Refer to them that way, and read it when the human does ("see BD-7")."""
 
 # The lifecycle is three inferred states now (0011 constraint 1). The Advisor's mode shifts with
 # the state: shaping while Draft, guiding + reviewing while Building, reflecting once Complete.
@@ -207,11 +210,12 @@ def _item_line(item: SpecItem) -> str:
     return item.text
 
 
-def _render_spec(spec: Spec | None) -> str:
+def _render_spec(spec: Spec | None, short_ref: str | None = None) -> str:
     if spec is None:
         return "# CURRENT SPEC\n(no spec yet)"
+    handle = f"{short_ref}: " if short_ref else ""
     lines = [
-        f"# CURRENT SPEC — {spec.title} (v{spec.version}, {spec.state})",
+        f"# CURRENT SPEC — {handle}{spec.title} (v{spec.version}, {spec.state})",
         f"Intent: {spec.intent.strip() or '(not yet written)'}",
         "",
         *_render_items("Constraints", spec.constraints),
@@ -236,8 +240,9 @@ def _render_project_block(proj: ProjectContext, *, header: str, lead: str) -> st
     if not proj.siblings:
         lines.append("  (none yet)")
     for s in proj.siblings:
+        handle = f"{short_id(proj.prefix, s.seq)} · " if proj.prefix and s.seq else ""
         lines.append(
-            f"- {s.title} [{s.initiative_id}] · {s.state} · "
+            f"- {s.title} [{handle}{s.initiative_id}] · {s.state} · "
             f"{s.constraint_count} confirmed constraint(s)"
         )
         lines += [f"    constraint: {c}" for c in s.constraints]
@@ -283,8 +288,15 @@ def build_user_message(ctx: ConversationContext) -> str:
     """The grounded context block the Advisor answers from: the current spec, the project it
     sits in (siblings, when any), relevant memory, and the windowed conversation (with the
     human's latest turn last)."""
+    # The focused initiative's short id (0012 a11): so the Advisor names it as BD-7 and
+    # understands the human referring to it (and its siblings) that way.
+    short_ref = (
+        short_id(ctx.project.prefix, ctx.initiative.seq)
+        if ctx.project and ctx.project.prefix and ctx.initiative.seq
+        else None
+    )
     parts = [
-        _render_spec(ctx.spec),
+        _render_spec(ctx.spec, short_ref),
         _render_project(ctx),
         _render_memory(ctx),
         _render_history(ctx.messages),

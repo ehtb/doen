@@ -42,12 +42,13 @@
   --proposed-foreground: #8e4a1c;
   --retired: #8c8170;
 
-  /* the steering rail: a dark console beside the warm document */
-  --rail: #1b1712;
-  --rail-foreground: #ece4d5;
-  --rail-muted: #a99e8b;
-  --rail-card: #2b241b;
-  --rail-border: #3a3127;
+  /* the rails: a calm, light companion to the warm document — present but recessive, so the
+     conversation complements the spec rather than competing with it (0012 constraint 6). */
+  --rail: #ece5d6;
+  --rail-foreground: #221c15;
+  --rail-muted: #6f6453;
+  --rail-card: #f7f3ea;
+  --rail-border: #d3c9b6;
 }
 
 @theme inline {

@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends
 from app.database import get_store
 from app.exceptions import ValidationError
 from app.models import Initiative
-from app.schemas import CreateInitiative
+from app.schemas import ArchiveInitiative, CreateInitiative
 from app.store import SpecStore
 
 router = APIRouter(tags=["initiatives"])
@@ -32,3 +32,17 @@ async def create_initiative(
     if not body.title.strip():
         raise ValidationError("initiative title must not be empty")
     return await store.create_initiative(body.title, body.project_id)
+
+
+@router.post("/initiatives/{initiative_id}/archive", status_code=200)
+async def archive_initiative(
+    initiative_id: str,
+    body: ArchiveInitiative,
+    store: Annotated[SpecStore, Depends(get_store)],
+) -> dict:
+    """Soft-archive an initiative (0013 follow-up). Reject from draft and Archive from
+    building/complete share one mechanism — the spec, units, decisions, and memory are
+    preserved; the dashboards just stop showing it. NotFoundError -> 404 centrally."""
+    reason = (body.reason or "").strip() or "archived"
+    await store.archive_initiative(initiative_id, reason)
+    return {"id": initiative_id, "archived": True, "reason": reason}

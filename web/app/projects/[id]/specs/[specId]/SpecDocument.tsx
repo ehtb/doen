@@ -1,13 +1,25 @@
 "use client";
 
-import { useState } from "react";
-import { Check, CircleCheck, CircleDot, Compass, Loader2, Lock, Plus, Sparkles, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleCheck,
+  CircleDot,
+  Compass,
+  Lock,
+  Plus,
+  X,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { AcceptanceCriterion, Spec, SpecItem } from "@/lib/types";
+import type { AcceptanceCriterion, SpecItem } from "@/lib/types";
+import { useSpec } from "./spec-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import AttentionSurface from "./AttentionSurface";
+import SpecIntent from "./SpecIntent";
 import {
   Select,
   SelectContent,
@@ -19,16 +31,13 @@ import { cn } from "@/lib/utils";
 
 type Section = "constraints" | "discretion" | "acceptance";
 
-const SECTIONS: {
-  key: Section;
-  title: string;
-  note: string;
-  icon: LucideIcon;
-  delay: string;
-}[] = [
-  { key: "constraints", title: "Constraints", note: "locked — I won't cross these", icon: Lock, delay: "[animation-delay:140ms]" },
-  { key: "discretion", title: "Discretion", note: "my latitude — decide as I build", icon: Compass, delay: "[animation-delay:200ms]" },
-  { key: "acceptance", title: "Acceptance criteria", note: "how the work gets judged", icon: CircleCheck, delay: "[animation-delay:260ms]" },
+// 0012 a2: the guided review arc is Intent -> Constraints -> Acceptance criteria (-> Work Units,
+// which render below this component). Intent leads, always open; these two governing sections
+// disclose progressively and auto-advance. Discretion is NOT here — it lives under "Agent
+// latitude" (a3), de-emphasised and outside the auto-expand chain.
+const GOVERNING: { key: Section; title: string; note: string; icon: LucideIcon }[] = [
+  { key: "constraints", title: "Constraints", note: "locked — I won't cross these", icon: Lock },
+  { key: "acceptance", title: "Acceptance criteria", note: "how the work gets judged", icon: CircleCheck },
 ];
 
 const PROV_LABEL: Record<string, string> = {
@@ -67,79 +76,63 @@ function Cue({ status, provenance }: { status: string; provenance: string }) {
   );
 }
 
-export default function SpecDocument({ initialSpec }: { initialSpec: Spec }) {
-  const [spec, setSpec] = useState<Spec>(initialSpec);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export default function SpecDocument() {
+  // Shared spec + writes (0012 u3): the rail's guided review mutates the same spec, so accepting
+  // or rejecting there updates this document and the progress bar live (a6).
+  const { spec, busy, error, mutate } = useSpec();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [adding, setAdding] = useState<Section | null>(null);
   const [addText, setAddText] = useState("");
   const [verifyKind, setVerifyKind] = useState("behavior");
   const [verifyDetail, setVerifyDetail] = useState("");
-  const [shapeOpen, setShapeOpen] = useState(false);
-  const [shapeDesc, setShapeDesc] = useState("");
-  const [shapeBusy, setShapeBusy] = useState(false);
 
   const iid = spec.initiative_id;
-  const canShape = spec.state === "draft"; // shaping happens while the spec is still a draft (0011)
 
-  async function shapeWithAI() {
-    if (!shapeDesc.trim() || shapeBusy) return;
-    setShapeBusy(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/specs/${iid}/shape`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ description: shapeDesc }),
-      });
-      if (!res.ok) {
-        let msg = `shaping failed (${res.status})`;
-        try {
-          const j = await res.json();
-          if (j?.detail) msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
-        } catch {
-          /* keep the status-code message */
-        }
-        setError(msg);
-        return;
-      }
-      setSpec(await res.json()); // proposed items appear in the sections below, ready to confirm
-      setShapeOpen(false);
-      setShapeDesc("");
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setShapeBusy(false);
+  // Progressive disclosure (a1/a2): governing sections collapse by default; the guided flow keeps
+  // exactly one open — the first with items still awaiting review — and advances to the next when
+  // that one is cleared. "View all" escapes the flow and opens everything; "Agent latitude" (a3)
+  // is a separate, de-emphasised disclosure outside this chain.
+  const pendingIn = (key: Section) =>
+    (spec[key] as SpecItem[]).filter((i) => i.status === "proposed").length;
+  const guidedActive = GOVERNING.find((s) => pendingIn(s.key) > 0)?.key ?? null;
+
+  // u2 (a4): live review progress across every spec item — confirmed vs. total reviewable.
+  // Rejected items are deleted (they leave the total); retired items are history (excluded). The
+  // count is driven by `spec` state, so accepting or rejecting updates it immediately.
+  const reviewItems = [...spec.constraints, ...spec.discretion, ...spec.acceptance].filter(
+    (i) => i.status !== "retired",
+  );
+  const reviewTotal = reviewItems.length;
+  const reviewConfirmed = reviewItems.filter((i) => i.status === "confirmed").length;
+  const reviewPct = reviewTotal ? Math.round((reviewConfirmed / reviewTotal) * 100) : 0;
+  const reviewDone = reviewTotal > 0 && reviewConfirmed === reviewTotal;
+
+  // a9: while a fresh spec still has items awaiting review, the rail leads with the guided
+  // walkthrough and the document stays calm — the "needs your attention" wall is the return-path
+  // view, shown only once every item has been reviewed.
+  const reviewMode = reviewConfirmed < reviewTotal;
+
+  const [viewAll, setViewAll] = useState(false);
+  const [openKey, setOpenKey] = useState<Section | null>(guidedActive);
+  const [latitudeOpen, setLatitudeOpen] = useState(false);
+
+  // When a section is fully reviewed the guided step advances; follow it (a2) without clobbering a
+  // manual toggle between advances — we only force-open on the *transition*.
+  const prevActive = useRef(guidedActive);
+  useEffect(() => {
+    if (prevActive.current !== guidedActive) {
+      setOpenKey(guidedActive);
+      prevActive.current = guidedActive;
     }
-  }
+  }, [guidedActive]);
 
-  async function mutate(path: string, method: string, body: object): Promise<boolean> {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch(path, {
-        method,
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...body, version: spec.version }),
-      });
-      if (res.status === 409) {
-        setError("The spec changed elsewhere — reloading to catch up…");
-        setTimeout(() => location.reload(), 900);
-        return false;
-      }
-      if (!res.ok) {
-        setError(`request failed (${res.status})`);
-        return false;
-      }
-      setSpec(await res.json());
-      return true;
-    } catch (e) {
-      setError((e as Error).message);
-      return false;
-    } finally {
-      setBusy(false);
+  function toggleSection(key: Section) {
+    if (viewAll) {
+      setViewAll(false);
+      setOpenKey(key);
+    } else {
+      setOpenKey((k) => (k === key ? null : key));
     }
   }
 
@@ -150,7 +143,8 @@ export default function SpecDocument({ initialSpec }: { initialSpec: Spec }) {
     mutate(`/api/specs/${iid}/items/${it.id}/confirm`, "POST", {});
   const rejectItem = (it: SpecItem) =>
     mutate(`/api/specs/${iid}/items/${it.id}/reject`, "POST", {});
-  const confirmAll = () => mutate(`/api/specs/${iid}/confirm-all`, "POST", {});
+  // D2 -> c: bulk confirm is only offered for discretion (agent latitude). Constraints and
+  // acceptance criteria are confirmed one at a time — per-item confirmation is the trust model.
   const confirmSection = (section: Section) =>
     mutate(`/api/specs/${iid}/confirm-all`, "POST", { section });
 
@@ -173,11 +167,6 @@ export default function SpecDocument({ initialSpec }: { initialSpec: Spec }) {
       setVerifyDetail("");
     }
   }
-
-  const proposedCount = SECTIONS.reduce(
-    (n, { key }) => n + (spec[key] as SpecItem[]).filter((i) => i.status === "proposed").length,
-    0,
-  );
 
   function renderItem(it: SpecItem, isAcceptance: boolean) {
     const editing = editingId === it.id;
@@ -347,99 +336,57 @@ export default function SpecDocument({ initialSpec }: { initialSpec: Spec }) {
 
   return (
     <div>
-      {/* lead with what needs the human (0011 C4/a5); the full spec below is the reference */}
-      <div className="mb-6">
-        <AttentionSurface
-          spec={spec}
-          initiativeId={iid}
-          onConfirmItem={confirmItem}
-          onRejectItem={rejectItem}
-          busy={busy}
-        />
-      </div>
+      {/* u2 (a4): live review progress at the top of the spec — confirmed vs. total, updating
+          as items are accepted or rejected; reads "done" when nothing is left to review. */}
+      {reviewTotal > 0 && (
+        <div className="mb-5">
+          <div className="flex items-baseline justify-between gap-3">
+            <span
+              className={cn(
+                "flex items-center gap-1.5 font-mono text-[11px] tracking-wide",
+                reviewDone ? "text-confirmed-foreground" : "text-ink-soft",
+              )}
+            >
+              {reviewDone && <Check className="size-3.5" />}
+              {reviewDone ? "Review complete" : `${reviewConfirmed} of ${reviewTotal} confirmed`}
+            </span>
+            <span className="font-mono text-[10px] tabular-nums text-ink-faint">{reviewPct}%</span>
+          </div>
+          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-border/70">
+            <div
+              className="h-full rounded-full bg-confirmed transition-all duration-500 ease-out"
+              style={{ width: `${reviewPct}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* the return-path surface (0011 C4/a5): what needs you, once you're driving the document.
+          Hidden while the rail leads a fresh review (a9 — no wall of undifferentiated content). */}
+      {!reviewMode && (
+        <div className="mb-6">
+          <AttentionSurface
+            spec={spec}
+            initiativeId={iid}
+            onConfirmItem={confirmItem}
+            onRejectItem={rejectItem}
+            busy={busy}
+          />
+        </div>
+      )}
 
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <p className="font-mono text-[11px] tracking-wide text-ink-faint">
           the living spec · v{spec.version} — only confirmed items bind executors
         </p>
-        <Button
-          disabled={busy || proposedCount === 0}
-          onClick={confirmAll}
-          className="bg-confirmed text-white shadow-sm hover:bg-confirmed/90"
+        <button
+          type="button"
+          onClick={() => setViewAll((v) => !v)}
+          className="font-mono text-[11px] tracking-wide text-ink-faint underline-offset-4 transition-colors hover:text-accent-deep hover:underline"
         >
-          {proposedCount === 0 ? (
-            "All confirmed"
-          ) : (
-            <>
-              <Check /> Confirm all proposed ({proposedCount})
-            </>
-          )}
-        </Button>
+          {viewAll ? "Guided view" : "View all"}
+        </button>
       </div>
-
-      {canShape && (
-        <div className="mt-4 rounded-lg border border-primary/30 bg-primary/[0.04] p-4">
-          {!shapeOpen ? (
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="font-mono text-[11.5px] tracking-wide text-ink-soft">
-                <Sparkles className="mr-1.5 inline size-3.5 text-primary" />
-                Describe the idea — the AI drafts a full spec, informed by past initiatives, for you
-                to correct.
-              </p>
-              <Button
-                size="sm"
-                disabled={busy}
-                onClick={() => {
-                  setShapeOpen(true);
-                  setShapeDesc("");
-                }}
-              >
-                <Sparkles /> Shape with AI
-              </Button>
-            </div>
-          ) : (
-            <div>
-              <Textarea
-                autoFocus
-                value={shapeDesc}
-                onChange={(e) => setShapeDesc(e.target.value)}
-                rows={4}
-                disabled={shapeBusy}
-                placeholder="Describe the initiative in a few sentences — the problem, who it's for, what success looks like."
-                className="text-[13px]"
-              />
-              <div className="mt-2.5 flex items-center gap-2">
-                <Button
-                  size="sm"
-                  disabled={shapeBusy || !shapeDesc.trim()}
-                  onClick={shapeWithAI}
-                >
-                  {shapeBusy ? (
-                    <>
-                      <Loader2 className="animate-spin" /> Drafting…
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles /> Generate spec
-                    </>
-                  )}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={shapeBusy}
-                  onClick={() => setShapeOpen(false)}
-                >
-                  Cancel
-                </Button>
-                <span className="font-mono text-[10.5px] text-ink-faint">
-                  arrives as proposed items — confirm, edit, or reject each below
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
 
       {error && (
         <p className="mt-3 rounded-md border border-proposed/30 bg-proposed/10 px-3 py-1.5 font-mono text-xs text-proposed-foreground">
@@ -451,42 +398,100 @@ export default function SpecDocument({ initialSpec }: { initialSpec: Spec }) {
         <h2 className="flex items-center gap-2 font-mono text-[11.5px] font-semibold tracking-[0.13em] text-accent-deep uppercase">
           <CircleDot className="size-3.5" /> Intent
         </h2>
-        <p className="mt-2.5 max-w-[54ch] font-serif text-[19px] leading-relaxed whitespace-pre-wrap">
-          {spec.intent || "—"}
-        </p>
+        <SpecIntent />
       </section>
 
-      {SECTIONS.map(({ key, title, note, icon: Icon, delay }) => {
+      {/* a1/a2: governing sections collapse by default, show a review count, and the guided flow
+          keeps the current one open — Constraints, then Acceptance criteria. */}
+      {GOVERNING.map(({ key, title, note, icon: Icon }) => {
         const items = spec[key] as SpecItem[];
-        const sectionProposed = items.filter((i) => i.status === "proposed").length;
+        const pending = pendingIn(key);
+        const open = viewAll || openKey === key;
         return (
-          <section key={key} className={cn("mt-8 animate-rise", delay)}>
-            <div className="flex items-end justify-between gap-3">
+          <section key={key} className="mt-6 animate-rise">
+            <button
+              type="button"
+              onClick={() => toggleSection(key)}
+              className="flex w-full items-center justify-between gap-3 rounded-md py-1.5 text-left transition-colors hover:text-accent-deep"
+            >
               <h2 className="flex items-center gap-2 font-mono text-[11.5px] font-semibold tracking-[0.13em] text-ink-soft uppercase">
+                {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
                 <Icon className="size-3.5" /> {title}
                 <span className="font-normal tracking-normal text-ink-faint normal-case">
                   · {note}
                 </span>
               </h2>
-              {sectionProposed > 0 && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() => confirmSection(key)}
-                  className="h-7 border-confirmed/50 px-2.5 font-mono text-[11px] tracking-wide text-confirmed-foreground hover:bg-confirmed/10"
-                >
-                  confirm all ({sectionProposed})
-                </Button>
+              {pending > 0 ? (
+                <span className="rounded-full bg-proposed/15 px-2 py-0.5 font-mono text-[10px] font-semibold tracking-wide text-proposed-foreground tabular-nums">
+                  {pending} to review
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 font-mono text-[10px] tracking-wide text-confirmed-foreground">
+                  <Check className="size-3" /> reviewed
+                </span>
               )}
-            </div>
-            <ul className="mt-3 space-y-2">
-              {items.map((it) => renderItem(it, key === "acceptance"))}
-            </ul>
-            {renderAdd(key)}
+            </button>
+            {open && (
+              <div className="mt-2">
+                <ul className="space-y-2">
+                  {items.map((it) => renderItem(it, key === "acceptance"))}
+                </ul>
+                {renderAdd(key)}
+              </div>
+            )}
           </section>
         );
       })}
+
+      {/* a3: discretion is the executor's latitude, not a governing decision — collapsed under
+          "Agent latitude," de-emphasised, and outside the guided auto-expand chain. D2 -> c:
+          bulk "confirm all" is offered here (and only here). */}
+      {(() => {
+        const items = spec.discretion;
+        const pending = pendingIn("discretion");
+        const open = viewAll || latitudeOpen;
+        return (
+          <section className="mt-9 rounded-lg border border-border/60 bg-muted/30 px-3.5 py-2.5">
+            <button
+              type="button"
+              onClick={() => setLatitudeOpen((o) => !o)}
+              className="flex w-full items-center justify-between gap-3 text-left transition-colors hover:text-accent-deep"
+            >
+              <h2 className="flex items-center gap-2 font-mono text-[10.5px] font-medium tracking-[0.13em] text-ink-faint uppercase">
+                {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+                <Compass className="size-3.5" /> Agent latitude
+                <span className="font-normal tracking-normal normal-case">
+                  · discretion — the executor's calls, not yours
+                </span>
+              </h2>
+              {pending > 0 && (
+                <span className="rounded-full bg-ink-faint/15 px-2 py-0.5 font-mono text-[10px] font-medium tracking-wide text-ink-faint tabular-nums">
+                  {pending}
+                </span>
+              )}
+            </button>
+            {open && (
+              <div className="mt-3">
+                {pending > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => confirmSection("discretion")}
+                    className="mb-2.5 h-7 px-2.5 font-mono text-[11px] tracking-wide text-ink-soft"
+                  >
+                    <Check /> Confirm all latitude ({pending})
+                  </Button>
+                )}
+                <ul className="space-y-2">
+                  {items.map((it) => renderItem(it, false))}
+                </ul>
+                {renderAdd("discretion")}
+              </div>
+            )}
+          </section>
+        );
+      })()}
     </div>
   );
 }

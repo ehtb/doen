@@ -12,6 +12,17 @@ export async function getSpec(initiativeId: string): Promise<Spec | null> {
   return res.json();
 }
 
+// 0012 u5: resolve a short ref (bd-7-slug, or a legacy long id) within a project to its spec,
+// plus the canonical short_id / short_slug the page uses to display BD-7 and redirect stale URLs.
+export async function getSpecByRef(projectId: string, ref: string): Promise<Spec | null> {
+  const res = await fetch(`${API_BASE}/projects/${projectId}/specs/${ref}`, {
+    cache: "no-store",
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`spec resolve failed (${res.status})`);
+  return res.json();
+}
+
 export async function listInitiatives(): Promise<Initiative[]> {
   // The dashboard's feed — initiatives change as they're created/advanced, so no cache.
   const res = await fetch(`${API_BASE}/initiatives`, { cache: "no-store" });
@@ -23,6 +34,14 @@ export async function listProjects(): Promise<Project[]> {
   // The level above the dashboard (0010) — created out of band, so never cache.
   const res = await fetch(`${API_BASE}/projects`, { cache: "no-store" });
   if (!res.ok) throw new Error(`projects fetch failed (${res.status})`);
+  return res.json();
+}
+
+export async function getProject(projectId: string): Promise<Project | null> {
+  // The project on its own — used for breadcrumb labels (0013 u1). Never cache.
+  const res = await fetch(`${API_BASE}/projects/${projectId}`, { cache: "no-store" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`project fetch failed (${res.status})`);
   return res.json();
 }
 

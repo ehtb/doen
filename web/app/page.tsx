@@ -1,8 +1,10 @@
 import Link from "next/link";
-import { ArrowRight, Layers } from "lucide-react";
+import { ArrowRight, Layers, Sparkles } from "lucide-react";
 
 import { listInitiatives, listProjects } from "@/lib/api";
 import type { Initiative, Project } from "@/lib/types";
+import { SetBreadcrumb } from "@/app/_shell/breadcrumb";
+import NewProject from "./NewProject";
 
 // The dashboard reflects live state — projects + initiatives change out of band.
 export const dynamic = "force-dynamic";
@@ -43,6 +45,8 @@ export default async function Home() {
 
   return (
     <main className="relative z-10 mx-auto max-w-3xl px-5 py-16">
+      {/* root is the top of the hierarchy — the header brand alone reads "Doen", no trail */}
+      <SetBreadcrumb crumbs={[]} />
       <header className="animate-rise">
         <span className="font-mono text-[11px] font-semibold tracking-[0.18em] text-accent-deep uppercase">
           Doen
@@ -65,17 +69,42 @@ export default async function Home() {
         </h2>
 
         {projects.length === 0 ? (
-          <p className="mt-4 text-sm text-muted-foreground">
-            No projects yet — every initiative belongs to one.
-          </p>
+          // First visit (0013 u4): the Advisor itself greets and walks the user from zero — no
+          // tour, no modal. The next step (creating a project) is inline and prominent.
+          <div className="animate-rise mt-5 rounded-2xl border border-rail-border bg-rail p-6 text-rail-foreground">
+            <span className="flex items-center gap-1.5 font-mono text-[10px] font-semibold tracking-[0.14em] text-primary uppercase">
+              <Sparkles className="size-3" /> Advisor
+            </span>
+            <h3 className="mt-2.5 font-serif text-[22px] leading-snug">
+              Welcome — let&apos;s set up your first project.
+            </h3>
+            <p className="mt-2 max-w-[58ch] text-[14px] leading-relaxed text-rail-muted">
+              Doen is where you decide what&apos;s worth building and steer it. I&apos;m the
+              Advisor — I help you shape a living spec, then an executor builds against it and
+              brings the decisions back to you. Start with a project: a container for related
+              work. Name it and give it a one-sentence intent.
+            </p>
+            <div className="mt-4">
+              <NewProject defaultOpen />
+            </div>
+            <p className="mt-4 max-w-[58ch] text-[13px] leading-relaxed text-rail-muted">
+              Once it exists, describe your first initiative inside it and I&apos;ll draft the
+              whole spec for you to correct — that&apos;s how the loop starts.
+            </p>
+          </div>
         ) : (
-          <ul className="mt-4 space-y-2.5">
-            {projects.map((p: Project) => (
-              <li key={p.id}>
-                <ProjectCard project={p} count={countFor(p.id)} />
-              </li>
-            ))}
-          </ul>
+          <>
+            <div className="mt-4">
+              <NewProject />
+            </div>
+            <ul className="mt-5 space-y-2.5">
+              {projects.map((p: Project) => (
+                <li key={p.id}>
+                  <ProjectCard project={p} count={countFor(p.id)} />
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </section>
     </main>

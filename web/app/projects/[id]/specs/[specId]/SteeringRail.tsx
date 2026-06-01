@@ -59,7 +59,7 @@ export default function SteeringRail({ initiativeId }: { initiativeId: string })
   const waiting = decisions?.length ?? 0;
 
   return (
-    <aside id="steering-rail" className="animate-rise [animation-delay:120ms] scroll-mt-6 overflow-hidden rounded-2xl bg-rail text-rail-foreground shadow-2xl ring-1 ring-black/20">
+    <aside id="steering-rail" className="animate-rise [animation-delay:120ms] scroll-mt-6 overflow-hidden rounded-2xl border border-rail-border bg-rail text-rail-foreground shadow-sm">
       <div className="border-b border-rail-border px-5 py-4">
         <div className="flex items-baseline justify-between">
           <span className="font-serif text-[15px] font-semibold">Steering rail</span>
@@ -77,7 +77,10 @@ export default function SteeringRail({ initiativeId }: { initiativeId: string })
         {error && <p className="font-mono text-xs text-proposed">{error}</p>}
 
         {decisions !== null && waiting === 0 && !error && (
-          <p className="py-2 text-sm text-rail-muted">Nothing waiting — the rail is quiet.</p>
+          <p className="py-2 text-sm text-rail-muted">
+            No open decisions — the build is unblocked. When the executor hits a call outside the
+            spec, it surfaces here for your judgment.
+          </p>
         )}
 
         <div className="space-y-3.5">

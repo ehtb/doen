@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Literal
 
 import asyncpg
@@ -50,6 +51,7 @@ from app.models import (
     Verdict,
     WorkUnit,
     _now,
+    derive_prefix,
     derive_state,
     slug_prefix,
     slugify,
@@ -80,7 +82,7 @@ def _decision_text(d: Decision) -> str:
 def _initiative_from_row(row: asyncpg.Record) -> Initiative:
     return Initiative(
         id=row["id"], title=row["title"], state=row["state"],
-        project_id=row["project_id"],
+        project_id=row["project_id"], seq=row["seq"],
         org_id=row["org_id"], owner_id=row["owner_id"],
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
@@ -89,7 +91,7 @@ def _initiative_from_row(row: asyncpg.Record) -> Initiative:
 
 def _project_from_row(row: asyncpg.Record) -> Project:
     return Project(
-        id=row["id"], name=row["name"], intent=row["intent"],
+        id=row["id"], name=row["name"], prefix=row["prefix"], intent=row["intent"],
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
     )
@@ -107,6 +109,7 @@ def _sibling_summary(
     confirmed = spec.confirmed_constraints()
     return SiblingSummary(
         initiative_id=row["id"],
+        seq=row["seq"],
         title=spec.title,
         state=row["state"],
         constraint_count=len(confirmed),
@@ -237,11 +240,19 @@ class SpecStore:
         spec = Spec(initiative_id=slug, title=title, state="draft")
         async with self.pg.acquire() as conn:
             async with conn.transaction():
+                # Allocate the immutable per-project sequence (0012 u5/a10). Lock the project row
+                # so concurrent creations serialise — MAX+1 can't race two initiatives onto one seq.
+                await conn.execute("SELECT 1 FROM projects WHERE id = $1 FOR UPDATE", project_id)
+                seq: int = await conn.fetchval(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 FROM initiatives WHERE project_id = $1",
+                    project_id,
+                )
                 await conn.execute(
                     """INSERT INTO initiatives
-                           (id, title, project_id, org_id, owner_id, state, created_at, updated_at)
-                       VALUES ($1, $2, $3, $4, $5, 'draft', now(), now())""",
-                    slug, title, project_id, org_id, owner_id,
+                           (id, title, project_id, seq, org_id, owner_id,
+                            state, created_at, updated_at)
+                       VALUES ($1, $2, $3, $4, $5, $6, 'draft', now(), now())""",
+                    slug, title, project_id, seq, org_id, owner_id,
                 )
                 # Scaffold the spec at version 0 directly. A brand-new spec has no prior
                 # row to guard, so this doesn't bypass the optimistic lock — the first real
@@ -254,27 +265,67 @@ class SpecStore:
         await self.redis.set(f"spec:{slug}", spec.model_dump_json(), ex=SPEC_CACHE_TTL)
         return Initiative(
             id=slug, title=title, state="draft",
-            project_id=project_id, org_id=org_id, owner_id=owner_id,
+            project_id=project_id, seq=seq, org_id=org_id, owner_id=owner_id,
         )
 
     async def get_initiative(self, initiative_id: str) -> Initiative | None:
         """The initiative's lifecycle context — surfaced alongside the spec on MCP get_spec
         so an executor grounds itself in the lifecycle state before acting (D1 / 0004)."""
         row = await self.pg.fetchrow(
-            """SELECT id, title, state, project_id, org_id, owner_id, created_at, updated_at
+            """SELECT id, title, state, project_id, seq, org_id, owner_id, created_at, updated_at
                FROM initiatives WHERE id = $1""",
             initiative_id,
         )
         return _initiative_from_row(row) if row else None
 
+    async def get_initiative_by_seq(self, project_id: str, seq: int) -> Initiative | None:
+        """Find an initiative by its per-project sequence number (0012 u5) — the resolution
+        behind the short id BD-7 / the URL key bd-7-slug."""
+        row = await self.pg.fetchrow(
+            """SELECT id, title, state, project_id, seq, org_id, owner_id, created_at, updated_at
+               FROM initiatives WHERE project_id = $1 AND seq = $2""",
+            project_id, seq,
+        )
+        return _initiative_from_row(row) if row else None
+
+    _SHORT_REF = re.compile(r"^[A-Za-z]+-(\d+)(?:-.*)?$")
+
+    async def resolve_initiative(self, project_id: str, ref: str) -> Initiative | None:
+        """Resolve a URL ref within a project to its initiative (0012 u5/a10). Accepts the new
+        short form (`bd-7-slug` / `bd-7`) — prefix + per-project seq — and, for backward
+        compatibility, a legacy long initiative id, so old links still land (then redirect)."""
+        m = self._SHORT_REF.match(ref)
+        if m:
+            by_seq = await self.get_initiative_by_seq(project_id, int(m.group(1)))
+            if by_seq is not None:
+                return by_seq
+        legacy = await self.get_initiative(ref)
+        return legacy if legacy is not None and legacy.project_id == project_id else None
+
+    async def archive_initiative(self, initiative_id: str, reason: str) -> None:
+        """Soft-archive an initiative (0013 follow-up): the spec, units, decisions, and memory
+        stay on disk; archived_at hides it from every active list. Idempotent — re-archiving a
+        already-archived initiative is a no-op. Raises NotFoundError if it doesn't exist."""
+        result = await self.pg.execute(
+            """UPDATE initiatives
+                  SET archived_at     = COALESCE(archived_at, now()),
+                      archived_reason = COALESCE(archived_reason, $2),
+                      updated_at      = now()
+                WHERE id = $1""",
+            initiative_id, reason,
+        )
+        if result == "UPDATE 0":
+            raise NotFoundError(f"no initiative {initiative_id}")
+
     async def list_initiatives(self) -> list[Initiative]:
-        """Every initiative that has a spec — the dashboard's feed (0004 a3). Most recently
-        updated first."""
+        """Every active initiative that has a spec — the dashboard's feed (0004 a3). Most
+        recently updated first. Archived initiatives are hidden by design (0013 follow-up)."""
         rows = await self.pg.fetch(
-            """SELECT i.id, i.title, i.state, i.project_id, i.org_id, i.owner_id,
+            """SELECT i.id, i.title, i.state, i.project_id, i.seq, i.org_id, i.owner_id,
                       i.created_at, i.updated_at
                FROM initiatives i
                JOIN specs s ON s.initiative_id = i.id
+               WHERE i.archived_at IS NULL
                ORDER BY i.updated_at DESC, i.id"""
         )
         return [_initiative_from_row(r) for r in rows]
@@ -316,24 +367,49 @@ class SpecStore:
         return slug
 
     # --- projects: group initiatives under a strategic intent (0010 u1) ------
-    async def create_project(self, name: str, intent: str = "") -> Project:
+    async def create_project(
+        self, name: str, intent: str = "", prefix: str | None = None
+    ) -> Project:
         """Create a project with a unique slug: a short random prefix + the name-derived part
-        (constraint 1), so distinct projects never collide."""
+        (constraint 1), so distinct projects never collide. `prefix` overrides the auto-derived
+        short handle (0013 u2); whichever is used, a collision is disambiguated by suffixing."""
         base = f"{slug_prefix()}-{slugify(name)}"
         slug, n = base, 2
         while await self.pg.fetchval("SELECT 1 FROM projects WHERE id = $1", slug):
             slug, n = f"{base}-{n}", n + 1
-        proj = Project(id=slug, name=name, intent=intent)
+        # the short handle for this project's initiatives (0012 u5); keep it unique so BD-7 is
+        # unambiguous — disambiguate a collision by appending a number (BD, BD2, BD3, …). A
+        # user-supplied prefix is normalised to the same shape (uppercase alphanumerics).
+        cleaned = re.sub(r"[^A-Za-z0-9]", "", prefix or "").upper()
+        base_prefix = cleaned or derive_prefix(name)
+        prefix, m = base_prefix, 2
+        while await self.pg.fetchval(
+            "SELECT 1 FROM projects WHERE upper(prefix) = upper($1)", prefix
+        ):
+            prefix, m = f"{base_prefix}{m}", m + 1
+        proj = Project(id=slug, name=name, prefix=prefix, intent=intent)
         await self.pg.execute(
-            """INSERT INTO projects (id, name, intent, created_at, updated_at)
-               VALUES ($1, $2, $3, now(), now())""",
-            proj.id, proj.name, proj.intent,
+            """INSERT INTO projects (id, name, prefix, intent, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, now(), now())""",
+            proj.id, proj.name, proj.prefix, proj.intent,
         )
         return proj
 
+    async def update_project(self, project_id: str, *, intent: str) -> Project:
+        """Edit a project's intent inline from the dashboard (0013 u2). Raises if it's gone."""
+        row = await self.pg.fetchrow(
+            """UPDATE projects SET intent = $2, updated_at = now()
+               WHERE id = $1
+               RETURNING id, name, prefix, intent, created_at, updated_at""",
+            project_id, intent,
+        )
+        if row is None:
+            raise NotFoundError(f"no project {project_id}")
+        return _project_from_row(row)
+
     async def get_project(self, project_id: str) -> Project | None:
         row = await self.pg.fetchrow(
-            "SELECT id, name, intent, created_at, updated_at FROM projects WHERE id = $1",
+            "SELECT id, name, prefix, intent, created_at, updated_at FROM projects WHERE id = $1",
             project_id,
         )
         return _project_from_row(row) if row else None
@@ -341,19 +417,20 @@ class SpecStore:
     async def list_projects(self) -> list[Project]:
         """Every project, newest first — the level above the dashboard (0010 a2)."""
         rows = await self.pg.fetch(
-            """SELECT id, name, intent, created_at, updated_at
+            """SELECT id, name, prefix, intent, created_at, updated_at
                FROM projects ORDER BY created_at DESC, id"""
         )
         return [_project_from_row(r) for r in rows]
 
     async def list_project_initiatives(self, project_id: str) -> list[Initiative]:
-        """The initiatives grouped under a project (0010 a2/a7), most recently updated first."""
+        """The active initiatives grouped under a project (0010 a2/a7), most recently updated
+        first. Archived initiatives are hidden (0013 follow-up)."""
         rows = await self.pg.fetch(
-            """SELECT i.id, i.title, i.state, i.project_id, i.org_id, i.owner_id,
+            """SELECT i.id, i.title, i.state, i.project_id, i.seq, i.org_id, i.owner_id,
                       i.created_at, i.updated_at
                FROM initiatives i
                JOIN specs s ON s.initiative_id = i.id
-               WHERE i.project_id = $1
+               WHERE i.project_id = $1 AND i.archived_at IS NULL
                ORDER BY i.updated_at DESC, i.id""",
             project_id,
         )
@@ -376,10 +453,11 @@ class SpecStore:
         if proj is None:
             return None
         rows = await self.pg.fetch(
-            """SELECT i.id, i.state, s.doc
+            """SELECT i.id, i.seq, i.state, s.doc
                FROM initiatives i
                JOIN specs s ON s.initiative_id = i.id
-               WHERE i.project_id = $1 AND ($2::text IS NULL OR i.id <> $2)
+               WHERE i.project_id = $1 AND i.archived_at IS NULL
+                 AND ($2::text IS NULL OR i.id <> $2)
                ORDER BY i.updated_at DESC, i.id
                LIMIT $3""",
             project_id, exclude, sibling_limit,
@@ -389,7 +467,8 @@ class SpecStore:
             """SELECT DISTINCT ON (d.initiative_id) d.initiative_id, d.payload
                FROM decisions d
                JOIN initiatives i ON i.id = d.initiative_id
-               WHERE i.project_id = $1 AND ($2::text IS NULL OR i.id <> $2)
+               WHERE i.project_id = $1 AND i.archived_at IS NULL
+                 AND ($2::text IS NULL OR i.id <> $2)
                  AND d.status = 'resolved'
                ORDER BY d.initiative_id, d.resolved_at DESC NULLS LAST""",
             project_id, exclude,
@@ -400,16 +479,17 @@ class SpecStore:
         }
         siblings = [_sibling_summary(r, latest, max_constraints) for r in rows]
         return ProjectContext(
-            project_id=proj.id, name=proj.name, intent=proj.intent, siblings=siblings
+            project_id=proj.id, name=proj.name, prefix=proj.prefix,
+            intent=proj.intent, siblings=siblings,
         )
 
     async def count_open_decisions(self, project_id: str) -> int:
-        """Open escalations across every initiative in a project — a whole-project aggregate
-        for the dashboard (0010 a2)."""
+        """Open escalations across every active initiative in a project — a whole-project
+        aggregate for the dashboard (0010 a2). Archived initiatives are excluded."""
         return await self.pg.fetchval(
             """SELECT count(*) FROM decisions d
                JOIN initiatives i ON i.id = d.initiative_id
-               WHERE i.project_id = $1 AND d.status = 'open'""",
+               WHERE i.project_id = $1 AND i.archived_at IS NULL AND d.status = 'open'""",
             project_id,
         )
 
@@ -430,20 +510,21 @@ class SpecStore:
                          WHERE e->>'status' = 'proposed') AS proposed_items
                FROM initiatives i
                JOIN specs s ON s.initiative_id = i.id
-               WHERE i.project_id = $1""",
+               WHERE i.project_id = $1 AND i.archived_at IS NULL""",
             project_id,
         )
         dec_rows = await self.pg.fetch(
             """SELECT d.initiative_id AS id, count(*) AS n
                FROM decisions d JOIN initiatives i ON i.id = d.initiative_id
-               WHERE i.project_id = $1 AND d.status = 'open'
+               WHERE i.project_id = $1 AND i.archived_at IS NULL AND d.status = 'open'
                GROUP BY d.initiative_id""",
             project_id,
         )
         unit_rows = await self.pg.fetch(
             """SELECT w.spec_id AS id, count(*) AS n
                FROM work_units w JOIN initiatives i ON i.id = w.spec_id
-               WHERE i.project_id = $1 AND w.status = 'in_verification'
+               WHERE i.project_id = $1 AND i.archived_at IS NULL
+                 AND w.status = 'in_verification'
                GROUP BY w.spec_id""",
             project_id,
         )
@@ -467,10 +548,20 @@ class SpecStore:
             raise NotFoundError(f"no initiative {initiative_id}")
         if await self.get_project(project_id) is None:
             raise NotFoundError(f"no project {project_id}")
-        await self.pg.execute(
-            "UPDATE initiatives SET project_id = $2, updated_at = now() WHERE id = $1",
-            initiative_id, project_id,
-        )
+        # Moving projects renumbers: the per-project seq is unique, so allocate a fresh one in the
+        # target (the short id is per-project — a move necessarily reassigns it).
+        async with self.pg.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SELECT 1 FROM projects WHERE id = $1 FOR UPDATE", project_id)
+                seq: int = await conn.fetchval(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 FROM initiatives WHERE project_id = $1",
+                    project_id,
+                )
+                await conn.execute(
+                    "UPDATE initiatives SET project_id = $2, seq = $3, updated_at = now() "
+                    "WHERE id = $1",
+                    initiative_id, project_id, seq,
+                )
         updated = await self.get_initiative(initiative_id)
         assert updated is not None  # it exists — we just updated it
         return updated

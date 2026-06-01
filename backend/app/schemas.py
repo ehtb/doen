@@ -36,10 +36,25 @@ class CreateInitiative(BaseModel):
 class CreateProject(BaseModel):
     name: str
     intent: str = ""  # the strategic goal, prose
+    # 0013 u2: the short handle (BD) for this project's initiatives. Optional — auto-derived from
+    # the name when omitted; a collision is disambiguated by suffixing (BD, BD2, …).
+    prefix: str | None = None
+
+
+class UpdateProject(BaseModel):
+    # 0013 u2: inline editing from the project dashboard. Every field optional — a PATCH carries
+    # only what changed; intent is what the inline editor sends.
+    intent: str | None = None
 
 
 class AssignProject(BaseModel):
     project_id: str  # move to a (different) project; there is no detach (no orphan specs)
+
+
+class ArchiveInitiative(BaseModel):
+    # 0013 follow-up: "rejected" from draft, "archived" from building/complete — same mechanism,
+    # different label. Free text is allowed so a future UI can carry a richer rationale.
+    reason: str = "archived"
 
 
 class ProjectDashboard(BaseModel):

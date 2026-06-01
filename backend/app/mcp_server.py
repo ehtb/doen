@@ -28,6 +28,7 @@ from redis import asyncio as aioredis
 from app.config import DATABASE_URL, REDIS_URL
 from app.exceptions import DecisionTimeout, InvalidTransition, NotFoundError
 from app.models import CriterionResult, Decision, Submission, WorkUnit
+from app.services.conversation import spec_enrichment, summarize_conversation
 from app.services.guidance import generate_guidance
 from app.services.review import post_review
 from app.store import SpecStore
@@ -64,7 +65,12 @@ async def get_spec(initiative_id: str, ctx: Context) -> dict:
     """Read the whole living spec for an initiative at its current version, plus the
     initiative's lifecycle context as `initiative: {id, title, state}`. Ground yourself in
     intent, constraints, discretion, acceptance — and state (0011: draft / building / complete;
-    don't reshape a spec already `building`) — before acting."""
+    don't reshape a spec already `building`) — before acting.
+
+    Enriched (0013 u5) with `advisor_summary` (the Advisor's latest guidance note for this
+    initiative) and `unit_context` (per unit: the executor's submission summary, the human's
+    verification feedback + verdict, and the Advisor's preliminary review notes) — so you see the
+    reasoning around the work, not just the spec. Both are present only when that data exists."""
     store = _store(ctx)
     spec = await store.get_spec(initiative_id)
     if spec is None:
@@ -74,7 +80,18 @@ async def get_spec(initiative_id: str, ctx: Context) -> dict:
     out["initiative"] = (
         {"id": init.id, "title": init.title, "state": init.state} if init else None
     )
+    out.update(await spec_enrichment(store, initiative_id))
     return out
+
+
+@mcp.tool()
+async def get_conversation_summary(initiative_id: str, ctx: Context) -> dict:
+    """Read WHY this spec is the way it is (0013 u5). Returns a compact, structured summary of the
+    shaping conversation: `key_decisions` (each with the question, the option chosen, and the
+    rationale), `rejected_alternatives` (the options that were considered and dropped), and
+    `stated_priorities` (the human's own turns — what they said mattered). Use it to understand
+    the intent behind the constraints before you build, so you don't re-decide what's settled."""
+    return await summarize_conversation(_store(ctx), initiative_id)
 
 
 @mcp.tool()

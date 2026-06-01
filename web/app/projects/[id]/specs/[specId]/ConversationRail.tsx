@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowUp, Check, CornerDownRight, Loader2, Sparkles, User } from "lucide-react";
 import type { AdvisorTurn, Message, Proposal, Spec } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { useSpecOptional } from "./spec-context";
 
 const SECTION_NOTE: Record<Proposal["section"], string> = {
   constraints: "constraint",
@@ -27,6 +28,7 @@ export default function ConversationRail({
   subtitle = "how you author & steer it — your thinking partner",
   shapeHint = false,
   specId,
+  review,
 }: {
   messagesUrl: string;
   advisorUrl: string;
@@ -35,8 +37,11 @@ export default function ConversationRail({
   subtitle?: string;
   shapeHint?: boolean;
   specId?: string;
+  // 0012 u3: an optional guided-review panel pinned at the top of the thread (initiative rail only).
+  review?: ReactNode;
 }) {
   const router = useRouter();
+  const specCtx = useSpecOptional();
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -64,8 +69,20 @@ export default function ConversationRail({
     threadEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, sending]);
 
-  async function send() {
-    const content = input.trim();
+  // 0013 u3: the kickoff surface can ask the Advisor to decompose the spec. It sets a one-shot
+  // rail prompt; we send it once the rail is free, then clear it so it can't re-fire.
+  useEffect(() => {
+    const pending = specCtx?.railPrompt;
+    if (pending && !sending) {
+      specCtx?.clearRailPrompt();
+      send(pending);
+    }
+    // send is a stable closure over component state; re-running on prompt/sending is enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [specCtx?.railPrompt, sending]);
+
+  async function send(explicit?: string) {
+    const content = (explicit ?? input).trim();
     if (!content || sending) return;
     setSending(true);
     setError(null);
@@ -155,7 +172,7 @@ export default function ConversationRail({
   const empty = messages !== null && messages.length === 0;
 
   return (
-    <aside className="animate-rise flex flex-col overflow-hidden rounded-2xl bg-rail text-rail-foreground shadow-2xl ring-1 ring-black/20">
+    <aside className="animate-rise flex flex-col overflow-hidden rounded-2xl border border-rail-border bg-rail text-rail-foreground shadow-sm">
       <div className="border-b border-rail-border px-5 py-4">
         <div className="flex items-baseline justify-between">
           <span className="font-serif text-[15px] font-semibold">Conversation</span>
@@ -168,6 +185,7 @@ export default function ConversationRail({
       </div>
 
       <div className="max-h-[460px] flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        {review}
         {error && <p className="font-mono text-xs text-proposed">{error}</p>}
 
         {empty && !error && (
@@ -223,7 +241,7 @@ export default function ConversationRail({
         />
         <div className="mt-2 flex items-center justify-between">
           <span className="font-mono text-[10px] tracking-wide text-rail-muted">⌘↵ to send</span>
-          <Button size="sm" disabled={sending || !input.trim()} onClick={send}>
+          <Button size="sm" disabled={sending || !input.trim()} onClick={() => send()}>
             {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />} Send
           </Button>
         </div>
@@ -330,7 +348,7 @@ function ProposalCard({
             variant="ghost"
             disabled={busy}
             onClick={onDismiss}
-            className="h-7 border border-rail-border px-2.5 text-xs text-rail-foreground hover:bg-white/5"
+            className="h-7 border border-rail-border px-2.5 text-xs text-rail-foreground hover:bg-black/5"
           >
             Dismiss
           </Button>

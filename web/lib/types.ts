@@ -25,6 +25,10 @@ export interface Spec {
   acceptance: AcceptanceCriterion[];
   references: unknown[];
   memory_links: string[];
+  // 0012 u5: the canonical short id (BD-12) + URL slug (bd-12-…), present when the spec is read
+  // by ref via /projects/{id}/specs/{ref}. Resolved from the project prefix + per-project seq.
+  short_id?: string;
+  short_slug?: string;
 }
 
 // The parent entity listed on the dashboard (backend Initiative, store.py).
@@ -33,6 +37,7 @@ export interface Initiative {
   title: string | null;
   state: string; // inferred lifecycle (0011): draft / building / complete
   project_id: string; // the parent project (0010) — every initiative belongs to one
+  seq: number; // immutable per-project sequence (0012 u5) — with the project prefix forms BD-7
   org_id?: string | null;
   owner_id?: string | null;
   created_at: string;
@@ -43,6 +48,7 @@ export interface Initiative {
 export interface Project {
   id: string;
   name: string;
+  prefix: string; // 0012 u5: the short handle for this project's initiatives (BD -> BD-7)
   intent: string;
   created_at: string;
   updated_at: string;

@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 
 from app.database import get_store
 from app.exceptions import NotFoundError, ValidationError
-from app.models import Initiative, Message, Project
+from app.models import Initiative, Message, Project, short_id, short_slug
 from app.schemas import (
     AdvisorTurn,
     AssignProject,
@@ -20,6 +20,7 @@ from app.schemas import (
     PostMessage,
     ProjectDashboard,
     ShapeWithAI,
+    UpdateProject,
 )
 from app.services import advisor as advisor_service
 from app.services import shaping as shaping_service
@@ -38,10 +39,13 @@ async def list_projects(store: _Store) -> list[Project]:
 
 @router.post("/projects", status_code=201)
 async def create_project(body: CreateProject, store: _Store) -> Project:
-    """Create a project with a name + strategic intent (0010 a1)."""
+    """Create a project with a name + strategic intent (0010 a1), with an optional short prefix
+    that's auto-derived from the name when omitted (0013 u2)."""
     if not body.name.strip():
         raise ValidationError("project name must not be empty")
-    return await store.create_project(body.name.strip(), body.intent.strip())
+    return await store.create_project(
+        body.name.strip(), body.intent.strip(), prefix=body.prefix
+    )
 
 
 @router.get("/projects/{project_id}")
@@ -50,6 +54,17 @@ async def get_project(project_id: str, store: _Store) -> Project:
     if project is None:
         raise NotFoundError(f"no project {project_id}")
     return project
+
+
+@router.patch("/projects/{project_id}")
+async def update_project(project_id: str, body: UpdateProject, store: _Store) -> Project:
+    """Edit a project's intent inline from its dashboard (0013 u2). A no-op PATCH just re-reads."""
+    if body.intent is None:
+        project = await store.get_project(project_id)
+        if project is None:
+            raise NotFoundError(f"no project {project_id}")
+        return project
+    return await store.update_project(project_id, intent=body.intent.strip())
 
 
 @router.get("/projects/{project_id}/initiatives")
@@ -73,6 +88,28 @@ async def project_dashboard(project_id: str, store: _Store) -> ProjectDashboard:
         open_decisions=await store.count_open_decisions(project_id),
         attention=await store.get_project_attention(project_id),
     )
+
+
+@router.get("/projects/{project_id}/specs/{ref}")
+async def resolve_spec(project_id: str, ref: str, store: _Store) -> dict:
+    """Resolve a short ref (`bd-7-slug`, or just `bd-7`) — or a legacy long initiative id — to
+    its spec within the project, plus the canonical short id and slug (0012 u5, a10/a11). The
+    URL key is the short, per-project id; the stable initiative id still drives every write
+    underneath. The web redirects to the canonical slug when the ref isn't already it."""
+    proj = await store.get_project(project_id)
+    if proj is None:
+        raise NotFoundError(f"no project {project_id}")
+    init = await store.resolve_initiative(project_id, ref)
+    if init is None:
+        raise NotFoundError(f"no initiative {ref} in project {project_id}")
+    spec = await store.get_spec(init.id)
+    if spec is None:
+        raise NotFoundError(f"no spec for initiative {init.id}")
+    return {
+        **spec.model_dump(),
+        "short_id": short_id(proj.prefix, init.seq),
+        "short_slug": short_slug(proj.prefix, init.seq, spec.title),
+    }
 
 
 @router.post("/projects/{project_id}/initiatives/shape", status_code=201)

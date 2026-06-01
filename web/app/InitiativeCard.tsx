@@ -62,16 +62,23 @@ function AttentionChip({
 export function InitiativeCard({
   initiative,
   attention,
+  shortId,
+  href,
 }: {
   initiative: Initiative;
   attention?: InitiativeAttention;
+  // 0012 u5/a11: when the parent knows the project prefix it passes the short id (BD-7) + the
+  // short-slug href; on feeds that don't (the cross-project home), we fall back to the long id
+  // (which still resolves and redirects).
+  shortId?: string;
+  href?: string;
 }) {
   const total = attention
     ? attention.proposed_items + attention.open_decisions + attention.units_to_verify
     : 0;
   return (
     <Link
-      href={`/projects/${initiative.project_id}/specs/${initiative.id}`}
+      href={href ?? `/projects/${initiative.project_id}/specs/${initiative.id}`}
       className="group block rounded-lg border border-border bg-card/60 px-5 py-4 transition-colors hover:bg-card"
     >
       <div className="flex items-center justify-between gap-4">
@@ -79,7 +86,13 @@ export function InitiativeCard({
           <h3 className="truncate font-serif text-[19px] leading-snug">
             {initiative.title ?? initiative.id}
           </h3>
-          <p className="mt-1 font-mono text-[11px] text-ink-faint">{initiative.id}</p>
+          <p className="mt-1 font-mono text-[11px] text-ink-faint">
+            {shortId ? (
+              <span className="font-semibold tracking-wide text-accent-deep">{shortId}</span>
+            ) : (
+              initiative.id
+            )}
+          </p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <StateBadge state={initiative.state} />

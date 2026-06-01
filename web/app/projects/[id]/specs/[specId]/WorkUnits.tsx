@@ -6,6 +6,9 @@ import type { AcceptanceCriterion, WorkUnit } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { useSpec } from "./spec-context";
+import CopyBuildPrompt from "./CopyBuildPrompt";
+import KickoffSurface from "./KickoffSurface";
 
 // Units change out-of-band: the executor proposes, reports progress, and submits over
 // MCP. Short-poll like the rail so the human's view tracks the executor without refresh.
@@ -46,12 +49,23 @@ export default function WorkUnits({
   initiativeId: string;
   acceptance: AcceptanceCriterion[];
 }) {
+  const { spec } = useSpec();
   const [units, setUnits] = useState<WorkUnit[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Record<string, string>>({});
+  const [showAll, setShowAll] = useState(false);
 
   const critText = (id: string) => acceptance.find((a) => a.id === id)?.text ?? id;
+
+  // The kickoff replaces the empty state only once the spec is fully reviewed (0013 u3): every
+  // item resolved (none still proposed) and at least one confirmed. Until then, the empty state
+  // points back to finishing the review.
+  const items = [...spec.constraints, ...spec.discretion, ...spec.acceptance];
+  const fullyReviewed =
+    items.length > 0 &&
+    !items.some((i) => i.status === "proposed") &&
+    items.some((i) => i.status === "confirmed");
 
   const load = useCallback(async () => {
     try {
@@ -212,12 +226,15 @@ export default function WorkUnits({
 
   return (
     <section id="work-units" className="mt-10 animate-rise scroll-mt-6 border-t border-border pt-7 [animation-delay:320ms]">
-      <h2 className="flex items-center gap-2 font-mono text-[11.5px] font-semibold tracking-[0.13em] text-ink-soft uppercase">
-        <Hammer className="size-3.5" /> Work units
-        <span className="font-normal tracking-normal text-ink-faint normal-case">
-          · decomposed, built, verified — the loop closes here
-        </span>
-      </h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="flex items-center gap-2 font-mono text-[11.5px] font-semibold tracking-[0.13em] text-ink-soft uppercase">
+          <Hammer className="size-3.5" /> Work units
+          <span className="font-normal tracking-normal text-ink-faint normal-case">
+            · decomposed, built, verified — the loop closes here
+          </span>
+        </h2>
+        <CopyBuildPrompt />
+      </div>
 
       {error && (
         <p className="mt-3 rounded-md border border-proposed/30 bg-proposed/10 px-3 py-1.5 font-mono text-xs text-proposed-foreground">
@@ -226,13 +243,59 @@ export default function WorkUnits({
       )}
 
       {units !== null && units.length === 0 && !error && (
-        <p className="mt-3 text-sm text-muted-foreground">
-          No work units yet — the executor proposes them over MCP (
-          <code className="font-mono text-[12px]">propose_unit</code>); you confirm them here.
-        </p>
+        fullyReviewed ? (
+          <KickoffSurface />
+        ) : (
+          <p className="mt-3 text-sm text-muted-foreground">
+            Finish reviewing the spec above — confirm or reject each proposed item — then this
+            becomes your implementation kickoff: a ready-to-paste prompt and the Advisor&apos;s
+            decomposition.
+          </p>
+        )
       )}
 
-      <ul className="mt-4 space-y-2.5">{(units ?? []).map(renderUnit)}</ul>
+      {units !== null && units.length > 0 && (() => {
+        // Once every unit is verified, the long list adds little signal — collapse it into a
+        // compact summary so the page can move the user's attention to the Learn step (0013 AC10).
+        const allDone = units.every((u) => u.status === "done");
+        if (allDone && !showAll) {
+          return (
+            <div className="animate-rise mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-confirmed/30 bg-confirmed/5 px-4 py-3">
+              <Check className="size-4 shrink-0 text-confirmed-foreground" />
+              <p className="text-[13.5px] text-foreground">
+                Build complete —{" "}
+                <span className="font-semibold text-confirmed-foreground">
+                  {units.length} units
+                </span>
+                , all approved.
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowAll(true)}
+                className="ml-auto font-mono text-[11px] tracking-wide text-ink-faint underline-offset-4 hover:text-accent-deep hover:underline"
+              >
+                Show all units
+              </button>
+            </div>
+          );
+        }
+        return (
+          <>
+            <ul className="mt-4 space-y-2.5">{units.map(renderUnit)}</ul>
+            {allDone && (
+              <div className="mt-3 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowAll(false)}
+                  className="font-mono text-[11px] tracking-wide text-ink-faint underline-offset-4 hover:text-accent-deep hover:underline"
+                >
+                  Collapse
+                </button>
+              </div>
+            )}
+          </>
+        );
+      })()}
     </section>
   );
 }

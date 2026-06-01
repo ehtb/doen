@@ -1,10 +1,12 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, GitBranch, Layers } from "lucide-react";
+import { GitBranch, Layers } from "lucide-react";
 
 import { getProjectDashboard } from "@/lib/api";
+import { shortId, shortSlug } from "@/lib/utils";
+import { SetBreadcrumb } from "@/app/_shell/breadcrumb";
 import { InitiativeCard, STATES } from "../../InitiativeCard";
 import NewInitiative from "../../NewInitiative";
+import ProjectIntent from "./ProjectIntent";
 import ConversationRail from "./specs/[specId]/ConversationRail";
 
 // The project as a whole — its grouped initiatives change live as they're created/advanced.
@@ -36,30 +38,23 @@ export default async function ProjectDashboardPage({
 
   return (
     <main className="relative z-10 mx-auto max-w-[1180px] px-5 py-12 md:px-8">
-      <Link
-        href="/"
-        className="inline-flex items-center gap-1.5 font-mono text-[11px] tracking-wide text-ink-faint uppercase transition-colors hover:text-foreground"
-      >
-        <ArrowLeft className="size-3.5" /> All projects
-      </Link>
+      {/* the persistent header owns up-navigation now: Doen -> this project */}
+      <SetBreadcrumb crumbs={[{ label: project.name }]} />
 
-      <header className="animate-rise mt-5">
+      <header className="animate-rise">
         <span className="flex items-center gap-1.5 font-mono text-[11px] font-semibold tracking-[0.18em] text-accent-deep uppercase">
           <Layers className="size-3.5" /> Project
         </span>
         <h1 className="mt-3 font-serif text-[clamp(2rem,5vw,3rem)] leading-[1.05] font-medium tracking-tight">
           {project.name}
         </h1>
-        {project.intent && (
-          <p className="mt-4 max-w-[68ch] leading-relaxed text-muted-foreground">
-            {project.intent}
-          </p>
-        )}
+        <ProjectIntent projectId={project.id} intent={project.intent} />
 
         {/* whole-project aggregate (a2): how much work, where it sits, open escalations */}
-        <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 font-mono text-[11px] text-ink-faint">
+        <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border pt-3.5 font-mono text-[11px] text-ink-faint">
           <span>
-            <span className="text-foreground">{initiatives.length}</span> initiative
+            <span className="text-foreground">{initiatives.length}</span>{" "}
+            initiative
             {initiatives.length === 1 ? "" : "s"}
           </span>
           {byState.map((s) => (
@@ -69,7 +64,13 @@ export default async function ProjectDashboardPage({
           ))}
           <span className="flex items-center gap-1.5">
             <GitBranch className="size-3" />
-            <span className={open_decisions > 0 ? "text-proposed-foreground" : "text-foreground"}>
+            <span
+              className={
+                open_decisions > 0
+                  ? "text-proposed-foreground"
+                  : "text-foreground"
+              }
+            >
               {open_decisions}
             </span>{" "}
             open decision{open_decisions === 1 ? "" : "s"}
@@ -93,7 +94,8 @@ export default async function ProjectDashboardPage({
 
           {initiatives.length === 0 ? (
             <p className="mt-4 text-sm text-muted-foreground">
-              No initiatives in this project yet — describe one above and the Advisor shapes it.
+              No initiatives in this project yet — describe one above and the
+              Advisor shapes it.
             </p>
           ) : (
             // grouped by lifecycle state (0011 a8) — where everything stands, at a glance, with
@@ -105,7 +107,9 @@ export default async function ProjectDashboardPage({
                 return (
                   <div key={st}>
                     <h3 className="flex items-center gap-2 font-mono text-[11px] font-semibold tracking-[0.16em] text-ink-soft uppercase">
-                      <span className={`size-2 rounded-full ${STATE_DOT[st] ?? "bg-border"}`} />
+                      <span
+                        className={`size-2 rounded-full ${STATE_DOT[st] ?? "bg-border"}`}
+                      />
                       {st}
                       <span className="font-normal tracking-normal text-ink-faint normal-case">
                         · {group.length}
@@ -114,7 +118,12 @@ export default async function ProjectDashboardPage({
                     <ul className="mt-3 space-y-2.5">
                       {group.map((i) => (
                         <li key={i.id}>
-                          <InitiativeCard initiative={i} attention={attention[i.id]} />
+                          <InitiativeCard
+                            initiative={i}
+                            attention={attention[i.id]}
+                            shortId={shortId(project.prefix, i.seq)}
+                            href={`/projects/${project.id}/specs/${shortSlug(project.prefix, i.seq, i.title)}`}
+                          />
                         </li>
                       ))}
                     </ul>

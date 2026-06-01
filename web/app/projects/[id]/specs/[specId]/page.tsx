@@ -1,10 +1,15 @@
-import Link from "next/link";
+import { redirect } from "next/navigation";
 
-import { getSpec } from "@/lib/api";
+import { getProject, getSpecByRef } from "@/lib/api";
 import { cn, stateMode } from "@/lib/utils";
+import { SetBreadcrumb } from "@/app/_shell/breadcrumb";
 import ConversationRail from "./ConversationRail";
+import GuidedReview from "./GuidedReview";
 import LearnStage from "./LearnStage";
+import NextStepHint from "./NextStepHint";
+import SpecActions from "./SpecActions";
 import SpecDocument from "./SpecDocument";
+import { SpecProvider } from "./spec-context";
 import SteeringRail from "./SteeringRail";
 import WorkUnits from "./WorkUnits";
 
@@ -51,7 +56,9 @@ export default async function SpecPage({
   params: Promise<{ id: string; specId: string }>;
 }) {
   const { id: projectId, specId } = await params;
-  const spec = await getSpec(specId);
+  // u5 (a10): the URL key is the short, per-project ref (bd-12-slug); resolve it — or a legacy
+  // long id — to the spec, then normalise the URL to the canonical slug so stale links redirect.
+  const spec = await getSpecByRef(projectId, specId);
 
   if (!spec) {
     return (
@@ -63,27 +70,32 @@ export default async function SpecPage({
     );
   }
 
+  if (spec.short_slug && specId !== spec.short_slug) {
+    redirect(`/projects/${projectId}/specs/${spec.short_slug}`);
+  }
+
+  const project = await getProject(projectId);
+
   return (
     <main className="relative z-10 mx-auto max-w-[1180px] px-5 py-8 md:px-8">
+      {/* Doen -> Project -> this initiative; the persistent header renders the trail */}
+      <SetBreadcrumb
+        crumbs={[
+          { label: project?.name ?? projectId, href: `/projects/${projectId}` },
+          { label: spec.short_id ?? spec.title },
+        ]}
+      />
       <header className="animate-rise">
         <div className="flex items-baseline justify-between gap-4">
-          <span className="font-mono text-[11px] font-semibold tracking-[0.18em] uppercase">
-            <Link href="/" className="text-ink-faint transition-colors hover:text-accent-deep">
-              Doen
-            </Link>
-            <span className="text-ink-faint"> / </span>
-            <Link
-              href={`/projects/${projectId}`}
-              className="text-ink-faint transition-colors hover:text-accent-deep"
-            >
-              {projectId}
-            </Link>
-            <span className="text-ink-faint"> / </span>
-            <span className="text-accent-deep">Initiative</span>
+          <span className="font-mono text-[11px] font-semibold tracking-[0.18em] text-accent-deep uppercase">
+            Initiative
           </span>
-          <span className="flex items-center gap-2 font-mono text-[11px] text-ink-faint">
+          <span className="flex items-center gap-2 font-mono text-[11px]">
             <span className="size-[7px] rounded-full bg-confirmed animate-live" />
-            {spec.initiative_id}
+            {spec.short_id && (
+              <span className="font-semibold tracking-wide text-accent-deep">{spec.short_id}</span>
+            )}
+            <span className="text-ink-faint">{spec.initiative_id}</span>
           </span>
         </div>
         <h1 className="mt-2 max-w-[20ch] font-serif text-[clamp(1.9rem,3.4vw,2.6rem)] leading-[1.08] font-medium tracking-tight">
@@ -97,30 +109,37 @@ export default async function SpecPage({
         </div>
       </header>
 
-      <div className="mt-7 flex flex-wrap items-start gap-7">
-        <section className="min-w-80 flex-[1_1_560px]">
-          <SpecDocument initialSpec={spec} />
-          <WorkUnits initiativeId={spec.initiative_id} acceptance={spec.acceptance} />
-          {(spec.state === "building" || spec.state === "complete") && (
-            <LearnStage
-              initiativeId={spec.initiative_id}
-              intent={spec.intent}
-              acceptance={spec.acceptance}
+      {/* one shared spec for both surfaces (0012 u3): the rail's guided review and the document
+          read/write the same spec, so confirming in the rail builds up the document live. */}
+      <SpecProvider initialSpec={spec}>
+        <NextStepHint />
+        <div className="mt-7 flex flex-wrap items-start gap-7">
+          <section className="min-w-80 flex-[1_1_560px]">
+            <SpecDocument />
+            <WorkUnits initiativeId={spec.initiative_id} acceptance={spec.acceptance} />
+            {(spec.state === "building" || spec.state === "complete") && (
+              <LearnStage
+                initiativeId={spec.initiative_id}
+                intent={spec.intent}
+                acceptance={spec.acceptance}
+              />
+            )}
+            <SpecActions projectId={projectId} />
+          </section>
+          <div className="sticky top-6 flex min-w-80 flex-[1_1_380px] flex-col gap-6 self-start">
+            <ConversationRail
+              messagesUrl={`/api/initiatives/${spec.initiative_id}/messages`}
+              advisorUrl={`/api/initiatives/${spec.initiative_id}/advisor`}
+              mode={stateMode(spec.state)}
+              intro="Talk to the Advisor — it knows this spec, where it stands, and what past initiatives learned."
+              shapeHint={spec.state === "draft"}
+              specId={spec.initiative_id}
+              review={<GuidedReview />}
             />
-          )}
-        </section>
-        <div className="sticky top-6 flex min-w-80 flex-[1_1_380px] flex-col gap-6 self-start">
-          <ConversationRail
-            messagesUrl={`/api/initiatives/${spec.initiative_id}/messages`}
-            advisorUrl={`/api/initiatives/${spec.initiative_id}/advisor`}
-            mode={stateMode(spec.state)}
-            intro="Talk to the Advisor — it knows this spec, where it stands, and what past initiatives learned."
-            shapeHint={spec.state === "draft"}
-            specId={spec.initiative_id}
-          />
-          <SteeringRail initiativeId={spec.initiative_id} />
+            <SteeringRail initiativeId={spec.initiative_id} />
+          </div>
         </div>
-      </div>
+      </SpecProvider>
     </main>
   );
 }
