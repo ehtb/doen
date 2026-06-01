@@ -1,28 +1,45 @@
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Layers } from "lucide-react";
 
-import { listInitiatives } from "@/lib/api";
-import NewInitiative from "./NewInitiative";
+import { listInitiatives, listProjects } from "@/lib/api";
+import type { Initiative, Project } from "@/lib/types";
 
-// The dashboard reflects live state — initiatives are created and advanced out of band.
+// The dashboard reflects live state — projects + initiatives change out of band.
 export const dynamic = "force-dynamic";
 
-const STAGES = ["discover", "shape", "bet", "decompose", "implement", "verify", "learn"];
-
-function StageBadge({ stage }: { stage: string }) {
-  const i = STAGES.indexOf(stage);
-  const pos = i < 0 ? "" : `${i + 1}/${STAGES.length}`;
+// A project at the top level (0010): its intent + how many initiatives it groups, linking
+// into the project dashboard where the Advisor reasons across the whole body of work.
+function ProjectCard({ project, count }: { project: Project; count: number }) {
   return (
-    <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10px] tracking-widest text-accent-deep uppercase">
-      <span className="size-1.5 rounded-full bg-primary" />
-      {stage}
-      {pos && <span className="text-ink-faint normal-case">· {pos}</span>}
-    </span>
+    <Link
+      href={`/projects/${project.id}`}
+      className="group block rounded-lg border border-border bg-card/60 px-5 py-4 transition-colors hover:bg-card"
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h3 className="flex items-center gap-2 font-serif text-[19px] leading-snug">
+            <Layers className="size-4 shrink-0 text-accent-deep" />
+            {project.name}
+          </h3>
+          {project.intent && (
+            <p className="mt-1.5 line-clamp-2 max-w-[60ch] text-[13px] leading-relaxed text-muted-foreground">
+              {project.intent}
+            </p>
+          )}
+          <p className="mt-2 font-mono text-[10.5px] tracking-widest text-ink-faint uppercase">
+            {count} initiative{count === 1 ? "" : "s"}
+          </p>
+        </div>
+        <ArrowRight className="mt-1 size-4 shrink-0 text-ink-faint transition-transform group-hover:translate-x-0.5" />
+      </div>
+    </Link>
   );
 }
 
 export default async function Home() {
-  const initiatives = await listInitiatives();
+  const [projects, initiatives] = await Promise.all([listProjects(), listInitiatives()]);
+  const countFor = (projectId: string) =>
+    initiatives.filter((i: Initiative) => i.project_id === projectId).length;
 
   return (
     <main className="relative z-10 mx-auto max-w-3xl px-5 py-16">
@@ -34,45 +51,28 @@ export default async function Home() {
           The intent layer above your executors.
         </h1>
         <p className="mt-3 max-w-[48ch] text-muted-foreground">
-          Every initiative you&apos;re steering. Open one to shape its spec, steer the decisions
-          agents raise, and judge the work.
+          Every initiative you&apos;re steering, grouped into projects. Open a project to reason
+          across its history and start new initiatives in it.
         </p>
-        <NewInitiative />
       </header>
 
-      <section className="animate-rise [animation-delay:120ms] mt-10">
+      <section className="animate-rise mt-10 [animation-delay:80ms]">
         <h2 className="flex items-center gap-2 font-mono text-[11.5px] font-semibold tracking-[0.13em] text-ink-soft uppercase">
-          Initiatives
+          Projects
           <span className="font-normal tracking-normal text-ink-faint normal-case">
-            · {initiatives.length}
+            · {projects.length}
           </span>
         </h2>
 
-        {initiatives.length === 0 ? (
+        {projects.length === 0 ? (
           <p className="mt-4 text-sm text-muted-foreground">
-            No initiatives yet — create one to get started.
+            No projects yet — every initiative belongs to one.
           </p>
         ) : (
           <ul className="mt-4 space-y-2.5">
-            {initiatives.map((i) => (
-              <li key={i.id}>
-                <Link
-                  href={`/specs/${i.id}`}
-                  className="group block rounded-lg border border-border bg-card/60 px-5 py-4 transition-colors hover:bg-card"
-                >
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="min-w-0">
-                      <h3 className="truncate font-serif text-[19px] leading-snug">
-                        {i.title ?? i.id}
-                      </h3>
-                      <p className="mt-1 font-mono text-[11px] text-ink-faint">{i.id}</p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-3">
-                      <StageBadge stage={i.stage} />
-                      <ArrowRight className="size-4 text-ink-faint transition-transform group-hover:translate-x-0.5" />
-                    </div>
-                  </div>
-                </Link>
+            {projects.map((p: Project) => (
+              <li key={p.id}>
+                <ProjectCard project={p} count={countFor(p.id)} />
               </li>
             ))}
           </ul>

@@ -26,10 +26,11 @@ async def create_initiative(
     body: CreateInitiative,
     store: Annotated[SpecStore, Depends(get_store)],
 ) -> Initiative:
-    """Create an initiative and scaffold its empty spec in one act (0004 a1)."""
+    """Create an initiative under a project and scaffold its empty spec in one act (0004 a1).
+    Every initiative belongs to a project (0010) — an unknown project_id -> 404."""
     if not body.title.strip():
         raise ValidationError("initiative title must not be empty")
-    return await store.create_initiative(body.title)
+    return await store.create_initiative(body.title, body.project_id)
 
 
 @router.post("/initiatives/{initiative_id}/stage")

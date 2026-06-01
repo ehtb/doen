@@ -10,6 +10,8 @@ shapes live in app.schemas; persistence in app.store.
 from __future__ import annotations
 
 import re
+import secrets
+import string
 from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
@@ -28,8 +30,16 @@ def _id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:12]}"
 
 
+def slug_prefix(n: int = 5) -> str:
+    """A short random alphabetical prefix for a slug. Prepended to the title-derived part so
+    distinct initiatives/projects never collide on a slug (and the id doesn't leak creation
+    order): `abcde-passwordless-sign-in` rather than `passwordless-sign-in-2`."""
+    return "".join(secrets.choice(string.ascii_lowercase) for _ in range(n))
+
+
 def slugify(title: str) -> str:
-    """Kebab-case slug from a human title — the initiative id and URL key (0004)."""
+    """Kebab-case slug from a human title — the title-derived part of the id and URL key
+    (0004). Prepend slug_prefix() at creation for uniqueness."""
     s = re.sub(r"[^a-z0-9]+", "-", title.strip().lower()).strip("-")
     return s or "initiative"
 
@@ -102,13 +112,30 @@ class Spec(BaseModel):
 class Initiative(BaseModel):
     """The parent entity (0004): a spec, its decisions, and its work units all belong to
     one initiative. `id` is a human-readable slug. org/owner exist but are unused until
-    auth (0007). `stage` is the tracked lifecycle position, kept in sync with the spec."""
+    auth (0007). `stage` is the tracked lifecycle position, kept in sync with the spec.
+    `project_id` (0010) is the required link to the parent Project — every initiative belongs
+    to a project; there are no orphan specs."""
 
     id: str  # slug
+    project_id: str  # FK to projects.id — required; every initiative belongs to a project
     title: str | None = None
     stage: Stage = "discover"
     org_id: str | None = None
     owner_id: str | None = None
+    created_at: str = Field(default_factory=_now)
+    updated_at: str = Field(default_factory=_now)
+
+
+# ----------------------------------------------------------------------------- projects (0010)
+class Project(BaseModel):
+    """A group of related initiatives under a shared strategic intent (0010 constraint 1).
+    A project is a context boundary for the Advisor: inside one, it reasons across the whole
+    project's history. `id` is a human-readable slug derived from the name. One project per
+    initiative (D1 -> a) — the link is a flat nullable FK on the initiative, not a junction."""
+
+    id: str  # slug
+    name: str
+    intent: str = ""  # the strategic goal, prose
     created_at: str = Field(default_factory=_now)
     updated_at: str = Field(default_factory=_now)
 
@@ -147,12 +174,15 @@ class Memory(BaseModel):
 class ContextHit(BaseModel):
     """One retrieved memory snippet (0005 u3). Source-attributed so the executor can judge
     whether to trust it (constraint 5): which initiative, which kind of record, the text,
-    and a relevance score (1 - cosine distance; higher is closer)."""
+    and a relevance score (1 - cosine distance; higher is closer). `scope` (0010 constraint 4)
+    marks whether a hit came from within the calling initiative's project or the global
+    fallback — None when the search wasn't project-scoped."""
 
     initiative_id: str
     type: Literal["decision", "memory"]
     text: str
     score: float
+    scope: Literal["project", "global"] | None = None
 
 
 # ----------------------------------------------------------------------------- conversation (0009)
@@ -160,27 +190,58 @@ MessageRole = Literal["human", "advisor"]  # the two parties on the rail
 
 
 class Message(BaseModel):
-    """One turn in an initiative's conversation rail (0009 constraint 1): an individual row,
-    never folded into a JSONB blob. `metadata` carries structured payloads the Advisor
-    attaches — e.g. proposal cards the frontend renders (u2/u3)."""
+    """One turn on a conversation rail (0009 constraint 1): an individual row, never folded
+    into a JSONB blob. `metadata` carries structured payloads the Advisor attaches — e.g.
+    proposal cards the frontend renders (u2/u3). A message belongs to EITHER an initiative or a
+    project (0010 u5: the project-level rail), never both — exactly one owner is set."""
 
     id: str = Field(default_factory=lambda: _id("msg"))
-    initiative_id: str
+    initiative_id: str | None = None
+    project_id: str | None = None
     role: MessageRole
     content: str
     metadata: dict = Field(default_factory=dict)
     created_at: str = Field(default_factory=_now)
 
 
+class SiblingSummary(BaseModel):
+    """A compact, token-conscious summary of one sibling initiative in the same project
+    (0010 constraint 3): enough for the Advisor to spot contradictions and patterns — title,
+    stage, the headline confirmed constraints (+ their total count), and the most recent
+    resolved decision — without serialising the whole sibling spec. Specifics are retrieved
+    on demand via project-scoped get_context (u4)."""
+
+    initiative_id: str
+    title: str
+    stage: str
+    constraint_count: int = 0                              # total confirmed constraints
+    constraints: list[str] = Field(default_factory=list)   # the headline confirmed constraints
+    latest_decision: str | None = None                     # the most recent resolved decision
+
+
+class ProjectContext(BaseModel):
+    """The project a conversation is grounded in (0010 constraint 2): the strategic intent
+    plus compact summaries of the sibling initiatives. Present only when the initiative
+    belongs to a project — a standalone initiative carries None (a8)."""
+
+    project_id: str
+    name: str
+    intent: str = ""
+    siblings: list[SiblingSummary] = Field(default_factory=list)
+
+
 class ConversationContext(BaseModel):
     """The explicit, bounded context assembled for an Advisor LLM call (0009 constraint 1):
     a recent-message window + the current spec + relevant memory. u2 renders this into the
-    prompt; keeping it a structured object makes the windowing testable without an LLM."""
+    prompt; keeping it a structured object makes the windowing testable without an LLM.
+    `project` (0010) widens the context to the whole project when the initiative belongs to
+    one — sibling summaries the Advisor reasons across; None for a standalone initiative."""
 
     initiative: Initiative
     spec: Spec | None = None
     messages: list[Message] = Field(default_factory=list)  # the recent window, oldest-first
     memory: list[ContextHit] = Field(default_factory=list)
+    project: ProjectContext | None = None
 
 
 class Guidance(BaseModel):

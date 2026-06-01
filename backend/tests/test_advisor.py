@@ -150,7 +150,7 @@ def test_user_message_grounds_in_spec_memory_history():
         ],
     )
     ctx = ConversationContext(
-        initiative=Initiative(id="x", title="Passwordless", stage="shape"),
+        initiative=Initiative(id="x", title="Passwordless", stage="shape", project_id="build-doen"),
         spec=spec,
         messages=[
             Message(initiative_id="x", role="human", content="how should sign-in work?"),

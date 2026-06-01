@@ -24,12 +24,19 @@ from typing import Any
 from pydantic import BaseModel, ValidationError as PydanticValidationError
 
 from app.exceptions import NotFoundError, ValidationError
-from app.models import ConversationContext, Message, Spec, SpecItem
+from app.models import (
+    ContextHit,
+    ConversationContext,
+    Message,
+    ProjectContext,
+    Spec,
+    SpecItem,
+)
 from app.providers.llm import LLMError, StructuredLLM, get_advisor_llm
 from app.schemas import AdvisorTurn, Proposal
 from app.services.conversation import assemble_context
 from app.services.shaping import ShapingResult, shape_spec
-from app.store import SpecStore
+from app.store import MESSAGE_WINDOW, SpecStore
 
 # --- the prompt -----------------------------------------------------------------------
 ADVISOR_BASE_PROMPT = """You are the Doen Advisor — an AI thinking partner embedded in the \
@@ -84,6 +91,17 @@ STAGE_GUIDANCE: dict[str, str] = {
     "remembering. The human corrects and confirms before anything is written to memory.",
 }
 
+PROJECT_COHERENCE_PROMPT = """This initiative belongs to a PROJECT — a body of related \
+initiatives under one strategic intent. You are given the project's intent and compact summaries \
+of its sibling initiatives below. Reason across them as one coherent whole, not in isolation:
+- When a constraint or decision here contradicts one in a sibling, say so — name the sibling.
+- When this initiative depends on something a sibling changed or retired, flag it.
+- When you see a pattern repeating across initiatives (e.g. the same kind of risk or rework), \
+name the pattern.
+You don't need to be asked — cross-initiative coherence is part of your job in a project. You hold \
+only compact summaries, not full sibling specs; when a judgement needs specifics you don't have, \
+say what you'd retrieve rather than inventing it."""
+
 ADVISOR_OUTPUT_CONTRACT = """Respond via the advisor_turn tool.
 - `reply`: your message in the rail — concise, concrete, a colleague's voice.
 - `proposals`: spec items you're proposing the human ADD. Include them only when you're actually \
@@ -124,6 +142,28 @@ ADVISOR_SCHEMA: dict[str, Any] = {
     "required": ["reply"],
 }
 
+# --- project scope (0010 u5): the same Advisor, scoped to the whole project (D2 -> a) ---
+PROJECT_SCOPE_GUIDANCE = """You are talking to the human on the PROJECT dashboard — scoped to the \
+whole project, not a single initiative in focus. Reason across the entire body of work: how the \
+project is going, what's done and what's still open, contradictions or dependencies BETWEEN \
+initiatives, patterns worth carrying forward, and what is worth building next. Be strategic, not \
+tactical — help the human see the project as one coherent whole, not a list. Draw on the \
+initiative summaries and project memory below by name; when something belongs in a specific \
+initiative's spec, say which initiative and let the human open it — you don't propose or edit \
+spec items from here. When a judgement needs specifics you don't have, say what you'd look at \
+rather than inventing it."""
+
+PROJECT_OUTPUT_CONTRACT = """Respond via the advisor_reply tool with `reply`: your message in the \
+rail — concise, concrete, a sharp colleague's voice. No spec proposals at the project level."""
+
+PROJECT_ADVISOR_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "reply": {"type": "string", "description": "The Advisor's message, shown in the rail."},
+    },
+    "required": ["reply"],
+}
+
 _SHAPE_COMMAND = re.compile(r"^\s*shape\s+this(?:\s+initiative)?\s*:\s*(?P<desc>.+)", re.IGNORECASE | re.DOTALL)
 MESSAGE_WINDOW_NOTE = "(showing the most recent turns)"
 
@@ -137,15 +177,20 @@ class AdvisorReply(BaseModel):
         return {"proposals": [p.model_dump() for p in self.proposals]} if self.proposals else {}
 
 
-def build_system_prompt(stage: str) -> str:
-    """Identity + spec-contract discipline + the stage's mode + the output contract. The
-    stage line is what makes the same Advisor shift behaviour across the lifecycle (a5)."""
+def build_system_prompt(stage: str, *, in_project: bool = False) -> str:
+    """Identity + spec-contract discipline + the stage's mode (+ project coherence when the
+    initiative is in a project) + the output contract. The stage line makes the same Advisor
+    shift behaviour across the lifecycle (a5); the project block widens it to reason across
+    siblings (0010 a3/a5) — one Advisor, scoped (D2 -> a)."""
     guidance = STAGE_GUIDANCE.get(stage, STAGE_GUIDANCE["shape"])
-    return (
-        f"{ADVISOR_BASE_PROMPT}\n\n"
-        f"This initiative is at the **{stage}** stage. {guidance}\n\n"
-        f"{ADVISOR_OUTPUT_CONTRACT}"
-    )
+    parts = [
+        ADVISOR_BASE_PROMPT,
+        f"This initiative is at the **{stage}** stage. {guidance}",
+    ]
+    if in_project:
+        parts.append(PROJECT_COHERENCE_PROMPT)
+    parts.append(ADVISOR_OUTPUT_CONTRACT)
+    return "\n\n".join(parts)
 
 
 def _render_items(label: str, items: list[SpecItem]) -> list[str]:
@@ -182,14 +227,51 @@ def _render_spec(spec: Spec | None) -> str:
     return "\n".join(lines)
 
 
-def _render_memory(ctx: ConversationContext) -> str:
-    if not ctx.memory:
-        return ""
-    lines = ["# RELEVANT MEMORY (from past initiatives — reuse what applies, don't contradict it):"]
-    lines += [
-        f"  - ({h.type} · {h.initiative_id}, score {h.score}): {h.text}" for h in ctx.memory
+def _render_project_block(proj: ProjectContext, *, header: str, lead: str) -> str:
+    """The compact project block (0010 constraint 2/3): strategic intent + one tight summary
+    per (sibling) initiative. Shared by the initiative rail (siblings) and the project rail
+    (the whole project)."""
+    lines = [
+        f"# {header} — {proj.name}",
+        f"Strategic intent: {proj.intent.strip() or '(none written)'}",
+        "",
+        lead,
     ]
+    if not proj.siblings:
+        lines.append("  (none yet)")
+    for s in proj.siblings:
+        lines.append(
+            f"- {s.title} [{s.initiative_id}] · stage {s.stage} · "
+            f"{s.constraint_count} confirmed constraint(s)"
+        )
+        lines += [f"    constraint: {c}" for c in s.constraints]
+        if s.latest_decision:
+            lines.append(f"    latest decision: {s.latest_decision}")
     return "\n".join(lines)
+
+
+def _render_project(ctx: ConversationContext) -> str:
+    """The sibling context for an initiative in a project. Empty for a standalone initiative,
+    so the prompt is unchanged there (a8)."""
+    if ctx.project is None:
+        return ""
+    return _render_project_block(
+        ctx.project,
+        header="PROJECT CONTEXT",
+        lead="Sibling initiatives (compact summaries — retrieve specifics on demand, don't invent):",
+    )
+
+
+def _render_memory_hits(hits: list[ContextHit]) -> str:
+    if not hits:
+        return ""
+    lines = ["# RELEVANT MEMORY (reuse what applies, don't contradict it):"]
+    lines += [f"  - ({h.type} · {h.initiative_id}, score {h.score}): {h.text}" for h in hits]
+    return "\n".join(lines)
+
+
+def _render_memory(ctx: ConversationContext) -> str:
+    return _render_memory_hits(ctx.memory)
 
 
 def _render_history(messages: list[Message]) -> str:
@@ -202,9 +284,15 @@ def _render_history(messages: list[Message]) -> str:
 
 
 def build_user_message(ctx: ConversationContext) -> str:
-    """The grounded context block the Advisor answers from: the current spec, relevant
-    memory, and the windowed conversation (with the human's latest turn last)."""
-    parts = [_render_spec(ctx.spec), _render_memory(ctx), _render_history(ctx.messages)]
+    """The grounded context block the Advisor answers from: the current spec, the project it
+    sits in (siblings, when any), relevant memory, and the windowed conversation (with the
+    human's latest turn last)."""
+    parts = [
+        _render_spec(ctx.spec),
+        _render_project(ctx),
+        _render_memory(ctx),
+        _render_history(ctx.messages),
+    ]
     return "\n\n".join(p for p in parts if p)
 
 
@@ -229,7 +317,7 @@ def _coerce_proposal(p: dict[str, Any]) -> Proposal:
 
 async def _converse(ctx: ConversationContext, llm: StructuredLLM) -> AdvisorReply:
     raw = await llm.complete_structured(
-        system=build_system_prompt(ctx.initiative.stage),
+        system=build_system_prompt(ctx.initiative.stage, in_project=ctx.project is not None),
         user=build_user_message(ctx),
         schema=ADVISOR_SCHEMA,
         schema_name="advisor_turn",
@@ -303,4 +391,73 @@ async def advise(
     advisor = await store.append_message(
         initiative_id, "advisor", reply.text, metadata=reply.metadata()
     )
+    return AdvisorTurn(human=human, advisor=advisor)
+
+
+# --- project-level rail (0010 u5, a9/a10): the same Advisor, scoped to the project --------
+def build_project_system_prompt() -> str:
+    """Identity + spec-contract discipline + the project-scope mode + a reply-only contract.
+    Same Advisor as the initiative rail (D2 -> a) — it just sees the whole project and speaks
+    strategically rather than tactically."""
+    return "\n\n".join([ADVISOR_BASE_PROMPT, PROJECT_SCOPE_GUIDANCE, PROJECT_OUTPUT_CONTRACT])
+
+
+def build_project_user_message(
+    project: ProjectContext, memory: list[ContextHit], messages: list[Message]
+) -> str:
+    """The grounded context for a project turn: the whole project (intent + every initiative's
+    compact summary), project-scoped memory, and the windowed project conversation."""
+    parts = [
+        _render_project_block(
+            project,
+            header="PROJECT",
+            lead="Initiatives in this project (compact summaries — retrieve specifics on demand):",
+        ),
+        _render_memory_hits(memory),
+        _render_history(messages),
+    ]
+    return "\n\n".join(p for p in parts if p)
+
+
+async def _converse_project(
+    project: ProjectContext, memory: list[ContextHit], messages: list[Message], llm: StructuredLLM
+) -> str:
+    raw = await llm.complete_structured(
+        system=build_project_system_prompt(),
+        user=build_project_user_message(project, memory, messages),
+        schema=PROJECT_ADVISOR_SCHEMA,
+        schema_name="advisor_reply",
+    )
+    try:
+        return str(raw["reply"]).strip()
+    except (KeyError, TypeError) as e:
+        raise LLMError(f"advisor output did not match the expected shape: {e}") from e
+
+
+async def advise_project(
+    store: SpecStore,
+    project_id: str,
+    content: str,
+    *,
+    llm: StructuredLLM | None = None,
+) -> AdvisorTurn:
+    """One turn on the PROJECT rail (a9): ground the Advisor in the whole project — its intent,
+    every initiative's summary, project-scoped memory, and the project conversation — generate a
+    strategic reply, and persist the exchange. Persisted only after a successful generation, so
+    a failed LLM call (-> 502) leaves no orphan message."""
+    project = await store.get_project_context(project_id)
+    if project is None:
+        raise NotFoundError(f"no project {project_id}")
+    if not content.strip():
+        raise ValidationError("a message needs content")
+    llm = llm or get_advisor_llm()
+
+    messages = await store.list_project_messages(project_id, limit=MESSAGE_WINDOW)
+    pending = Message(project_id=project_id, role="human", content=content.strip())
+    window = (messages + [pending])[-MESSAGE_WINDOW:]
+    memory = await store.get_context(content.strip(), limit=5, project_id=project_id)
+    reply = await _converse_project(project, memory, window, llm)
+
+    human = await store.append_project_message(project_id, "human", content.strip())
+    advisor = await store.append_project_message(project_id, "advisor", reply)
     return AdvisorTurn(human=human, advisor=advisor)

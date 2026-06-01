@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.exceptions import NotFoundError
-from app.models import AcceptanceCriterion, Guidance, Spec, WorkUnit
+from app.models import AcceptanceCriterion, Guidance, ProjectContext, Spec, WorkUnit
 from app.providers.llm import StructuredLLM, get_advisor_llm
 from app.store import SpecStore
 
@@ -31,6 +31,12 @@ Return via the guidance tool:
 load-bearing here, and how any prior pattern applies. Specific and concrete, not boilerplate.
 - pitfalls: the specific traps to avoid — things that would fail a criterion, cross a constraint, \
 or repeat a past mistake. Each one short and actionable.
+
+If this unit's initiative belongs to a PROJECT, you may also be given compact summaries of \
+sibling initiatives — their constraints and decisions. Draw on them: reuse a pattern that \
+applies, point to a sibling decision that bears on this unit, and flag any contradiction or \
+dependency this unit would create with a sibling. You hold only summaries, not full sibling \
+specs — don't invent specifics you weren't given.
 
 You are read-only: you brief, you don't build, and you never invent constraints or criteria that \
 weren't given to you."""
@@ -63,8 +69,28 @@ def _criterion_line(a: AcceptanceCriterion) -> str:
     return f"{a.text}  [verify: {a.verify.kind} — {a.verify.detail}]"
 
 
+def _project_block(pctx: ProjectContext) -> str:
+    """Compact sibling awareness for a unit in a project (0010 a6): which sibling constraints
+    and decisions may bear on this unit. Summaries, not full specs (constraint 3/5)."""
+    lines = [
+        f"# PROJECT CONTEXT — {pctx.name}",
+        "Sibling initiatives whose constraints or decisions may bear on this unit "
+        "(reuse what applies; flag any contradiction or dependency):",
+    ]
+    for s in pctx.siblings:
+        lines.append(f"- {s.title} [{s.initiative_id}] · stage {s.stage}")
+        lines += [f"    constraint: {c}" for c in s.constraints]
+        if s.latest_decision:
+            lines.append(f"    decision: {s.latest_decision}")
+    return "\n".join(lines)
+
+
 def _build_user_message(
-    unit: WorkUnit, constraints: list[str], criteria: list[str], memory_block: str
+    unit: WorkUnit,
+    constraints: list[str],
+    criteria: list[str],
+    memory_block: str,
+    project_block: str = "",
 ) -> str:
     parts = [
         f"# WORK UNIT\nTitle: {unit.title}\nScope: {unit.scope}",
@@ -79,6 +105,8 @@ def _build_user_message(
         "# ACCEPTANCE CRITERIA THIS UNIT MUST SATISFY:\n"
         + ("\n".join(f"- {c}" for c in criteria) or "(none mapped)")
     )
+    if project_block:
+        parts.append(project_block)
     if memory_block:
         parts.append(memory_block)
     return "\n\n".join(parts)
@@ -101,20 +129,32 @@ async def generate_guidance(
     if cached is not None:
         return cached
 
+    # the initiative's project (if any) scopes both the memory search and the sibling block (0010 a6)
+    init = await store.get_initiative(unit.spec_id)
+    project_id = init.project_id if init else None
+
     constraints = [c.text for c in spec.confirmed_constraints()]
     criteria = [_criterion_line(a) for a in _criteria_for(spec, unit)]
-    # ground the briefing in prior patterns relevant to this unit's work
-    memory = await store.get_context(f"{unit.title}\n{unit.scope}", limit=5)
+    # ground the briefing in prior patterns relevant to this unit's work — project-first when
+    # the initiative is in a project (constraint 4), so sibling decisions surface first.
+    query = f"{unit.title}\n{unit.scope}"
+    memory = await store.get_context(query, limit=5, project_id=project_id)
     memory_block = ""
     if memory:
         memory_block = "# RELEVANT PRIOR PATTERNS (reuse what applies; don't contradict them):\n" + "\n".join(
             f"- ({h.type} · {h.initiative_id}, score {h.score}): {h.text}" for h in memory
         )
+    # sibling awareness: the constraints/decisions of other initiatives in this project (a6)
+    project_block = ""
+    if project_id:
+        pctx = await store.get_project_context(project_id, exclude=unit.spec_id)
+        if pctx and pctx.siblings:
+            project_block = _project_block(pctx)
 
     llm = llm or get_advisor_llm()
     raw = await llm.complete_structured(
         system=GUIDANCE_SYSTEM_PROMPT,
-        user=_build_user_message(unit, constraints, criteria, memory_block),
+        user=_build_user_message(unit, constraints, criteria, memory_block, project_block),
         schema=GUIDANCE_SCHEMA,
         schema_name="guidance",
     )

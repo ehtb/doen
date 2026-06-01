@@ -52,11 +52,16 @@ def client() -> TestClient:
 @pytest.fixture
 def make_initiative(client: TestClient) -> Callable[[], str]:
     """Create dev initiatives via the API and drop them (cascade) on teardown. Each gets a
-    unique title so the derived slug never collides across tests; the slug is the id."""
+    unique title so the derived slug never collides across tests; the slug is the id. Every
+    initiative belongs to a project (no orphan specs) — the always-present 'build-doen' project
+    (created by migration 0006) is the default owner."""
     created: list[str] = []
 
-    def make(title: str | None = None) -> str:
-        r = client.post("/initiatives", json={"title": title or f"Test {uuid4().hex[:8]}"})
+    def make(title: str | None = None, project_id: str = "build-doen") -> str:
+        r = client.post(
+            "/initiatives",
+            json={"title": title or f"Test {uuid4().hex[:8]}", "project_id": project_id},
+        )
         assert r.status_code == 201, r.text
         iid = r.json()["id"]
         created.append(iid)

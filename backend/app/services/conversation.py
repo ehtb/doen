@@ -49,8 +49,19 @@ async def assemble_context(
         pending = Message(initiative_id=initiative_id, role="human", content=pending_human)
         messages = (messages + [pending])[-window:]
     query = _memory_query(messages, spec)
-    memory = await store.get_context(query, limit=memory_limit) if query.strip() else []
-    return ConversationContext(initiative=init, spec=spec, messages=messages, memory=memory)
+    # 0010 constraint 4: memory retrieval is project-scoped — project-first, global fallback.
+    # Every initiative belongs to a project, so project_id is always set.
+    memory = (
+        await store.get_context(query, limit=memory_limit, project_id=init.project_id)
+        if query.strip()
+        else []
+    )
+    # 0010 constraint 2: widen the context to the whole project — the sibling summaries the
+    # Advisor reasons across.
+    project = await store.get_project_context(init.project_id, exclude=initiative_id)
+    return ConversationContext(
+        initiative=init, spec=spec, messages=messages, memory=memory, project=project
+    )
 
 
 def _memory_query(messages: list[Message], spec: Spec | None) -> str:

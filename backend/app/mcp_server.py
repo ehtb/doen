@@ -233,15 +233,23 @@ async def get_verification(unit_id: str, ctx: Context) -> dict:
 @mcp.tool()
 async def get_context(initiative_id: str, query: str, ctx: Context, limit: int = 8) -> dict:
     """Retrieve relevant prior patterns to ground the current work. Searches the memory
-    corpus — resolved decisions and completed-initiative memory — across ALL initiatives,
-    ranked by similarity to `query`. Call it while shaping or building so you reuse what
-    was decided and learned before instead of re-deciding it. Each hit is source-attributed
-    (which initiative, decision vs. memory) with a relevance score, so you can judge whether
-    to trust it. `initiative_id` is your current grounding context; results deliberately
-    include other initiatives."""
-    hits = await _store(ctx).get_context(query, limit=limit)
+    corpus — resolved decisions and completed-initiative memory — ranked by similarity to
+    `query`. Call it while shaping or building so you reuse what was decided and learned
+    before instead of re-deciding it. Each hit is source-attributed (which initiative,
+    decision vs. memory, a relevance score) so you can judge whether to trust it.
+
+    `initiative_id` is your grounding context. If it belongs to a PROJECT (spec 0010), the
+    search is project-scoped: sibling initiatives within the same project are searched first,
+    falling back to the rest of the corpus only when project hits are insufficient. Each hit is
+    tagged `scope` (project / global) so you can see what came from this body of work vs.
+    elsewhere. A standalone initiative searches globally, as before."""
+    store = _store(ctx)
+    init = await store.get_initiative(initiative_id)
+    project_id = init.project_id if init else None
+    hits = await store.get_context(query, limit=limit, project_id=project_id)
     return {
         "initiative_id": initiative_id,
+        "project_id": project_id,
         "query": query,
         "hits": [h.model_dump() for h in hits],
     }

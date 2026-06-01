@@ -41,12 +41,16 @@ from app.models import (
     Memory,
     Message,
     MessageRole,
+    Project,
+    ProjectContext,
+    SiblingSummary,
     Spec,
     Submission,
     Verdict,
     WorkUnit,
     _now,
     is_adjacent_stage,
+    slug_prefix,
     slugify,
 )
 from app.providers.embeddings import EmbeddingProvider, get_embedding_provider
@@ -75,9 +79,38 @@ def _decision_text(d: Decision) -> str:
 def _initiative_from_row(row: asyncpg.Record) -> Initiative:
     return Initiative(
         id=row["id"], title=row["title"], stage=row["stage"],
+        project_id=row["project_id"],
         org_id=row["org_id"], owner_id=row["owner_id"],
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
+    )
+
+
+def _project_from_row(row: asyncpg.Record) -> Project:
+    return Project(
+        id=row["id"], name=row["name"], intent=row["intent"],
+        created_at=row["created_at"].isoformat(),
+        updated_at=row["updated_at"].isoformat(),
+    )
+
+
+def _decision_summary(d: Decision) -> str:
+    """A one-line summary of a resolved decision for a sibling's compact summary (0010 u3)."""
+    return f"{d.question} — Chosen: {d.chosen}" if d.chosen else d.question
+
+
+def _sibling_summary(
+    row: asyncpg.Record, latest_decisions: dict[str, str], max_constraints: int
+) -> SiblingSummary:
+    spec = Spec.model_validate_json(row["doc"])
+    confirmed = spec.confirmed_constraints()
+    return SiblingSummary(
+        initiative_id=row["id"],
+        title=spec.title,
+        stage=row["stage"],
+        constraint_count=len(confirmed),
+        constraints=[c.text for c in confirmed[:max_constraints]],
+        latest_decision=latest_decisions.get(row["id"]),
     )
 
 
@@ -96,6 +129,7 @@ def _message_from_row(row: asyncpg.Record) -> Message:
     return Message(
         id=row["id"],
         initiative_id=row["initiative_id"],
+        project_id=row["project_id"],
         role=row["role"],
         content=row["content"],
         metadata=json.loads(row["metadata"]) if row["metadata"] else {},
@@ -107,6 +141,11 @@ def _message_from_row(row: asyncpg.Record) -> Message:
 SPEC_CACHE_TTL = 300  # seconds; cache is derived, so a short TTL is just a safety net
 MESSAGE_WINDOW = 30   # recent messages an Advisor context assembly includes (0009 discretion)
 GUIDANCE_CACHE_TTL = 300  # seconds; a unit briefing is regenerated on demand after it lapses
+# Project context is rendered into every Advisor turn for a project initiative, so it must
+# stay compact (0010 constraint 3): cap how many siblings, and how many constraint headlines
+# per sibling, the summaries carry. The Advisor retrieves specifics on demand via get_context.
+PROJECT_SIBLING_LIMIT = 12
+SIBLING_CONSTRAINT_HEADLINES = 3
 
 
 class SpecStore:
@@ -180,19 +219,28 @@ class SpecStore:
 
     # --- initiatives: the parent entity, born with a scaffolded spec (0004) --
     async def create_initiative(
-        self, title: str, *, org_id: str | None = None, owner_id: str | None = None
+        self,
+        title: str,
+        project_id: str,
+        *,
+        org_id: str | None = None,
+        owner_id: str | None = None,
     ) -> Initiative:
-        """Create an initiative and scaffold its empty spec in one act (constraint 2): the
-        spec is born at version 0, stage=discover, with empty item lists. The id is a
-        unique slug derived from the title."""
-        slug = await self._unique_slug(slugify(title))
+        """Create an initiative under a project and scaffold its empty spec in one act
+        (constraint 2): the spec is born at version 0, stage=discover, with empty item lists.
+        The id is a unique slug derived from the title. Every initiative belongs to a project —
+        `project_id` is required and must exist (no orphan specs)."""
+        if await self.get_project(project_id) is None:
+            raise NotFoundError(f"no project {project_id}")
+        slug = await self._unique_slug(f"{slug_prefix()}-{slugify(title)}")
         spec = Spec(initiative_id=slug, title=title, stage="discover")
         async with self.pg.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
-                    """INSERT INTO initiatives (id, title, org_id, owner_id, stage, created_at, updated_at)
-                       VALUES ($1, $2, $3, $4, 'discover', now(), now())""",
-                    slug, title, org_id, owner_id,
+                    """INSERT INTO initiatives
+                           (id, title, project_id, org_id, owner_id, stage, created_at, updated_at)
+                       VALUES ($1, $2, $3, $4, $5, 'discover', now(), now())""",
+                    slug, title, project_id, org_id, owner_id,
                 )
                 # Scaffold the spec at version 0 directly. A brand-new spec has no prior
                 # row to guard, so this doesn't bypass the optimistic lock — the first real
@@ -203,13 +251,16 @@ class SpecStore:
                     slug, spec.model_dump_json(),
                 )
         await self.redis.set(f"spec:{slug}", spec.model_dump_json(), ex=SPEC_CACHE_TTL)
-        return Initiative(id=slug, title=title, stage="discover", org_id=org_id, owner_id=owner_id)
+        return Initiative(
+            id=slug, title=title, stage="discover",
+            project_id=project_id, org_id=org_id, owner_id=owner_id,
+        )
 
     async def get_initiative(self, initiative_id: str) -> Initiative | None:
         """The initiative's lifecycle context — surfaced alongside the spec on MCP get_spec
         so an executor grounds itself in stage before acting (D1 / 0004)."""
         row = await self.pg.fetchrow(
-            """SELECT id, title, stage, org_id, owner_id, created_at, updated_at
+            """SELECT id, title, stage, project_id, org_id, owner_id, created_at, updated_at
                FROM initiatives WHERE id = $1""",
             initiative_id,
         )
@@ -219,7 +270,8 @@ class SpecStore:
         """Every initiative that has a spec — the dashboard's feed (0004 a3). Most recently
         updated first."""
         rows = await self.pg.fetch(
-            """SELECT i.id, i.title, i.stage, i.org_id, i.owner_id, i.created_at, i.updated_at
+            """SELECT i.id, i.title, i.stage, i.project_id, i.org_id, i.owner_id,
+                      i.created_at, i.updated_at
                FROM initiatives i
                JOIN specs s ON s.initiative_id = i.id
                ORDER BY i.updated_at DESC, i.id"""
@@ -261,6 +313,121 @@ class SpecStore:
         while await self.pg.fetchval("SELECT 1 FROM initiatives WHERE id = $1", slug):
             slug, n = f"{base}-{n}", n + 1
         return slug
+
+    # --- projects: group initiatives under a strategic intent (0010 u1) ------
+    async def create_project(self, name: str, intent: str = "") -> Project:
+        """Create a project with a unique slug: a short random prefix + the name-derived part
+        (constraint 1), so distinct projects never collide."""
+        base = f"{slug_prefix()}-{slugify(name)}"
+        slug, n = base, 2
+        while await self.pg.fetchval("SELECT 1 FROM projects WHERE id = $1", slug):
+            slug, n = f"{base}-{n}", n + 1
+        proj = Project(id=slug, name=name, intent=intent)
+        await self.pg.execute(
+            """INSERT INTO projects (id, name, intent, created_at, updated_at)
+               VALUES ($1, $2, $3, now(), now())""",
+            proj.id, proj.name, proj.intent,
+        )
+        return proj
+
+    async def get_project(self, project_id: str) -> Project | None:
+        row = await self.pg.fetchrow(
+            "SELECT id, name, intent, created_at, updated_at FROM projects WHERE id = $1",
+            project_id,
+        )
+        return _project_from_row(row) if row else None
+
+    async def list_projects(self) -> list[Project]:
+        """Every project, newest first — the level above the dashboard (0010 a2)."""
+        rows = await self.pg.fetch(
+            """SELECT id, name, intent, created_at, updated_at
+               FROM projects ORDER BY created_at DESC, id"""
+        )
+        return [_project_from_row(r) for r in rows]
+
+    async def list_project_initiatives(self, project_id: str) -> list[Initiative]:
+        """The initiatives grouped under a project (0010 a2/a7), most recently updated first."""
+        rows = await self.pg.fetch(
+            """SELECT i.id, i.title, i.stage, i.project_id, i.org_id, i.owner_id,
+                      i.created_at, i.updated_at
+               FROM initiatives i
+               JOIN specs s ON s.initiative_id = i.id
+               WHERE i.project_id = $1
+               ORDER BY i.updated_at DESC, i.id""",
+            project_id,
+        )
+        return [_initiative_from_row(r) for r in rows]
+
+    async def get_project_context(
+        self,
+        project_id: str,
+        *,
+        exclude: str | None = None,
+        sibling_limit: int = PROJECT_SIBLING_LIMIT,
+        max_constraints: int = SIBLING_CONSTRAINT_HEADLINES,
+    ) -> ProjectContext | None:
+        """Compact project context for an Advisor turn (0010 constraint 2/3): the project's
+        strategic intent + token-conscious summaries of its sibling initiatives (title, stage,
+        headline confirmed constraints + count, most recent resolved decision). `exclude` drops
+        the initiative in focus. Returns None if the project is gone. NOT full specs — the
+        Advisor retrieves specifics on demand via project-scoped get_context (u4)."""
+        proj = await self.get_project(project_id)
+        if proj is None:
+            return None
+        rows = await self.pg.fetch(
+            """SELECT i.id, i.stage, s.doc
+               FROM initiatives i
+               JOIN specs s ON s.initiative_id = i.id
+               WHERE i.project_id = $1 AND ($2::text IS NULL OR i.id <> $2)
+               ORDER BY i.updated_at DESC, i.id
+               LIMIT $3""",
+            project_id, exclude, sibling_limit,
+        )
+        # the most recent resolved decision per sibling, in one pass (DISTINCT ON)
+        dec_rows = await self.pg.fetch(
+            """SELECT DISTINCT ON (d.initiative_id) d.initiative_id, d.payload
+               FROM decisions d
+               JOIN initiatives i ON i.id = d.initiative_id
+               WHERE i.project_id = $1 AND ($2::text IS NULL OR i.id <> $2)
+                 AND d.status = 'resolved'
+               ORDER BY d.initiative_id, d.resolved_at DESC NULLS LAST""",
+            project_id, exclude,
+        )
+        latest = {
+            r["initiative_id"]: _decision_summary(Decision.model_validate_json(r["payload"]))
+            for r in dec_rows
+        }
+        siblings = [_sibling_summary(r, latest, max_constraints) for r in rows]
+        return ProjectContext(
+            project_id=proj.id, name=proj.name, intent=proj.intent, siblings=siblings
+        )
+
+    async def count_open_decisions(self, project_id: str) -> int:
+        """Open escalations across every initiative in a project — a whole-project aggregate
+        for the dashboard (0010 a2)."""
+        return await self.pg.fetchval(
+            """SELECT count(*) FROM decisions d
+               JOIN initiatives i ON i.id = d.initiative_id
+               WHERE i.project_id = $1 AND d.status = 'open'""",
+            project_id,
+        )
+
+    async def assign_initiative_to_project(
+        self, initiative_id: str, project_id: str
+    ) -> Initiative:
+        """Move an initiative to a (different) project. Both must exist. There is no detach —
+        every initiative belongs to a project (no orphan specs)."""
+        if await self.get_initiative(initiative_id) is None:
+            raise NotFoundError(f"no initiative {initiative_id}")
+        if await self.get_project(project_id) is None:
+            raise NotFoundError(f"no project {project_id}")
+        await self.pg.execute(
+            "UPDATE initiatives SET project_id = $2, updated_at = now() WHERE id = $1",
+            initiative_id, project_id,
+        )
+        updated = await self.get_initiative(initiative_id)
+        assert updated is not None  # it exists — we just updated it
+        return updated
 
     # --- decisions: durable in PG, surfaced + resolved in real time ----------
     async def raise_decision(self, d: Decision, initiative_id: str) -> Decision:
@@ -443,17 +610,52 @@ class SpecStore:
         )
         return [_memory_from_row(r) for r in rows]
 
-    async def get_context(self, query: str, limit: int = 8) -> list[ContextHit]:
+    async def get_context(
+        self, query: str, limit: int = 8, *, project_id: str | None = None
+    ) -> list[ContextHit]:
         """Similarity search over the memory corpus — resolved decisions + completed-
-        initiative memory (D2 scope) — across ALL initiatives, so an executor shaping or
-        building the next feature retrieves relevant prior patterns (0005 a6/a7/a8). Ranked
-        by cosine similarity; rows without an embedding are skipped."""
+        initiative memory (D2 scope) — so an executor shaping or building the next feature
+        retrieves relevant prior patterns (0005 a6/a7/a8). Ranked by cosine similarity; rows
+        without an embedding are skipped.
+
+        0010 constraint 4: when `project_id` is given (the calling initiative belongs to a
+        project), search WITHIN the project first; only if those are insufficient to fill
+        `limit` does it fall back to the rest of the corpus (outside the project). Each hit is
+        tagged with its scope (project / global) and its source initiative. With no project_id
+        it's the original global search (scope stays None) — standalone initiatives unaffected."""
         if not query.strip():
             return []
         [qvec] = await self._get_embedder().embed([query])
+        if project_id is None:
+            return await self._context_search(qvec, limit)
+        project_hits = await self._context_search(qvec, limit, project_id=project_id)
+        for h in project_hits:
+            h.scope = "project"
+        if len(project_hits) >= limit:
+            return project_hits
+        # project results are insufficient — fill the rest from OUTSIDE the project (a4)
+        fallback = await self._context_search(
+            qvec, limit - len(project_hits), exclude_project=project_id
+        )
+        for h in fallback:
+            h.scope = "global"
+        return project_hits + fallback
+
+    async def _context_search(
+        self,
+        qvec: list[float],
+        limit: int,
+        *,
+        project_id: str | None = None,
+        exclude_project: str | None = None,
+    ) -> list[ContextHit]:
+        """One ranked pass over the corpus. `project_id` restricts to a project's initiatives;
+        `exclude_project` restricts to everything outside one (the global fallback). The join
+        to initiatives never drops rows — decisions/memory cascade-delete with their
+        initiative, so every embedded row has a live parent."""
         rows = await self.pg.fetch(
             """
-            SELECT type, initiative_id, txt, dist FROM (
+            SELECT q.type, q.initiative_id, q.txt, q.dist FROM (
                 SELECT 'decision' AS type, initiative_id,
                        concat_ws(' — ', payload->>'question',
                            NULLIF('Chosen: ' || coalesce(payload->>'chosen', ''), 'Chosen: '),
@@ -469,10 +671,13 @@ class SpecStore:
                        embedding <=> $1::vector AS dist
                   FROM memory WHERE embedding IS NOT NULL
             ) q
-            ORDER BY dist
-            LIMIT $2
+            JOIN initiatives i ON i.id = q.initiative_id
+            WHERE ($2::text IS NULL OR i.project_id = $2)
+              AND ($3::text IS NULL OR i.project_id IS DISTINCT FROM $3)
+            ORDER BY q.dist
+            LIMIT $4
             """,
-            _vector_literal(qvec), limit,
+            _vector_literal(qvec), project_id, exclude_project, limit,
         )
         return [
             ContextHit(
@@ -498,7 +703,7 @@ class SpecStore:
         row = await self.pg.fetchrow(
             """INSERT INTO messages (id, initiative_id, role, content, metadata)
                VALUES ($1, $2, $3, $4, $5)
-               RETURNING id, initiative_id, role, content, metadata, created_at""",
+               RETURNING id, initiative_id, project_id, role, content, metadata, created_at""",
             msg.id, initiative_id, role, content, json.dumps(msg.metadata),
         )
         return _message_from_row(row)
@@ -511,17 +716,57 @@ class SpecStore:
         Advisor's windowed context (constraint 1)."""
         if limit is None:
             rows = await self.pg.fetch(
-                """SELECT id, initiative_id, role, content, metadata, created_at
+                """SELECT id, initiative_id, project_id, role, content, metadata, created_at
                    FROM messages WHERE initiative_id = $1 ORDER BY seq""",
                 initiative_id,
             )
         else:
             rows = await self.pg.fetch(
-                """SELECT id, initiative_id, role, content, metadata, created_at FROM (
+                """SELECT id, initiative_id, project_id, role, content, metadata, created_at FROM (
                        SELECT * FROM messages WHERE initiative_id = $1
                        ORDER BY seq DESC LIMIT $2
                    ) recent ORDER BY seq""",
                 initiative_id, limit,
+            )
+        return [_message_from_row(r) for r in rows]
+
+    # --- project conversation: the project-level rail's history (0010 u5) ----
+    async def append_project_message(
+        self,
+        project_id: str,
+        role: MessageRole,
+        content: str,
+        metadata: dict | None = None,
+    ) -> Message:
+        """Append one project-owned message row (initiative_id NULL, project_id set). The same
+        table as the initiative rail — one Message abstraction, two owners (u5)."""
+        msg = Message(project_id=project_id, role=role, content=content, metadata=metadata or {})
+        row = await self.pg.fetchrow(
+            """INSERT INTO messages (id, project_id, role, content, metadata)
+               VALUES ($1, $2, $3, $4, $5)
+               RETURNING id, initiative_id, project_id, role, content, metadata, created_at""",
+            msg.id, project_id, role, content, json.dumps(msg.metadata),
+        )
+        return _message_from_row(row)
+
+    async def list_project_messages(
+        self, project_id: str, limit: int | None = None
+    ) -> list[Message]:
+        """A project's conversation, oldest-first; with a limit, the most recent `limit` (still
+        oldest-first) — the project Advisor's windowed context."""
+        if limit is None:
+            rows = await self.pg.fetch(
+                """SELECT id, initiative_id, project_id, role, content, metadata, created_at
+                   FROM messages WHERE project_id = $1 ORDER BY seq""",
+                project_id,
+            )
+        else:
+            rows = await self.pg.fetch(
+                """SELECT id, initiative_id, project_id, role, content, metadata, created_at FROM (
+                       SELECT * FROM messages WHERE project_id = $1
+                       ORDER BY seq DESC LIMIT $2
+                   ) recent ORDER BY seq""",
+                project_id, limit,
             )
         return [_message_from_row(r) for r in rows]
 

@@ -32,10 +32,27 @@ export interface Initiative {
   id: string;
   title: string | null;
   stage: string;
+  project_id: string; // the parent project (0010) — every initiative belongs to one
   org_id?: string | null;
   owner_id?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// A group of initiatives under a strategic intent (backend Project, models.py).
+export interface Project {
+  id: string;
+  name: string;
+  intent: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// The project dashboard payload (backend ProjectDashboard, schemas.py).
+export interface ProjectDashboard {
+  project: Project;
+  initiatives: Initiative[];
+  open_decisions: number;
 }
 
 // A work unit decomposed from the spec (backend WorkUnit, store.py). The executor
@@ -107,7 +124,8 @@ export interface Proposal {
 // cards ride along in metadata.proposals.
 export interface Message {
   id: string;
-  initiative_id: string;
+  initiative_id?: string | null; // set for an initiative-rail message
+  project_id?: string | null; // set for a project-rail message (0010 u5); exactly one owner
   role: "human" | "advisor";
   content: string;
   metadata: { proposals?: Proposal[] } & Record<string, unknown>;

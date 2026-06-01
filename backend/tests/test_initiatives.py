@@ -10,6 +10,7 @@ real docker-compose Postgres + Redis.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -79,9 +80,10 @@ def test_slugify_kebab_cases_the_title():
 
 # --- a1: create persists an initiative + scaffolds an empty v0/discover spec ---
 def test_create_initiative_scaffolds_empty_spec(track_initiatives: list[str]):
-    init = _store_run(lambda s: s.create_initiative("Passwordless Sign-In"))
+    init = _store_run(lambda s: s.create_initiative("Passwordless Sign-In", "build-doen"))
     track_initiatives.append(init.id)
-    assert init.id == "passwordless-sign-in"
+    # a random ~5-letter prefix keeps slugs unique; the title-derived part follows
+    assert re.fullmatch(r"[a-z]{5}-passwordless-sign-in", init.id)
     assert init.title == "Passwordless Sign-In"
     assert init.stage == "discover"
 
@@ -97,22 +99,23 @@ def test_create_initiative_scaffolds_empty_spec(track_initiatives: list[str]):
     assert spec.constraints == [] and spec.discretion == [] and spec.acceptance == []
 
 
-# --- a2: duplicate titles disambiguate to distinct unique slugs (no error) -----
+# --- a2: same-titled initiatives get distinct slugs via the random prefix ------
 def test_duplicate_title_disambiguated(track_initiatives: list[str]):
-    a = _store_run(lambda s: s.create_initiative("Same Title"))
-    b = _store_run(lambda s: s.create_initiative("Same Title"))
+    a = _store_run(lambda s: s.create_initiative("Same Title", "build-doen"))
+    b = _store_run(lambda s: s.create_initiative("Same Title", "build-doen"))
     track_initiatives.extend([a.id, b.id])
-    assert a.id == "same-title"
-    assert b.id == "same-title-2"
+    assert a.id != b.id  # distinct prefixes, no collision
+    assert a.id.endswith("-same-title") and b.id.endswith("-same-title")
 
 
 # --- D1 fold-in: get_initiative surfaces the lifecycle metadata ----------------
 def test_get_initiative_returns_lifecycle_metadata(track_initiatives: list[str]):
-    init = _store_run(lambda s: s.create_initiative("Lifecycle Meta"))
+    init = _store_run(lambda s: s.create_initiative("Lifecycle Meta", "build-doen"))
     track_initiatives.append(init.id)
     got = _store_run(lambda s: s.get_initiative(init.id))
     assert isinstance(got, Initiative)
-    assert (got.id, got.title, got.stage) == ("lifecycle-meta", "Lifecycle Meta", "discover")
+    assert got.id == init.id and got.id.endswith("-lifecycle-meta")
+    assert (got.title, got.stage) == ("Lifecycle Meta", "discover")
     assert _store_run(lambda s: s.get_initiative("does-not-exist")) is None
 
 
@@ -141,7 +144,7 @@ def test_migration_backfills_title_and_stage(
 def test_list_initiatives_includes_created_one(
     client: TestClient, track_initiatives: list[str]
 ):
-    init = _store_run(lambda s: s.create_initiative("Dashboard Listing"))
+    init = _store_run(lambda s: s.create_initiative("Dashboard Listing", "build-doen"))
     track_initiatives.append(init.id)
 
     r = client.get("/initiatives")
@@ -159,12 +162,13 @@ def test_list_initiatives_includes_created_one(
 def test_create_initiative_endpoint_scaffolds(
     client: TestClient, track_initiatives: list[str]
 ):
-    r = client.post("/initiatives", json={"title": "Endpoint Made"})
+    r = client.post("/initiatives", json={"title": "Endpoint Made", "project_id": "build-doen"})
     assert r.status_code == 201, r.text
     init = r.json()
     track_initiatives.append(init["id"])
-    assert init["id"] == "endpoint-made"
+    assert init["id"].endswith("-endpoint-made")
     assert init["stage"] == "discover"
+    assert init["project_id"] == "build-doen"  # every initiative belongs to a project
 
     # land straight in the empty spec (a7) — readable immediately, v0/discover, empty
     g = client.get(f"/specs/{init['id']}")
@@ -174,14 +178,21 @@ def test_create_initiative_endpoint_scaffolds(
     assert spec["constraints"] == [] and spec["acceptance"] == []
 
     # an empty title is rejected
-    assert client.post("/initiatives", json={"title": "   "}).status_code == 422
+    assert client.post(
+        "/initiatives", json={"title": "   ", "project_id": "build-doen"}
+    ).status_code == 422
+    # a missing/unknown project is rejected too (no orphan specs)
+    assert client.post("/initiatives", json={"title": "Needs A Home"}).status_code == 422
+    assert client.post(
+        "/initiatives", json={"title": "Ghost Project", "project_id": "nope"}
+    ).status_code == 404
 
 
 # --- a5: advance/retreat one step; the spec's stage stays in sync --------------
 def test_stage_advance_and_retreat_sync_spec(
     client: TestClient, track_initiatives: list[str]
 ):
-    init = _store_run(lambda s: s.create_initiative("Stage Sync"))
+    init = _store_run(lambda s: s.create_initiative("Stage Sync", "build-doen"))
     track_initiatives.append(init.id)
 
     r = client.post(f"/initiatives/{init.id}/stage", json={"stage": "shape"})  # discover -> shape
@@ -197,7 +208,7 @@ def test_stage_advance_and_retreat_sync_spec(
 
 # --- a4: skips and arbitrary jumps are rejected; nothing moves -----------------
 def test_stage_rejects_skips(client: TestClient, track_initiatives: list[str]):
-    init = _store_run(lambda s: s.create_initiative("Stage Skip"))
+    init = _store_run(lambda s: s.create_initiative("Stage Skip", "build-doen"))
     track_initiatives.append(init.id)
 
     # discover -> implement skips four stages -> 422
