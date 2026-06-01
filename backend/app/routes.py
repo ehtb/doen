@@ -30,12 +30,14 @@ from app.deps import get_pool, get_store
 from app.store import (
     AcceptanceCriterion,
     Decision,
+    InvalidTransition,
     Spec,
     SpecItem,
     SpecStore,
     Stage,
     StaleSpecError,
     Verify,
+    WorkUnit,
     _now,
 )
 
@@ -293,3 +295,50 @@ async def confirm_all(
     if confirmed == 0:
         return spec  # nothing proposed; don't bump the version for a no-op
     return await _save(store, spec)
+
+
+# --- work units (spec 0003): a human confirms proposed units and judges submissions ---
+# Units are NOT under the spec's optimistic lock (constraint 1) — they're a separate table
+# that churns at its own rate, so these endpoints carry no `version`. Units are created by
+# the executor over MCP (propose_unit); there is deliberately no HTTP create-or-confirm path
+# for an agent — confirming and judging are human acts.
+class UnitVerdict(BaseModel):
+    verdict: Literal["approved", "changes_requested"]
+    feedback: str = ""
+    decided_by: str = DEV_USER_ID  # single dev user this slice; auth replaces this
+
+
+@router.get("/specs/{initiative_id}/units")
+async def list_units(
+    initiative_id: str,
+    store: Annotated[SpecStore, Depends(get_store)],
+    status: str | None = None,
+) -> list[WorkUnit]:
+    return await store.list_units(initiative_id, status)
+
+
+@router.post("/units/{unit_id}/confirm")
+async def confirm_unit(
+    unit_id: str,
+    store: Annotated[SpecStore, Depends(get_store)],
+) -> WorkUnit:
+    try:
+        return await store.confirm_unit(unit_id)
+    except KeyError:
+        raise HTTPException(404, f"no work unit {unit_id}")
+    except InvalidTransition as e:
+        raise HTTPException(422, str(e))  # only a proposed unit can be confirmed
+
+
+@router.post("/units/{unit_id}/verdict")
+async def record_verdict(
+    unit_id: str,
+    body: UnitVerdict,
+    store: Annotated[SpecStore, Depends(get_store)],
+) -> WorkUnit:
+    try:
+        return await store.record_verdict(unit_id, body.verdict, body.feedback, body.decided_by)
+    except KeyError:
+        raise HTTPException(404, f"no work unit {unit_id}")
+    except InvalidTransition as e:
+        raise HTTPException(422, str(e))  # a verdict is legal only on a submitted unit

@@ -2,6 +2,7 @@ import { getSpec } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import SpecDocument from "./SpecDocument";
 import SteeringRail from "./SteeringRail";
+import WorkUnits from "./WorkUnits";
 
 const STAGES = ["discover", "shape", "bet", "decompose", "implement", "verify", "learn"];
 
@@ -76,6 +77,7 @@ export default async function SpecPage({ params }: { params: Promise<{ id: strin
       <div className="mt-7 flex flex-wrap items-start gap-7">
         <section className="min-w-80 flex-[1_1_560px]">
           <SpecDocument initialSpec={spec} />
+          <WorkUnits initiativeId={spec.initiative_id} acceptance={spec.acceptance} />
         </section>
         <SteeringRail initiativeId={spec.initiative_id} />
       </div>

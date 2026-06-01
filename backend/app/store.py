@@ -111,6 +111,78 @@ class Spec(BaseModel):
         return [c for c in self.constraints if c.status == "confirmed"]
 
 
+# --- work units: tracked, bounded units decomposed from a spec (0003) --------
+# A fixed state machine. A unit is created `proposed`; a human confirms it to `ready`
+# before it's workable, and an executor can never confirm its own (no-self-confirm).
+# `changes_requested` is a verdict, not a resting status: per 0003 a7 it lands the
+# unit back in `in_progress` with feedback — so it is NOT a member of UnitStatus, and
+# `in_verification -> in_progress` is the one allowed backward transition.
+UnitStatus = Literal[
+    "proposed", "ready", "in_progress", "blocked_on_decision", "in_verification", "done"
+]
+
+_UNIT_TRANSITIONS: dict[str, frozenset[str]] = {
+    "proposed": frozenset({"ready"}),                        # human confirms
+    "ready": frozenset({"in_progress"}),                     # executor starts
+    "in_progress": frozenset({"blocked_on_decision", "in_verification"}),
+    "blocked_on_decision": frozenset({"in_progress"}),       # decision resolved -> resume
+    "in_verification": frozenset({"done", "in_progress"}),   # approved / changes_requested
+    "done": frozenset(),                                     # terminal
+}
+
+
+class CriterionResult(BaseModel):
+    """One acceptance criterion, as the executor reports it on submission."""
+
+    criterion_id: str
+    result: Literal["pass", "fail", "needs_judgment"]
+    evidence: str = ""
+
+
+class Submission(BaseModel):
+    """What the executor hands back for judgment — its output mapped to the criteria."""
+
+    summary: str
+    criteria_results: list[CriterionResult]
+    artifacts: list[str] = Field(default_factory=list)
+    submitted_at: str = Field(default_factory=_now)
+
+
+class Verdict(BaseModel):
+    """The human's judgment on a submission. Only a human writes this (no self-approval)."""
+
+    verdict: Literal["approved", "changes_requested"]
+    feedback: str = ""
+    decided_by: str
+    decided_at: str = Field(default_factory=_now)
+
+
+class WorkUnit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=lambda: _id("unit"))
+    spec_id: str  # the initiative_id of the spec this unit decomposes (one spec per initiative)
+    title: str
+    scope: str
+    criterion_ids: list[str] = Field(default_factory=list)  # acceptance criteria it satisfies
+    status: UnitStatus = "proposed"  # created proposed; not workable until a human confirms it
+    blocked_on: str | None = None  # decision id while status == blocked_on_decision
+    progress_note: str | None = None  # lightweight executor heartbeat (report_progress)
+    submission: Submission | None = None  # set on submit_for_verification
+    verdict: Verdict | None = None  # set by the human's verdict (u3); read by get_verification
+    created_at: str = Field(default_factory=_now)
+    updated_at: str = Field(default_factory=_now)
+
+    def transition(self, target: UnitStatus) -> "WorkUnit":
+        """Move along the fixed state machine, or raise. Every status change goes
+        through here — it is the sole legality rule for a unit's lifecycle."""
+        if target not in _UNIT_TRANSITIONS.get(self.status, frozenset()):
+            raise InvalidTransition(self.id, self.status, target)
+        self.status = target
+        self.updated_at = _now()
+        return self
+
+
 # ----------------------------------------------------------------------------- errors
 class StaleSpecError(Exception):
     def __init__(self, initiative_id: str, expected: int, found: int):
@@ -122,6 +194,16 @@ class StaleSpecError(Exception):
 
 class DecisionTimeout(Exception):
     pass
+
+
+class InvalidTransition(Exception):
+    """A work unit was asked to make a status change the state machine forbids."""
+
+    def __init__(self, unit_id: str, current: str, target: str):
+        super().__init__(
+            f"work unit {unit_id}: {current} -> {target} is not a legal transition"
+        )
+        self.unit_id, self.current, self.target = unit_id, current, target
 
 
 # ----------------------------------------------------------------------------- store
@@ -224,6 +306,9 @@ class SpecStore:
                WHERE id = $1""",
             decision_id, d.model_dump_json(),
         )
+        # a decision can park a work unit (blocked_on_decision); resolving it resumes that
+        # unit BEFORE we wake the executor, so the awaited call finds it in_progress (a9).
+        await self._resume_units_blocked_on(decision_id)
         # wake any agent parked on this exact decision — push, not poll
         await self.redis.publish(f"decision:{decision_id}", d.model_dump_json())
         return d
@@ -247,6 +332,119 @@ class SpecStore:
         finally:
             await pubsub.unsubscribe(f"decision:{decision_id}")
         raise DecisionTimeout(decision_id)
+
+    # --- work units: durable rows in their own table (0003) ------------------
+    async def create_unit(self, unit: WorkUnit) -> WorkUnit:
+        await self.pg.execute(
+            """INSERT INTO work_units (id, spec_id, payload, status, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, now(), now())""",
+            unit.id, unit.spec_id, unit.model_dump_json(), unit.status,
+        )
+        return unit
+
+    async def get_unit(self, unit_id: str) -> WorkUnit | None:
+        row = await self.pg.fetchrow(
+            "SELECT payload FROM work_units WHERE id = $1", unit_id
+        )
+        return WorkUnit.model_validate_json(row["payload"]) if row else None
+
+    async def save_unit(self, unit: WorkUnit) -> WorkUnit:
+        """Persist a unit after a transition. payload is the truth; status is a
+        promoted column so list_units can filter without parsing JSON."""
+        unit.updated_at = _now()
+        await self.pg.execute(
+            """UPDATE work_units SET payload = $2, status = $3, updated_at = now()
+               WHERE id = $1""",
+            unit.id, unit.model_dump_json(), unit.status,
+        )
+        return unit
+
+    async def list_units(self, spec_id: str, status: str | None = None) -> list[WorkUnit]:
+        """The executor's read path (a3). Oldest first; optionally filtered by status,
+        served off the promoted status column so no JSON parsing is needed to filter."""
+        if status is None:
+            rows = await self.pg.fetch(
+                "SELECT payload FROM work_units WHERE spec_id = $1 ORDER BY created_at",
+                spec_id,
+            )
+        else:
+            rows = await self.pg.fetch(
+                """SELECT payload FROM work_units
+                   WHERE spec_id = $1 AND status = $2 ORDER BY created_at""",
+                spec_id, status,
+            )
+        return [WorkUnit.model_validate_json(r["payload"]) for r in rows]
+
+    async def claim_unit(self, unit_id: str) -> WorkUnit:
+        """The executor claims a confirmed unit to start building (ready -> in_progress).
+        Only a confirmed (ready) unit can be claimed."""
+        unit = await self._require_unit(unit_id)
+        unit.transition("in_progress")
+        return await self.save_unit(unit)
+
+    async def report_progress(self, unit_id: str, note: str) -> WorkUnit:
+        unit = await self._require_unit(unit_id)
+        unit.progress_note = note
+        return await self.save_unit(unit)
+
+    async def submit_for_verification(self, unit_id: str, submission: Submission) -> WorkUnit:
+        """Hand a unit back for judgment: in_progress -> in_verification. The executor must
+        map its output to at least one acceptance criterion (constraint 4)."""
+        if not submission.criteria_results:
+            raise ValueError("submit_for_verification requires at least one criterion result")
+        unit = await self._require_unit(unit_id)
+        unit.submission = submission
+        unit.transition("in_verification")  # raises InvalidTransition unless in_progress
+        return await self.save_unit(unit)
+
+    async def get_verification(self, unit_id: str) -> Verdict | None:
+        """The verdict a human gave, or None if not yet judged. Read-only — there is no
+        path here that sets a verdict (no self-approval)."""
+        return (await self._require_unit(unit_id)).verdict
+
+    # --- human verdict + unit/decision linking (u3): humans confirm and judge ---------
+    async def confirm_unit(self, unit_id: str) -> WorkUnit:
+        """A human confirms a proposed unit -> ready — the only path to workable (a4).
+        Raises InvalidTransition unless the unit is proposed."""
+        unit = await self._require_unit(unit_id)
+        unit.transition("ready")
+        return await self.save_unit(unit)
+
+    async def record_verdict(
+        self, unit_id: str, verdict: str, feedback: str, decided_by: str
+    ) -> WorkUnit:
+        """A human judges a submitted unit (a7): approved -> done; changes_requested ->
+        in_progress with feedback attached. Legal only from in_verification."""
+        unit = await self._require_unit(unit_id)
+        unit.verdict = Verdict(verdict=verdict, feedback=feedback, decided_by=decided_by)
+        unit.transition("done" if verdict == "approved" else "in_progress")
+        return await self.save_unit(unit)
+
+    async def block_on_decision(self, unit_id: str, decision_id: str) -> WorkUnit:
+        """Park a unit on a decision (in_progress -> blocked_on_decision). The matching
+        resume happens automatically when the decision resolves."""
+        unit = await self._require_unit(unit_id)
+        unit.blocked_on = decision_id
+        unit.transition("blocked_on_decision")
+        return await self.save_unit(unit)
+
+    async def _resume_units_blocked_on(self, decision_id: str) -> None:
+        rows = await self.pg.fetch(
+            """SELECT payload FROM work_units
+               WHERE status = 'blocked_on_decision' AND payload->>'blocked_on' = $1""",
+            decision_id,
+        )
+        for r in rows:
+            unit = WorkUnit.model_validate_json(r["payload"])
+            unit.blocked_on = None
+            unit.transition("in_progress")
+            await self.save_unit(unit)
+
+    async def _require_unit(self, unit_id: str) -> WorkUnit:
+        unit = await self.get_unit(unit_id)
+        if unit is None:
+            raise KeyError(unit_id)
+        return unit
 
     # --- ephemeral agent state: Redis-native, never persisted ----------------
     async def heartbeat(self, unit_id: str, note: str) -> None:
