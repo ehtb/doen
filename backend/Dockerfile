@@ -14,5 +14,5 @@ COPY --from=builder /opt/venv /opt/venv
 COPY backend/app ./app
 COPY backend/migrations ./migrations
 ENV PATH="/opt/venv/bin:$PATH" PYTHONUNBUFFERED=1
-EXPOSE 8000
-CMD ["sh", "-c", "python -m app.migrate && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level ${LOG_LEVEL:-info}"]
+EXPOSE ${PORT:-8000}
+CMD ["sh", "-c", "python -m app.migrate && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --log-level ${LOG_LEVEL:-info}"]

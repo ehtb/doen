@@ -31,13 +31,11 @@ PAYLOAD = {
     "acceptance": [
         {
             "text": "A used or expired link is rejected with a clear error.",
-            "verify_kind": "test",
-            "verify_detail": "Replay a consumed link; assert 4xx + a clear message.",
+            "verify": {"kind": "test", "detail": "Replay a consumed link; assert 4xx + a clear message."},
         },
         {
             "text": "A human signs in end to end via the emailed link. [HEADLINE]",
-            "verify_kind": "human_judgment",
-            "verify_detail": "Walk the full flow in the UI.",
+            "verify": {"kind": "human_judgment", "detail": "Walk the full flow in the UI."},
         },
     ],
     "units": [

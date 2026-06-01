@@ -212,7 +212,7 @@ export default function ConversationRail({
         provenance: "ai_proposed", // lands as a proposed item the human still confirms (a3)
       };
       if (p.section === "acceptance") {
-        body.verify = { kind: p.verify_kind ?? "behavior", detail: p.verify_detail ?? p.text };
+        body.verify = p.verify ?? { kind: "behavior", detail: p.text };
       }
       const res = await fetch(`/api/specs/${specId}/items`, {
         method: "POST",
@@ -487,10 +487,10 @@ function ProposalCard({
         <Sparkles className="size-3" /> proposed {SECTION_NOTE[proposal.section]}
       </div>
       <p className="text-[12.5px] leading-snug text-rail-foreground">{proposal.text}</p>
-      {proposal.section === "acceptance" && proposal.verify_kind && (
+      {proposal.section === "acceptance" && proposal.verify && (
         <p className="mt-1.5 font-mono text-[10px] text-rail-muted">
-          verify: {proposal.verify_kind}
-          {proposal.verify_detail ? ` — ${proposal.verify_detail}` : ""}
+          verify: {proposal.verify.kind}
+          {proposal.verify.detail ? ` — ${proposal.verify.detail}` : ""}
         </p>
       )}
       <div className="mt-3 flex items-center justify-between gap-2">

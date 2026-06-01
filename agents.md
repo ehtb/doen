@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-05-31 after spec BD-6 -->
+<!-- last-reviewed: 2026-06-01 blind-spot audit -->
 # Doen — Project Context for Claude Code
 
 > Read this first, every session. It is the constitution. A spec governs the work;
@@ -17,7 +17,7 @@ in @docs/design-principles.md.
 
 - **Backend:** FastAPI, async throughout. `asyncpg` (no ORM — keep overhead low). Pydantic v2.
   Layered (router → service → repository) — don't put business logic or data access in routers.
-- **Store:** Postgres = source of truth for the durable record (specs, decisions, work units,
+- **Store:** Postgres = source of truth for the durable record (specs, decisions,
   memory, projects). Redis = derived hot cache + real-time coordination (decision pub/sub).
   Conversation history is NOT here — it's browser-local (IndexedDB) since spec uvama; the backend
   is stateless about messages (see Current state).
@@ -34,17 +34,19 @@ in @docs/design-principles.md.
    from Postgres. Nothing durable lives only in Redis (heartbeats / locks excepted — they're
    deliberately ephemeral).
 2. **The spec is one JSONB document** — one row per initiative. Do NOT normalise spec items
-   into per-item tables. Work units and decisions are separate tables; spec items are not.
+   into per-item tables. Decisions are a separate table; spec items are not.
 3. **Decisions are durable rows** in their own table, not nested in the spec doc.
 4. **Every initiative belongs to a project.** `project_id` is required — there are no orphan
    specs.
 5. **`version` is an optimistic lock.** Never bypass the stale-version check on write.
 6. **No estimation anywhere** — no story points, no hours, no velocity. Ever.
-7. **State is derived, not manually set.** Initiative lifecycle (draft / building / learning /
-   complete) is inferred from criteria verification status + the learn record, and stored by
-   the backend when either changes. There is no manual transition.
+7. **State is primarily derived.** Initiative lifecycle (draft / building / learning / complete)
+   is inferred from criteria verification status + the learn record via `_recompute_state()`.
+   Two explicit escape-hatch transitions exist for human control: `start-building`
+   (draft → building) and `revert-to-draft` (building → draft). All other state movement is
+   automatic; executors never set state directly.
 8. **You never self-approve work.** Verification is queued for the human; only they issue a
-   verdict. The same applies to confirming your own proposed unit.
+   verdict.
 
 ## How we work
 
@@ -63,7 +65,7 @@ in @docs/design-principles.md.
   move.
 - **Self-verify before handing off.** Check each acceptance criterion explicitly and submit
   evidence via `submit_evidence`. The human judges intent-alignment, not your diff line-by-line.
-- **Small commits.** One work unit per commit; reference the unit in the message.
+- **Small commits.** One logical change per commit.
 
 ## Keeping these docs current
 
@@ -90,13 +92,15 @@ and spec JSONB:
 - **complete** — every criterion is `verified` AND a learn record exists. The flywheel can
   pull from it.
 
-State is stored in the DB but never advanced by hand — it is recomputed whenever criteria or
-the learn record change.
+State is stored on the initiative row and recomputed by `_recompute_state()` whenever criteria
+or the learn record change. Two human-facing escape hatches exist (`start-building`,
+`revert-to-draft`) but executors do not call them.
 
-### MCP tool surface (7 tools in `backend/app/mcp_server.py`)
+### MCP tool surface (9 tools in `backend/app/mcp_server.py`)
 - **Ground yourself:** `get_spec`, `get_conversation_summary`, `get_context`
 - **Track criteria:** `submit_evidence`, `get_criteria_status`
 - **Escalate:** `raise_decision`, `resolve_decision`, `wait_for_decision`
+- **Project setup:** `setup_project`
 
 Full signatures and the operating loop are in `docs/spec-contract.md`.
 
@@ -154,7 +158,7 @@ doen/
 - **Project-scoped everything.** Each initiative has a `project_id`; the rail, dashboards,
   and `get_context` are project-aware with fallback to global.
 - **The Advisor is a single voice.** Both rails (initiative-level and project-level) reach
-  one Advisor service that knows the spec, the units, the memory, and the conversation.
+  one Advisor service that knows the spec, the memory, and the conversation.
 
 ## References
 

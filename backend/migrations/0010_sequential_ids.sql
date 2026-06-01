@@ -2,15 +2,14 @@
 -- The internal initiative id (a slug) stays the stable key everything references — MCP, memory,
 -- messages, decisions, work units. This adds a short, human identifier on top: a per-project
 -- prefix on the project + an immutable, auto-incrementing number on the initiative. Existing rows
--- are backfilled: build-doen -> 'BD', and each project's initiatives are numbered in creation
--- order so the short id is stable from day one (0012 a10).
+-- are backfilled, and each project's initiatives are numbered in creation order so the short id
+-- is stable from day one (0012 a10).
 
--- Projects get a short prefix. Backfill from the name's first letters; force the flagship to 'BD'.
+-- Projects get a short prefix. Backfill from the name's first letters.
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS prefix TEXT;
 
 UPDATE projects SET prefix = upper(left(regexp_replace(name, '[^A-Za-z0-9]', '', 'g'), 2))
 WHERE prefix IS NULL;
-UPDATE projects SET prefix = 'BD' WHERE id = 'build-doen';
 -- any still-empty (e.g. a name with no letters) -> a stable fallback derived from the id
 UPDATE projects SET prefix = upper(left(regexp_replace(id, '[^A-Za-z0-9]', '', 'g'), 2))
 WHERE prefix IS NULL OR prefix = '';

@@ -23,9 +23,10 @@ from pathlib import Path
 
 import asyncpg
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from redis import asyncio as aioredis
 
-from app.config import DATABASE_URL, REDIS_URL
+from app.config import DATABASE_URL, MCP_ALLOWED_HOSTS, MCP_TRANSPORT, REDIS_URL
 from app.exceptions import DecisionTimeout, NotFoundError
 from app.models import Decision
 from app.onboarding_config import DOCUMENTS
@@ -52,7 +53,20 @@ async def lifespan(_: FastMCP) -> AsyncIterator[Lifespan]:
 
 # streamable_http_path="/" so that when mounted at /mcp on FastAPI the endpoint
 # is reachable at http://host:8000/mcp (not /mcp/mcp).
-mcp = FastMCP("doen", lifespan=lifespan, streamable_http_path="/")
+#
+# FastMCP defaults to host="127.0.0.1" which auto-enables DNS-rebinding protection
+# (allowed_hosts=localhost only). In HTTP/Railway mode the Host header is the proxy
+# hostname, so we configure protection explicitly: empty MCP_ALLOWED_HOSTS disables
+# the check (safe for Railway/VPC where transport is already controlled).
+if MCP_TRANSPORT == "http":
+    _transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=bool(MCP_ALLOWED_HOSTS),
+        allowed_hosts=MCP_ALLOWED_HOSTS.split(",") if MCP_ALLOWED_HOSTS else [],
+    )
+else:
+    _transport_security = None
+
+mcp = FastMCP("doen", lifespan=lifespan, streamable_http_path="/", transport_security=_transport_security)
 
 
 def _store(ctx: Context) -> SpecStore:

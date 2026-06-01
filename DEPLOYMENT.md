@@ -36,10 +36,10 @@ covers all required features. No special modules needed (no RediSearch, no Redis
 
 ## Environment configuration
 
-Copy `.env.example` to `.env` and fill in every value:
+Copy `backend/.env.example` to `backend/.env` and fill in every value:
 
 ```bash
-cp .env.example .env
+cp backend/.env.example backend/.env
 ```
 
 The file is grouped by category with inline comments. Key variables:
@@ -48,7 +48,8 @@ The file is grouped by category with inline comments. Key variables:
 |---|---|---|
 | `DATABASE_URL` | Yes | Postgres connection string (include `?sslmode=require` for managed providers) |
 | `REDIS_URL` | Yes | Redis connection string (`rediss://` for TLS) |
-| `OPENROUTER_API_KEY` | Yes | Powers spec shaping (Claude) and embeddings |
+| `LLM_API_KEY` | Yes | API key for the LLM provider (powers spec shaping and embeddings) |
+| `LLM_BASE_URL` | No | Base URL for an OpenAI-compatible API. Default: `https://openrouter.ai/api/v1` |
 | `MCP_TRANSPORT` | Yes | `stdio` or `http` — see MCP section below |
 | `SHAPING_MODEL` | No | Default: `anthropic/claude-sonnet-4.6` |
 | `EMBEDDING_MODEL` | No | Default: `openai/text-embedding-3-small` |
@@ -136,7 +137,7 @@ Both are wired into the docker-compose health checks and suitable for load balan
 
 ### 1. Enable HTTP transport
 
-In your production `.env`, set:
+In your production `backend/.env`, set:
 
 ```
 MCP_TRANSPORT=http
@@ -203,8 +204,8 @@ doen.example.com {
 
 - [ ] Managed Postgres provisioned with pgvector (`CREATE EXTENSION IF NOT EXISTS vector`)
 - [ ] Redis provisioned (6.0+)
-- [ ] `.env` created from `.env.example` with all values filled
-- [ ] `OPENROUTER_API_KEY` set
+- [ ] `backend/.env` created from `backend/.env.example` with all values filled
+- [ ] `LLM_API_KEY` set
 - [ ] `DATABASE_URL` includes SSL (`?sslmode=require`)
 - [ ] `MCP_TRANSPORT=http` if enabling remote Claude Code access
 - [ ] Backend port 8000 accessible only within the VPC (not public internet)

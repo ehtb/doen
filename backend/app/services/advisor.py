@@ -28,6 +28,7 @@ from app.models import (
     ProjectContext,
     Spec,
     SpecItem,
+    Verify,
     short_id,
 )
 from app.providers.llm import LLMError, StructuredLLM, get_advisor_llm
@@ -122,9 +123,9 @@ STATE_GUIDANCE: dict[str, str] = {
     "worth carrying forward — what worked, what to do differently, what the next initiative should "
     "know. Keep it specific and transferable, not initiative-specific trivia. The human confirms "
     "before anything is written to memory.",
-    "complete": "The initiative is complete and its learnings are captured. If there is still "
-    "conversation to be had about what was learned or what comes next, engage with it. Don't "
-    "prompt for new initiatives or next steps unless the human raises it.",
+    "complete": "The initiative is complete — its outcome summary and learnings are captured in memory. "
+    "If there is still conversation to be had about what was learned or what comes next, engage with it. "
+    "Don't prompt for new initiatives or next steps unless the human raises it.",
 }
 
 PROJECT_COHERENCE_PROMPT = """This initiative belongs to a PROJECT — a body of related \
@@ -143,8 +144,8 @@ ADVISOR_OUTPUT_CONTRACT = """Respond via the advisor_turn tool.
 - `proposals`: spec items you're proposing the human ADD. Include them only when you're actually \
 proposing concrete spec changes — mostly during shape and decompose, or when asked. Outside those, \
 leave it empty and just converse. Each proposal names its section (constraints / discretion / \
-acceptance); an acceptance proposal MUST include verify_kind and verify_detail. You never write \
-the spec yourself — every proposal is a card the human confirms."""
+acceptance); an acceptance proposal MUST include a verify object with kind and detail. You never \
+write the spec yourself — every proposal is a card the human confirms."""
 
 ADVISOR_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -161,14 +162,20 @@ ADVISOR_SCHEMA: dict[str, Any] = {
                         "enum": ["constraints", "discretion", "acceptance"],
                     },
                     "text": {"type": "string"},
-                    "verify_kind": {
-                        "type": "string",
-                        "enum": ["test", "behavior", "metric", "human_judgment"],
+                    "verify": {
+                        "type": "object",
                         "description": "Required for an acceptance proposal.",
-                    },
-                    "verify_detail": {
-                        "type": "string",
-                        "description": "How the acceptance criterion is checked.",
+                        "properties": {
+                            "kind": {
+                                "type": "string",
+                                "enum": ["test", "behavior", "metric", "human_judgment"],
+                            },
+                            "detail": {
+                                "type": "string",
+                                "description": "How the acceptance criterion is checked.",
+                            },
+                        },
+                        "required": ["kind", "detail"],
                     },
                 },
                 "required": ["section", "text"],
@@ -395,9 +402,8 @@ def _coerce_proposal(p: dict[str, Any]) -> Proposal:
     """Build a Proposal, defaulting verify for an acceptance card the model left bare so the
     card is still confirmable via the editing flow (which requires verify on acceptance)."""
     prop = Proposal.model_validate(p)
-    if prop.section == "acceptance" and prop.verify_kind is None:
-        prop.verify_kind = "behavior"
-        prop.verify_detail = prop.verify_detail or f"Confirm: {prop.text}"
+    if prop.section == "acceptance" and prop.verify is None:
+        prop.verify = Verify(kind="behavior", detail=f"Confirm: {prop.text}")
     return prop
 
 
@@ -415,12 +421,7 @@ def _proposals_from_draft(draft: ShapingResult) -> list[Proposal]:
     proposals = [Proposal(section="constraints", text=i.text) for i in draft.constraints]
     proposals += [Proposal(section="discretion", text=i.text) for i in draft.discretion]
     proposals += [
-        Proposal(
-            section="acceptance",
-            text=a.text,
-            verify_kind=a.verify.kind,
-            verify_detail=a.verify.detail,
-        )
+        Proposal(section="acceptance", text=a.text, verify=a.verify)
         for a in draft.acceptance
     ]
     return proposals

@@ -2,7 +2,7 @@
 
 The lifespan owns exactly one asyncpg pool and one Redis client for the process; routers
 get a per-request SpecStore over them via the `get_store` dependency. Postgres is the
-source of truth; Redis is the derived hot cache + real-time coordination.
+source of truth; Redis handles real-time coordination (decision pub/sub, escalation stream).
 """
 
 from __future__ import annotations

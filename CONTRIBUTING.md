@@ -9,7 +9,7 @@ in [`CLAUDE.md`](CLAUDE.md) and [`docs/spec-contract.md`](docs/spec-contract.md)
 Two ways to run it:
 
 - **Docker (run)** — matches the alpha: `cp backend/.env.example backend/.env`, add your
-  `OPENROUTER_API_KEY`, then `docker compose up` (production build). See the
+  `LLM_API_KEY`, then `docker compose up` (production build). See the
   [getting-started guide](docs/getting-started.md).
 - **Docker (develop)** — hot-reload with your source bind-mounted:
   `docker compose -f docker-compose.yml -f docker-compose.dev.yml up`.

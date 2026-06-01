@@ -20,18 +20,3 @@ ALTER TABLE initiatives
 
 CREATE INDEX IF NOT EXISTS initiatives_project_idx ON initiatives (project_id);
 
--- Constraint 6 / a7: the dogfooding project, and assign every existing initiative to it so
--- nothing is orphaned. Idempotent — ON CONFLICT keeps a human-edited intent, and the assign
--- only touches still-unassigned rows (new initiatives stay standalone by default).
-INSERT INTO projects (id, name, intent) VALUES (
-    'build-doen',
-    'Build Doen',
-    'Build Doen — the intent layer above agentic executors. Humans author and steer a living '
-    'spec for each initiative; executors build against it and surface decisions back. This '
-    'project groups every initiative that has built Doen itself — the bootstrap slices and the '
-    'dogfooding specs that followed. The strategic goal: a system where deciding what is worth '
-    'building and verifying it was built right is the human''s work, the building is the '
-    'executor''s, and the two are coordinated through one living spec.'
-) ON CONFLICT (id) DO NOTHING;
-
-UPDATE initiatives SET project_id = 'build-doen' WHERE project_id IS NULL;

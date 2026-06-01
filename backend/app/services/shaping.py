@@ -51,9 +51,9 @@ criteria. Mark the single most important one as the HEADLINE by appending " [HEA
 text.
 Size the spec to the work — infer the scale from the description, never ask and never use a size \
 label. A small bug fix or tweak ("fix the misaligned login button") gets a LIGHTWEIGHT spec: \
-about one constraint, one acceptance criterion, and one unit. A substantial feature gets the FULL \
-structure: several constraints, multiple criteria, and a handful of units. Don't pad a small \
-change into a heavy spec, and don't compress a large one — match the structure to the real size.
+about one constraint and one acceptance criterion. A substantial feature gets the FULL structure: \
+several constraints, multiple criteria. Don't pad a small change into a heavy spec, and don't \
+compress a large one — match the structure to the real size.
 
 Hard rules:
 - No estimation anywhere — no story points, hours, or velocity.
@@ -93,18 +93,33 @@ SPEC_SCHEMA: dict[str, Any] = {
                         "type": "string",
                         "description": "A verifiable criterion. Append ' [HEADLINE]' to the most important one.",
                     },
-                    "verify_kind": {
-                        "type": "string",
-                        "enum": ["test", "behavior", "metric", "human_judgment"],
+                    "verify": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {
+                                "type": "string",
+                                "enum": ["test", "behavior", "metric", "human_judgment"],
+                            },
+                            "detail": {"type": "string", "description": "How it is checked."},
+                        },
+                        "required": ["kind", "detail"],
                     },
-                    "verify_detail": {"type": "string", "description": "How it is checked."},
                 },
-                "required": ["text", "verify_kind", "verify_detail"],
+                "required": ["text", "verify"],
             },
         },
     },
     "required": ["title", "intent", "constraints", "discretion", "acceptance"],
 }
+
+
+class ProposedUnit(BaseModel):
+    """One proposed work unit from shaping (0011 C2): a title, a scope, and the indexes of the
+    acceptance criteria it satisfies. Indexes reference positions in ShapingResult.acceptance."""
+
+    title: str
+    scope: str = ""
+    criterion_indexes: list[int] = []
 
 
 class ShapingResult(BaseModel):
@@ -116,6 +131,7 @@ class ShapingResult(BaseModel):
     constraints: list[SpecItem]
     discretion: list[SpecItem]
     acceptance: list[AcceptanceCriterion]
+    units: list[ProposedUnit] = []
     context_used: list[ContextHit]
 
 
@@ -146,11 +162,19 @@ def _parse(raw: dict[str, Any], hits: list[ContextHit]) -> ShapingResult:
         acceptance = [
             AcceptanceCriterion(
                 text=a["text"],
-                verify=Verify(kind=a["verify_kind"], detail=a["verify_detail"]),
+                verify=Verify(**a["verify"]),
                 provenance="ai_proposed",
                 status="proposed",
             )
             for a in raw["acceptance"]
+        ]
+        units = [
+            ProposedUnit(
+                title=u["title"],
+                scope=u.get("scope", ""),
+                criterion_indexes=u.get("criteria", []),
+            )
+            for u in raw.get("units", [])
         ]
     except (KeyError, TypeError, ValueError) as e:
         raise LLMError(f"shaping output did not match the spec schema: {e}") from e
@@ -160,6 +184,7 @@ def _parse(raw: dict[str, Any], hits: list[ContextHit]) -> ShapingResult:
         constraints=constraints,
         discretion=discretion,
         acceptance=acceptance,
+        units=units,
         context_used=hits,
     )
 
@@ -222,11 +247,10 @@ async def create_from_description(
     llm: StructuredLLM | None = None,
 ) -> Initiative:
     """Creation IS shaping (0011 C2): from a free-text description, the Advisor drafts the whole
-    spec — title, intent, constraints, discretion, acceptance, and proposed units — all
-    ai_proposed for the human to confirm item by item. Shapes first (a failed LLM call -> 502
-    leaves nothing created), then scaffolds the initiative under its generated title, persists the
-    proposed items, and proposes the units. Every initiative belongs to a project (no orphan
-    specs) — an unknown project_id -> 404."""
+    spec — title, intent, constraints, discretion, acceptance — all ai_proposed for the human to
+    confirm item by item. Shapes first (a failed LLM call -> 502 leaves nothing created), then
+    scaffolds the initiative under its generated title and persists the proposed items.
+    Every initiative belongs to a project (no orphan specs) — an unknown project_id -> 404."""
     if not description.strip():
         raise ValidationError("a description is required to start an initiative")
     if await store.get_project(project_id) is None:

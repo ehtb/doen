@@ -101,8 +101,7 @@ export interface LearnReview {
 export interface Proposal {
   section: "constraints" | "discretion" | "acceptance";
   text: string;
-  verify_kind?: string | null;
-  verify_detail?: string | null;
+  verify?: { kind: string; detail: string } | null;
   verdict?: "accepted" | "dismissed";
 }
 

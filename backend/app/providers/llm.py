@@ -7,8 +7,8 @@ markdown to regex (constraint 4) — or raises LLMError (constraint 7: clean fai
 caller leaves the spec untouched). The hosted tier uses the default; a self-hoster
 implements StructuredLLM against another vendor.
 
-Dogfooding default: Claude via OpenRouter, reusing OPENROUTER_API_KEY (the same key as
-the embedding provider) — no extra secret, no extra SDK. Keys are env-only (constraint 2).
+Dogfooding default: any OpenAI-compatible endpoint (LLM_BASE_URL) with LLM_API_KEY.
+OpenRouter is the out-of-the-box provider; swap the env vars to use any other.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
-from app.config import OPENROUTER_API_KEY, OPENROUTER_BASE_URL, SHAPING_MODEL
+from app.config import LLM_API_KEY, LLM_BASE_URL, SHAPING_MODEL
 
 
 @runtime_checkable
@@ -33,16 +33,16 @@ class LLMError(RuntimeError):
     Raised cleanly so the caller never persists a partial spec (constraint 7)."""
 
 
-class OpenRouterClaude:
-    """Claude via OpenRouter's OpenAI-compatible /chat/completions. A single forced tool
-    call guarantees the model answers in the requested JSON shape (constraint 4)."""
+class OpenAICompatibleLLM:
+    """Any OpenAI-compatible /chat/completions endpoint. A single forced tool call
+    guarantees the model answers in the requested JSON shape (constraint 4)."""
 
     def __init__(
         self,
         *,
-        api_key: str = OPENROUTER_API_KEY,
+        api_key: str = LLM_API_KEY,
         model: str = SHAPING_MODEL,
-        base_url: str = OPENROUTER_BASE_URL,
+        base_url: str = LLM_BASE_URL,
         timeout: float = 120.0,
         transport: httpx.AsyncBaseTransport | None = None,  # injectable for tests
     ) -> None:
@@ -57,7 +57,7 @@ class OpenRouterClaude:
     ) -> dict[str, Any]:
         if not self.api_key:
             raise LLMError(
-                "OPENROUTER_API_KEY is not set — cannot call the shaping model. "
+                "LLM_API_KEY is not set — cannot call the shaping model. "
                 "Export it (or add it to backend/.env)."
             )
         payload = {
@@ -99,11 +99,11 @@ class OpenRouterClaude:
 
 def get_shaping_llm() -> StructuredLLM:
     """The dogfooding default. Swap the body (or branch on an env var) to self-host."""
-    return OpenRouterClaude()
+    return OpenAICompatibleLLM()
 
 
 def get_advisor_llm() -> StructuredLLM:
     """The Doen Advisor (0009) reuses this same provider — same class, same env key, no
     second AI integration path (0009 constraint 2). Kept as its own factory so the Advisor
     has a clean monkeypatch seam in tests, mirroring get_shaping_llm."""
-    return OpenRouterClaude()
+    return OpenAICompatibleLLM()

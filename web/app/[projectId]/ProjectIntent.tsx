@@ -95,9 +95,7 @@ export default function ProjectIntent({
       {value ? (
         <p className="leading-relaxed text-muted-foreground">{value}</p>
       ) : (
-        <p className="leading-relaxed text-ink-faint italic">
-          No intent yet — add one sentence on what this project is for.
-        </p>
+        <p className="leading-relaxed text-ink-faint italic">No intent yet.</p>
       )}
       <button
         type="button"

@@ -2,7 +2,7 @@
 
 Architecture:
   Postgres = source of truth (durable). The spec is one JSONB document per initiative.
-  Redis    = derived hot state: read-through cache + real-time coordination. Always
+  Redis    = real-time coordination only (decision pub/sub + escalation stream). Always
              rebuildable from Postgres, never the other way round.
 
 Relational surface (see migrations/):
@@ -22,7 +22,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Literal
+from typing import Callable, Coroutine, Literal
 
 import asyncpg
 from redis import asyncio as aioredis
@@ -124,7 +124,6 @@ def _memory_from_row(row: asyncpg.Record) -> Memory:
 
 
 # ----------------------------------------------------------------------------- store
-SPEC_CACHE_TTL = 300  # seconds; cache is derived, so a short TTL is just a safety net
 # Conversations live in the browser now (spec uvama): the frontend windows its own history and
 # sends a slice with each Advisor call. This is the backend's defensive cap on how many of those
 # turns it will fold into a prompt — a safety net against a client sending an unbounded slice.
@@ -156,23 +155,14 @@ class SpecStore:
             self._embedder = get_embedding_provider()
         return self._embedder
 
-    # --- hot read path: Redis read-through -----------------------------------
     async def get_spec(self, initiative_id: str) -> Spec | None:
-        key = f"spec:{initiative_id}"
-        if cached := await self.redis.get(key):
-            return Spec.model_validate_json(cached)
-
         row = await self.pg.fetchrow(
             "SELECT doc FROM specs WHERE initiative_id = $1", initiative_id
         )
         if row is None:
             return None
+        return Spec.model_validate_json(row["doc"])
 
-        spec = Spec.model_validate_json(row["doc"])
-        await self.redis.set(key, spec.model_dump_json(), ex=SPEC_CACHE_TTL)
-        return spec
-
-    # --- write path: PG is truth, optimistic version, cache refreshed after ---
     async def save_spec(self, spec: Spec) -> Spec:
         """
         The spec is *living* — a human and an agent can both touch it. The version field
@@ -198,11 +188,6 @@ class SpecStore:
                     """,
                     spec.initiative_id, spec.version, spec.model_dump_json(),
                 )
-
-        # cache is derived — refresh it, never trust it as the origin
-        await self.redis.set(
-            f"spec:{spec.initiative_id}", spec.model_dump_json(), ex=SPEC_CACHE_TTL
-        )
         return spec
 
     # --- initiatives: the parent entity, born with a scaffolded spec (0004) --
@@ -249,7 +234,6 @@ class SpecStore:
                        VALUES ($1, 0, $2, now())""",
                     new_id, spec.model_dump_json(),
                 )
-        await self.redis.set(f"spec:{new_id}", spec.model_dump_json(), ex=SPEC_CACHE_TTL)
         return Initiative(
             id=new_id, title=title, state="draft",
             project_id=project_id, seq=seq, org_id=org_id, owner_id=owner_id,
@@ -362,11 +346,6 @@ class SpecStore:
                        updated_at = now() WHERE initiative_id = $1""",
                     initiative_id, new_state,
                 )
-        updated_doc = await self.pg.fetchval(
-            "SELECT doc FROM specs WHERE initiative_id = $1", initiative_id
-        )
-        if updated_doc is not None:
-            await self.redis.set(f"spec:{initiative_id}", updated_doc, ex=SPEC_CACHE_TTL)
 
     async def _unique_slug(self, base: str) -> str:
         slug, n = base, 2
@@ -698,7 +677,7 @@ class SpecStore:
         # embed the resolved reasoning into memory, async + best-effort (0005 constraint 3):
         # it must not block (or break) the resolve. A failure leaves a null embedding for the
         # backfill to pick up.
-        self._spawn(self.embed_decision(decision_id))
+        self._spawn(lambda: self.embed_decision(decision_id))
         return d
 
     async def wait_for_decision(self, decision_id: str, timeout: float = 600) -> Decision:
@@ -739,20 +718,26 @@ class SpecStore:
         )
         return True
 
-    def _spawn(self, coro) -> None:
+    def _spawn(self, factory: Callable[[], Coroutine]) -> None:
         """Run an embed in the background, kept referenced so the loop won't GC it.
         Best-effort: a missing key or API hiccup is logged, never raised at the caller
-        (0005 constraint 3 — resolving / completing must not block or break)."""
-        task = asyncio.create_task(self._safe(coro))
+        (0005 constraint 3 — resolving / completing must not block or break).
+        Retries up to 3 times with exponential backoff before giving up."""
+        task = asyncio.create_task(self._safe(factory))
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
 
     @staticmethod
-    async def _safe(coro) -> None:
-        try:
-            await coro
-        except Exception:
-            logger.warning("background embed task failed", exc_info=True)
+    async def _safe(factory: Callable[[], Coroutine]) -> None:
+        for attempt in range(3):
+            try:
+                await factory()
+                return
+            except Exception:
+                if attempt == 2:
+                    logger.warning("background embed task failed after 3 attempts", exc_info=True)
+                else:
+                    await asyncio.sleep(2**attempt)
 
     async def _drain(self) -> None:
         """Await any in-flight background embeds — for graceful shutdown and tests."""
@@ -778,9 +763,9 @@ class SpecStore:
             mem.id, initiative_id, summary, learnings,
             json.dumps(outcome) if outcome is not None else None,
         )
-        # a learn record can complete the initiative (all units done + learnings captured — 0011 a2)
+        # a learn record can complete the initiative (all criteria verified + learnings captured — 0011 a2)
         await self._recompute_state(initiative_id)
-        self._spawn(self.embed_memory(mem.id))
+        self._spawn(lambda: self.embed_memory(mem.id))
         return mem
 
     async def embed_memory(self, memory_id: str) -> bool:
@@ -934,9 +919,6 @@ class SpecStore:
                updated_at = now() WHERE initiative_id = $1""",
             initiative_id,
         )
-        doc = await self.pg.fetchval("SELECT doc FROM specs WHERE initiative_id = $1", initiative_id)
-        if doc:
-            await self.redis.set(f"spec:{initiative_id}", doc, ex=SPEC_CACHE_TTL)
         return (await self.get_initiative(initiative_id)) or init
 
     async def revert_to_draft(self, initiative_id: str) -> Initiative:
@@ -958,9 +940,6 @@ class SpecStore:
                updated_at = now() WHERE initiative_id = $1""",
             initiative_id,
         )
-        doc = await self.pg.fetchval("SELECT doc FROM specs WHERE initiative_id = $1", initiative_id)
-        if doc:
-            await self.redis.set(f"spec:{initiative_id}", doc, ex=SPEC_CACHE_TTL)
         return (await self.get_initiative(initiative_id)) or init
 
     async def mark_complete_without_learnings(self, initiative_id: str) -> Initiative:
@@ -981,9 +960,6 @@ class SpecStore:
                updated_at = now() WHERE initiative_id = $1""",
             initiative_id,
         )
-        doc = await self.pg.fetchval("SELECT doc FROM specs WHERE initiative_id = $1", initiative_id)
-        if doc:
-            await self.redis.set(f"spec:{initiative_id}", doc, ex=SPEC_CACHE_TTL)
         return (await self.get_initiative(initiative_id)) or init
 
     async def get_criteria_status(self, initiative_id: str) -> list[dict]:

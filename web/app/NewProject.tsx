@@ -39,8 +39,10 @@ export default function NewProject({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name: n, intent: intent.trim() }),
       });
-      if (!res.ok)
-        throw new Error(`couldn't create the project (${res.status})`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `couldn't create the project (${res.status})`);
+      }
       reset();
       setOpen(false);
       router.refresh(); // the projects list re-renders with the new one — no full reload

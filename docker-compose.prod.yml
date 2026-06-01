@@ -1,9 +1,9 @@
 # Production compose — backend and web only.
 # Postgres and Redis are external managed services; provide their URLs via environment
-# variables (DATABASE_URL and REDIS_URL). See DEPLOYMENT.md and .env.example.
+# variables (DATABASE_URL and REDIS_URL). See DEPLOYMENT.md and backend/.env.example.
 #
 # Usage:
-#   cp .env.example .env   # fill in values
+#   cp backend/.env.example backend/.env   # fill in values
 #   docker compose -f docker-compose.prod.yml up -d
 #
 # The dev docker-compose.yml is unchanged and unaffected.
@@ -14,7 +14,7 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     env_file:
-      - path: .env
+      - path: backend/.env
         required: false
     ports:
       - "8000:8000"

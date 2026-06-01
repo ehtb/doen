@@ -4,7 +4,7 @@ Every resolved decision is part of the retrievable corpus, but rows resolved bef
 this slice have a null embedding. This embeds them so no resolved decision is left
 out of get_context. Idempotent — only touches rows whose embedding is still null.
 
-Requires OPENROUTER_API_KEY (or whichever provider get_embedding_provider returns).
+Requires LLM_API_KEY (or whichever provider get_embedding_provider returns).
 
     cd backend && .venv/bin/python -m app.backfill_embeddings
 """

@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "doen": {
-      "type": "stdio",
-      "command": "docker",
-      "args": ["compose", "exec", "-T", "backend", "python", "-m", "app.mcp_server"]
-    }
-  }
-}

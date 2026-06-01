@@ -1,10 +1,6 @@
 -- 0008_project_required — every initiative belongs to a project; no orphan specs.
--- This supersedes 0010's original nullable-project carve-out: a spec without a project is no
--- longer a valid state. Backfill any straggler to the dogfooding project, make project_id NOT
--- NULL, and switch the FK from ON DELETE SET NULL (which only made sense for nullable) to
--- ON DELETE RESTRICT — a project can't be deleted while it still owns initiatives.
-
-UPDATE initiatives SET project_id = 'build-doen' WHERE project_id IS NULL;
+-- project_id is made NOT NULL; the FK switches from ON DELETE SET NULL to ON DELETE RESTRICT
+-- so a project can't be deleted while it still owns initiatives.
 
 ALTER TABLE initiatives ALTER COLUMN project_id SET NOT NULL;
 

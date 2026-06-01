@@ -18,7 +18,7 @@ cd doen
 cp backend/.env.example backend/.env
 ```
 
-Open `backend/.env` and set `OPENROUTER_API_KEY` to your key. That's the only value you need to
+Open `backend/.env` and set `LLM_API_KEY` to your key. That's the only value you need to
 change — Compose wires up the database and Redis for you.
 
 ## 3. Start the stack
@@ -74,8 +74,8 @@ launches the MCP server inside the backend container, sharing your database. Ask
 `get_spec` for your initiative — it reads the spec you just shaped, and can propose work units,
 report progress, and raise decisions, all back through Doen.
 
-> **Running the backend on your host instead** (`make dev`, no containers)? Point `.mcp.json` at
-> the local interpreter instead:
+> **Running the backend on your host instead** (`make dev`, no containers)?
+> The backend reads `backend/.env`. Point `.mcp.json` at the local interpreter:
 > ```json
 > {
 >   "mcpServers": {
@@ -88,6 +88,24 @@ report progress, and raise decisions, all back through Doen.
 >   }
 > }
 > ```
+
+> **Running Claude Code on a different machine?** Use HTTP transport instead of stdio.
+> Set `MCP_TRANSPORT=http` in `backend/.env`, restart the stack, then point `.mcp.json` at
+> the backend URL:
+> ```json
+> {
+>   "mcpServers": {
+>     "doen": {
+>       "type": "http",
+>       "url": "https://doen.example.com/mcp/"
+>     }
+>   }
+> }
+> ```
+> The MCP server mounts at `/mcp/` on the FastAPI app (trailing slash required). If
+> you're exposing the backend directly without a reverse proxy, use port 8000
+> (e.g. `http://your-host:8000/mcp/`). Keep this on a private network — there is no
+> authentication in front of it yet.
 
 ## The full loop
 

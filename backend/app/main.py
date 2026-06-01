@@ -7,10 +7,13 @@ Models, schemas, services, repository, and providers each live in their own modu
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request, Response
 
 from app.config import MCP_TRANSPORT
-from app.database import lifespan
+from app import database
 from app.exceptions import register_exception_handlers
 from app.routers import (
     conversation,
@@ -24,6 +27,24 @@ from app.routers import (
 
 
 def create_app() -> FastAPI:
+    if MCP_TRANSPORT == "http":
+        # WARNING: HTTP MCP is intended for VPC/private network deployment only.
+        # Do not expose to the public internet without authentication (see spec 0007).
+        from app.mcp_server import mcp  # imported here to avoid loading it in stdio mode
+
+        # Create once so the same instance is both mounted and lifecycle-managed.
+        # Starlette does not propagate lifespan events to mounted sub-apps, so we
+        # explicitly nest the MCP lifespan inside our own.
+        mcp_http_app = mcp.streamable_http_app()
+
+        @asynccontextmanager
+        async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+            async with database.lifespan(app):
+                async with mcp_http_app.router.lifespan_context(mcp_http_app):
+                    yield
+    else:
+        lifespan = database.lifespan
+
     app = FastAPI(title="Doen", lifespan=lifespan)
     register_exception_handlers(app)
     for module in (initiatives, specs, decisions, learn, shaping, conversation, projects):
@@ -45,11 +66,7 @@ def create_app() -> FastAPI:
         return {"status": "ok" if ok else "degraded", "postgres": pg_ok, "redis": redis_ok}
 
     if MCP_TRANSPORT == "http":
-        # WARNING: HTTP MCP is intended for VPC/private network deployment only.
-        # Do not expose to the public internet without authentication (see spec 0007).
-        from app.mcp_server import mcp  # imported here to avoid loading it in stdio mode
-
-        app.mount("/mcp", mcp.streamable_http_app())
+        app.mount("/mcp", mcp_http_app)
 
     return app
 

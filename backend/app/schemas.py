@@ -149,12 +149,11 @@ class AdvisorRequest(BaseModel):
 class Proposal(BaseModel):
     """A spec item the Advisor proposes (0009 u2). The frontend renders it as a card;
     confirming it calls the 0002 editing endpoints (the Advisor never writes the spec
-    itself — constraint 4). verify_* are required only for an acceptance proposal."""
+    itself — constraint 4). verify is required only for an acceptance proposal."""
 
     section: Section
     text: str
-    verify_kind: Literal["test", "behavior", "metric", "human_judgment"] | None = None
-    verify_detail: str | None = None
+    verify: Verify | None = None
 
 
 class AdvisorReply(BaseModel):

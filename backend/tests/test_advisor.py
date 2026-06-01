@@ -45,8 +45,7 @@ ADVISOR_PAYLOAD = {
         {
             "section": "acceptance",
             "text": "A used or expired link is rejected.",
-            "verify_kind": "test",
-            "verify_detail": "Replay a consumed link; assert 4xx + a clear message.",
+            "verify": {"kind": "test", "detail": "Replay a consumed link; assert 4xx + a clear message."},
         },
     ],
 }
@@ -58,8 +57,7 @@ SHAPING_PAYLOAD = {
     "acceptance": [
         {
             "text": "A used or expired link is rejected. [HEADLINE]",
-            "verify_kind": "test",
-            "verify_detail": "Replay a consumed link; assert 4xx.",
+            "verify": {"kind": "test", "detail": "Replay a consumed link; assert 4xx."},
         }
     ],
 }
@@ -114,7 +112,7 @@ def _store_run(
             return await fn(SpecStore(pg, redis, embedder=embedder))
         finally:
             await pg.close()
-            await redis.aclose()
+            await redis.close()
 
     return asyncio.run(go())
 
@@ -249,7 +247,7 @@ def test_advise_proposals_become_cards(make_initiative: Callable[[], str]):
     cards = reply.metadata["proposals"]
     assert [c["section"] for c in cards] == ["constraints", "discretion", "acceptance"]
     acc = next(c for c in cards if c["section"] == "acceptance")
-    assert acc["verify_kind"] == "test" and acc["verify_detail"]  # acceptance card is confirmable
+    assert acc["verify"]["kind"] == "test" and acc["verify"]["detail"]  # acceptance card is confirmable
 
 
 # --- D2 -> c: the "shape this initiative:" rail command, no silent write -------

@@ -5,7 +5,8 @@ high-quality API provider; a self-hoster swaps in a local model or a different A
 by implementing `EmbeddingProvider` and pointing `get_embedding_provider` at it.
 The store depends on the Protocol, never on a concrete vendor.
 
-Dogfooding default: OpenRouter (openai/text-embedding-3-small, 1536-dim).
+Dogfooding default: any OpenAI-compatible /embeddings endpoint (LLM_BASE_URL + LLM_API_KEY).
+OpenRouter is the out-of-the-box provider; swap the env vars to use any other.
 """
 
 from __future__ import annotations
@@ -17,8 +18,8 @@ import httpx
 from app.config import (
     EMBEDDING_DIM,
     EMBEDDING_MODEL,
-    OPENROUTER_API_KEY,
-    OPENROUTER_BASE_URL,
+    LLM_API_KEY,
+    LLM_BASE_URL,
 )
 
 
@@ -35,18 +36,18 @@ class EmbeddingError(RuntimeError):
     """A provider could not produce embeddings (missing key, API error, bad shape)."""
 
 
-class OpenRouterEmbeddings:
-    """Calls OpenRouter's OpenAI-compatible /embeddings endpoint. One short-lived
-    httpx client per batch — embedding is infrequent and async/best-effort, so a
-    pooled client isn't worth the lifecycle."""
+class OpenAICompatibleEmbeddings:
+    """Any OpenAI-compatible /embeddings endpoint. One short-lived httpx client per
+    batch — embedding is infrequent and async/best-effort, so a pooled client isn't
+    worth the lifecycle."""
 
     def __init__(
         self,
         *,
-        api_key: str = OPENROUTER_API_KEY,
+        api_key: str = LLM_API_KEY,
         model: str = EMBEDDING_MODEL,
         dimension: int = EMBEDDING_DIM,
-        base_url: str = OPENROUTER_BASE_URL,
+        base_url: str = LLM_BASE_URL,
         timeout: float = 30.0,
     ) -> None:
         self.api_key = api_key
@@ -60,7 +61,7 @@ class OpenRouterEmbeddings:
             return []
         if not self.api_key:
             raise EmbeddingError(
-                "OPENROUTER_API_KEY is not set — cannot generate embeddings. "
+                "LLM_API_KEY is not set — cannot generate embeddings. "
                 "Export it (or add it to backend/.env) to enable the default provider."
             )
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -73,14 +74,14 @@ class OpenRouterEmbeddings:
                 json={"model": self.model, "input": texts},
             )
         if resp.status_code != 200:
-            raise EmbeddingError(f"OpenRouter embeddings {resp.status_code}: {resp.text[:300]}")
+            raise EmbeddingError(f"embeddings endpoint returned {resp.status_code}: {resp.text[:300]}")
         data = resp.json().get("data")
         if not data or len(data) != len(texts):
-            raise EmbeddingError(f"OpenRouter returned {len(data or [])} vectors for {len(texts)} inputs")
+            raise EmbeddingError(f"embeddings endpoint returned {len(data or [])} vectors for {len(texts)} inputs")
         # the API returns results indexed; sort to be safe before stripping the index
         return [row["embedding"] for row in sorted(data, key=lambda r: r["index"])]
 
 
 def get_embedding_provider() -> EmbeddingProvider:
     """The dogfooding default. Swap the body (or branch on an env var) to self-host."""
-    return OpenRouterEmbeddings()
+    return OpenAICompatibleEmbeddings()

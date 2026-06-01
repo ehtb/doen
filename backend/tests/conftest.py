@@ -78,13 +78,3 @@ async def _drop(ids: list[str]) -> None:
             await conn.execute("DELETE FROM initiatives WHERE id = $1", iid)
     finally:
         await conn.close()
-
-
-@pytest.fixture
-def delete_spec_row() -> Callable[[str], None]:
-    """Delete the source-of-truth row directly, leaving the Redis cache intact."""
-
-    def _del(initiative_id: str) -> None:
-        _run(_exec("DELETE FROM specs WHERE initiative_id = $1", initiative_id))
-
-    return _del

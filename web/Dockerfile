@@ -11,8 +11,8 @@ RUN npm run build
 # Contains only the minimal node_modules required at runtime (no devDependencies).
 FROM node:22-alpine AS runtime
 WORKDIR /app
-ENV NODE_ENV=production HOSTNAME=0.0.0.0 PORT=3000
+ENV NODE_ENV=production HOSTNAME=0.0.0.0
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
-EXPOSE 3000
+EXPOSE ${PORT:-3000}
 CMD ["node", "server.js"]

@@ -1,4 +1,4 @@
-"""Acceptance coverage for u2: a1 (create/save), a2 (warm read), a3 (stale -> 409)."""
+"""Acceptance coverage for u2: a1 (create/save), a2 (read), a3 (stale -> 409)."""
 
 from __future__ import annotations
 
@@ -23,22 +23,6 @@ def test_create_save_and_read(client: TestClient, make_initiative: Callable[[], 
     assert g.status_code == 200
     assert g.json()["title"] == "Test spec"
 
-
-def test_warm_read_served_from_redis(
-    client: TestClient,
-    make_initiative: Callable[[], str],
-    delete_spec_row: Callable[[str], None],
-):
-    # a2 — warm reads come from Redis: delete the PG row, the read still succeeds.
-    iid = make_initiative()
-    body = {"initiative_id": iid, "title": "Cached", "version": 0}
-    assert client.put(f"/specs/{iid}", json=body).status_code == 200
-
-    delete_spec_row(iid)  # source of truth gone; only the cache entry remains
-
-    g = client.get(f"/specs/{iid}")
-    assert g.status_code == 200, "expected the cached spec to be served from Redis"
-    assert g.json()["title"] == "Cached"
 
 
 def test_stale_version_conflicts(client: TestClient, make_initiative: Callable[[], str]):
