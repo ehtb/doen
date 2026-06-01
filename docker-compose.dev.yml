@@ -19,6 +19,10 @@ services:
       - ./backend/migrations:/app/migrations
 
   web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+      target: build
     command: ["npm", "run", "dev", "--", "-H", "0.0.0.0"]
     environment:
       DOEN_API_URL: http://backend:8000
