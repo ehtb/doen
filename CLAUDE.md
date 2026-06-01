@@ -16,7 +16,7 @@ verify it was built right. The canonical design lives in @docs/spec-contract.md.
 - **Store:** Postgres = source of truth. Redis = derived hot cache + real-time coordination.
 - **Data layer:** already written — `backend/app/store.py` (models + `SpecStore`). Reuse it; do
   not reinvent it.
-- **Web:** Next.js (App Router), TypeScript.
+- **Web:** Next.js (App Router), TypeScript, Tailwind, shadcn/ui, shadcn/ui-prose, Tailwind Typography.
 - **Integration:** an MCP server exposing the spec tools so executors read/write the spec.
 - Later specs add: pgvector (memory + drift), WorkOS AuthKit, the conversation rail. Not now.
 

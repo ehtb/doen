@@ -1,20 +1,43 @@
 import { getSpec } from "@/lib/api";
-import type { SpecItem } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import SpecDocument from "./SpecDocument";
+import SteeringRail from "./SteeringRail";
 
-const page = { maxWidth: 760, margin: "2rem auto", padding: "0 1rem",
-  fontFamily: "system-ui, sans-serif", lineHeight: 1.5 } as const;
-const muted = { color: "#888" } as const;
+const STAGES = ["discover", "shape", "bet", "decompose", "implement", "verify", "learn"];
 
-function ItemList({ items }: { items: SpecItem[] }) {
-  if (items.length === 0) return <p style={muted}>—</p>;
+function LifecycleStepper({ stage }: { stage: string }) {
+  const current = Math.max(0, STAGES.indexOf(stage));
   return (
-    <ul>
-      {items.map((it) => (
-        <li key={it.id}>
-          {it.text} <span style={muted}>({it.status})</span>
-        </li>
-      ))}
-    </ul>
+    <nav
+      aria-label="lifecycle"
+      className="mt-4 flex flex-wrap gap-x-1 gap-y-2 border-t border-border pt-3.5"
+    >
+      {STAGES.map((s, i) => {
+        const done = i < current;
+        const active = i === current;
+        return (
+          <div
+            key={s}
+            className={cn(
+              "flex items-center gap-2 px-3 py-0.5 font-mono text-[11px] tracking-wide capitalize",
+              done && "text-ink-soft",
+              active && "font-semibold text-accent-deep",
+              !done && !active && "text-ink-faint",
+            )}
+          >
+            <span
+              className={cn(
+                "size-2 rounded-full border",
+                done && "border-ink-soft bg-ink-soft",
+                active && "border-primary bg-primary ring-3 ring-primary/15",
+                !done && !active && "border-border",
+              )}
+            />
+            {s}
+          </div>
+        );
+      })}
+    </nav>
   );
 }
 
@@ -24,45 +47,38 @@ export default async function SpecPage({ params }: { params: Promise<{ id: strin
 
   if (!spec) {
     return (
-      <main style={page}>
-        <p>
-          No spec found for <code>{id}</code>.
+      <main className="relative z-10 mx-auto max-w-3xl px-4 py-16">
+        <p className="text-muted-foreground">
+          No spec found for <code className="font-mono">{id}</code>.
         </p>
       </main>
     );
   }
 
   return (
-    <main style={page}>
-      <h1>{spec.title}</h1>
-      <p style={muted}>
-        {spec.initiative_id} · stage {spec.stage} · v{spec.version}
-      </p>
+    <main className="relative z-10 mx-auto max-w-[1180px] px-5 py-8 md:px-8">
+      <header className="animate-rise">
+        <div className="flex items-baseline justify-between gap-4">
+          <span className="font-mono text-[11px] font-semibold tracking-[0.18em] text-accent-deep uppercase">
+            Initiative
+          </span>
+          <span className="flex items-center gap-2 font-mono text-[11px] text-ink-faint">
+            <span className="size-[7px] rounded-full bg-confirmed animate-live" />
+            {spec.initiative_id}
+          </span>
+        </div>
+        <h1 className="mt-2 max-w-[20ch] font-serif text-[clamp(1.9rem,3.4vw,2.6rem)] leading-[1.08] font-medium tracking-tight">
+          {spec.title}
+        </h1>
+        <LifecycleStepper stage={spec.stage} />
+      </header>
 
-      <h2>Intent</h2>
-      <p style={{ whiteSpace: "pre-wrap" }}>{spec.intent || "—"}</p>
-
-      <h2>Constraints</h2>
-      <ItemList items={spec.constraints} />
-
-      <h2>Discretion</h2>
-      <ItemList items={spec.discretion} />
-
-      <h2>Acceptance criteria</h2>
-      {spec.acceptance.length === 0 ? (
-        <p style={muted}>—</p>
-      ) : (
-        <ul>
-          {spec.acceptance.map((a) => (
-            <li key={a.id}>
-              {a.text}{" "}
-              <span style={muted}>
-                [{a.verify.kind}] ({a.status})
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <div className="mt-7 flex flex-wrap items-start gap-7">
+        <section className="min-w-80 flex-[1_1_560px]">
+          <SpecDocument initialSpec={spec} />
+        </section>
+        <SteeringRail initiativeId={spec.initiative_id} />
+      </div>
     </main>
   );
 }

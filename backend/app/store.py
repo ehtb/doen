@@ -195,6 +195,19 @@ class SpecStore:
         )
         return d
 
+    async def list_open_decisions(self, initiative_id: str) -> list[Decision]:
+        """The rail's read path. Straight from Postgres — decisions have no read
+        cache (the escalations Stream is a derived notification log, not a store),
+        so this is rebuildable from PG by construction. Oldest first: the longest-
+        parked escalation sits at the top of the queue."""
+        rows = await self.pg.fetch(
+            """SELECT payload FROM decisions
+               WHERE initiative_id = $1 AND status = 'open'
+               ORDER BY created_at""",
+            initiative_id,
+        )
+        return [Decision.model_validate_json(r["payload"]) for r in rows]
+
     async def resolve_decision(
         self, decision_id: str, chosen: str, rationale: str, decided_by: str
     ) -> Decision:

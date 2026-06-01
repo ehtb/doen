@@ -1,0 +1,185 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+/* The warm "paper" palette from the north-star prototype, expressed as the shadcn
+   token contract so the ui/* components inherit it. The steering rail is a dark
+   surface, so it gets its own rail-* tokens. */
+:root {
+  --radius: 0.625rem;
+
+  --background: #f2eee4;
+  --foreground: #221c15;
+  --card: #f7f3ea;
+  --card-foreground: #221c15;
+  --popover: #f7f3ea;
+  --popover-foreground: #221c15;
+  --primary: #b5642a;
+  --primary-foreground: #fbf7ef;
+  --secondary: #ece5d6;
+  --secondary-foreground: #221c15;
+  --muted: #ece5d6;
+  --muted-foreground: #6f6453;
+  --accent: #ece5d6;
+  --accent-foreground: #221c15;
+  --destructive: #8e4a1c;
+  --destructive-foreground: #fbf7ef;
+  --border: #dad1bf;
+  --input: #dad1bf;
+  --ring: #b5642a;
+
+  /* ink scale + deep accent for editorial detailing */
+  --ink-soft: #5c5346;
+  --ink-faint: #8c8170;
+  --accent-deep: #8e4a1c;
+
+  /* domain trust cues — status of a spec item */
+  --confirmed: #5e7a4f;
+  --confirmed-foreground: #3f5a33;
+  --proposed: #b5642a;
+  --proposed-foreground: #8e4a1c;
+  --retired: #8c8170;
+
+  /* the steering rail: a dark console beside the warm document */
+  --rail: #1b1712;
+  --rail-foreground: #ece4d5;
+  --rail-muted: #a99e8b;
+  --rail-card: #2b241b;
+  --rail-border: #3a3127;
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+  --color-accent-deep: var(--accent-deep);
+
+  --color-confirmed: var(--confirmed);
+  --color-confirmed-foreground: var(--confirmed-foreground);
+  --color-proposed: var(--proposed);
+  --color-proposed-foreground: var(--proposed-foreground);
+  --color-retired: var(--retired);
+
+  --color-rail: var(--rail);
+  --color-rail-foreground: var(--rail-foreground);
+  --color-rail-muted: var(--rail-muted);
+  --color-rail-card: var(--rail-card);
+  --color-rail-border: var(--rail-border);
+
+  --font-sans: var(--font-ibm-plex-sans), system-ui, sans-serif;
+  --font-serif: var(--font-fraunces), Georgia, serif;
+  --font-mono: var(--font-ibm-plex-mono), ui-monospace, monospace;
+}
+
+/* motion: one orchestrated letterpress reveal on load, plus the living glow on an
+   open escalation and the pulse on the "live" dot. */
+@theme {
+  --animate-rise: rise 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-glow: glow 2.8s ease-in-out infinite;
+  --animate-live: live 2.4s ease-out infinite;
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes glow {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 rgba(181, 100, 42, 0);
+    }
+    50% {
+      box-shadow: 0 0 18px -2px rgba(181, 100, 42, 0.4);
+    }
+  }
+  @keyframes live {
+    0% {
+      box-shadow: 0 0 0 0 rgba(94, 122, 79, 0.5);
+    }
+    70% {
+      box-shadow: 0 0 0 6px rgba(94, 122, 79, 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(94, 122, 79, 0);
+    }
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+    min-height: 100vh;
+    /* warm radial atmosphere — the paper isn't flat */
+    background-image: radial-gradient(
+      120% 90% at 12% 0%,
+      #f7f3ea 0%,
+      #f2eee4 46%,
+      #ece2d0 100%
+    );
+    background-attachment: fixed;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+  /* faint grain so the paper has tooth */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0.035;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* Tailwind Typography, themed to the warm palette. */
+  .prose {
+    --tw-prose-body: var(--foreground);
+    --tw-prose-headings: var(--foreground);
+    --tw-prose-lead: var(--muted-foreground);
+    --tw-prose-links: var(--primary);
+    --tw-prose-bold: var(--foreground);
+    --tw-prose-counters: var(--muted-foreground);
+    --tw-prose-bullets: var(--border);
+    --tw-prose-hr: var(--border);
+    --tw-prose-quotes: var(--muted-foreground);
+    --tw-prose-quote-borders: var(--border);
+    --tw-prose-captions: var(--muted-foreground);
+    --tw-prose-code: var(--foreground);
+    --tw-prose-pre-bg: var(--secondary);
+    --tw-prose-th-borders: var(--border);
+    --tw-prose-td-borders: var(--border);
+  }
+}

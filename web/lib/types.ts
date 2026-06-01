@@ -26,3 +26,18 @@ export interface Spec {
   references: unknown[];
   memory_links: string[];
 }
+
+// An escalation on the steering rail. Mirrors backend Decision (store.py).
+export interface Decision {
+  id: string;
+  question: string;
+  options: string[];
+  recommendation?: string | null;
+  chosen?: string | null;
+  rationale?: string | null;
+  raised_by: string;
+  decided_by?: string | null;
+  status: "open" | "resolved";
+  created_at: string;
+  resolved_at?: string | null;
+}

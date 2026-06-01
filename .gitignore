@@ -14,3 +14,6 @@ web/out/
 
 # Claude Code local (per-user) settings
 .claude/settings.local.json
+
+# cache
+web/.cache/
