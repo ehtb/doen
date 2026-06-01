@@ -32,6 +32,7 @@ from app.store import (
     Initiative,
     InvalidStageTransition,
     InvalidTransition,
+    Memory,
     Spec,
     SpecItem,
     SpecStore,
@@ -367,3 +368,67 @@ async def record_verdict(
         raise HTTPException(404, f"no work unit {unit_id}")
     except InvalidTransition as e:
         raise HTTPException(422, str(e))  # a verdict is legal only on a submitted unit
+
+
+# --- learn stage (spec 0005 u2): review outcome vs. intent, capture memory ----------
+# Closing the lifecycle. The review (a4) gathers the original intent, the resolved
+# decisions (the calls + why), and the per-unit verification outcomes so the human can
+# judge what happened against what was intended. Submitting (a5) writes one append-only
+# memory row, embedded for the cross-initiative flywheel, and marks the initiative done.
+class LearnReview(BaseModel):
+    initiative: Initiative
+    intent: str
+    decisions: list[Decision]  # resolved only — the reasoning behind what shipped
+    units: list[WorkUnit]
+    memory: list[Memory]
+
+
+class SubmitLearn(BaseModel):
+    summary: str
+    learnings: str | None = None
+    outcome: dict | None = None
+
+
+async def _learn_review(store: SpecStore, initiative_id: str) -> LearnReview:
+    init = await store.get_initiative(initiative_id)
+    if init is None:
+        raise HTTPException(404, f"no initiative {initiative_id}")
+    spec = await store.get_spec(initiative_id)
+    return LearnReview(
+        initiative=init,
+        intent=spec.intent if spec else "",
+        decisions=await store.list_decisions(initiative_id, status="resolved"),
+        units=await store.list_units(initiative_id),
+        memory=await store.list_memory(initiative_id),
+    )
+
+
+@router.get("/initiatives/{initiative_id}/learn")
+async def learn_review(
+    initiative_id: str,
+    store: Annotated[SpecStore, Depends(get_store)],
+) -> LearnReview:
+    return await _learn_review(store, initiative_id)
+
+
+@router.post("/initiatives/{initiative_id}/learn", status_code=201)
+async def submit_learn(
+    initiative_id: str,
+    body: SubmitLearn,
+    store: Annotated[SpecStore, Depends(get_store)],
+) -> LearnReview:
+    init = await store.get_initiative(initiative_id)
+    if init is None:
+        raise HTTPException(404, f"no initiative {initiative_id}")
+    if not body.summary.strip():
+        raise HTTPException(422, "the Learn stage needs a human-written outcome summary")
+    await store.create_memory(initiative_id, body.summary.strip(), body.learnings, body.outcome)
+    # Mark complete: advance into Learn when we're one step away (from verify). The gate is
+    # soft (constraint 8) — incomplete units don't block this. If the initiative is further
+    # back than verify the memory is still captured; the stage move stays with the human.
+    if init.stage != "learn":
+        try:
+            await store.set_stage(initiative_id, "learn")
+        except InvalidStageTransition:
+            pass
+    return await _learn_review(store, initiative_id)

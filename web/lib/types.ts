@@ -75,6 +75,25 @@ export interface WorkUnit {
   updated_at: string;
 }
 
+// An append-only record the Learn stage writes (backend Memory, store.py).
+export interface Memory {
+  id: string;
+  initiative_id: string;
+  summary: string;
+  learnings?: string | null;
+  outcome?: Record<string, unknown> | null;
+  created_at: string;
+}
+
+// The Learn-stage review: outcome vs. intent (backend LearnReview, routes.py).
+export interface LearnReview {
+  initiative: Initiative;
+  intent: string;
+  decisions: Decision[];
+  units: WorkUnit[];
+  memory: Memory[];
+}
+
 // An escalation on the steering rail. Mirrors backend Decision (store.py).
 export interface Decision {
   id: string;

@@ -1,5 +1,6 @@
 import { getSpec } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import LearnStage from "./LearnStage";
 import SpecDocument from "./SpecDocument";
 import StageControls from "./StageControls";
 import SteeringRail from "./SteeringRail";
@@ -79,6 +80,13 @@ export default async function SpecPage({ params }: { params: Promise<{ id: strin
         <section className="min-w-80 flex-[1_1_560px]">
           <SpecDocument initialSpec={spec} />
           <WorkUnits initiativeId={spec.initiative_id} acceptance={spec.acceptance} />
+          {(spec.stage === "verify" || spec.stage === "learn") && (
+            <LearnStage
+              initiativeId={spec.initiative_id}
+              intent={spec.intent}
+              acceptance={spec.acceptance}
+            />
+          )}
         </section>
         <SteeringRail initiativeId={spec.initiative_id} />
       </div>

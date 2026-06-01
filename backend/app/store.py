@@ -27,6 +27,8 @@ Requires Python 3.11+ (asyncio.timeout), pydantic v2, asyncpg, redis>=4.2 (redis
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Literal
@@ -35,6 +37,10 @@ from uuid import uuid4
 import asyncpg
 from pydantic import BaseModel, ConfigDict, Field
 from redis import asyncio as aioredis
+
+from app.embeddings import EmbeddingProvider, get_embedding_provider
+
+logger = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------------- helpers
@@ -50,6 +56,23 @@ def slugify(title: str) -> str:
     """Kebab-case slug from a human title — the initiative id and URL key (0004)."""
     s = re.sub(r"[^a-z0-9]+", "-", title.strip().lower()).strip("-")
     return s or "initiative"
+
+
+def _vector_literal(vec: list[float]) -> str:
+    """pgvector's text input form: '[0.1,0.2,...]'. Bound as a param + cast ::vector,
+    so no pgvector python adapter is needed (0005)."""
+    return "[" + ",".join(repr(float(x)) for x in vec) + "]"
+
+
+def _decision_text(d: "Decision") -> str:
+    """The semantic content of a resolved decision — the reasoning we want retrievable
+    (constraint 5 / D2: decisions are the high-value memory corpus)."""
+    parts = [d.question]
+    if d.chosen:
+        parts.append(f"Chosen: {d.chosen}")
+    if d.rationale:
+        parts.append(f"Rationale: {d.rationale}")
+    return "\n".join(parts)
 
 
 # ----------------------------------------------------------------------------- models
@@ -107,6 +130,42 @@ class Decision(BaseModel):
     emitted_item_ids: list[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=_now)
     resolved_at: str | None = None
+
+
+class Memory(BaseModel):
+    """An append-only record of a completed (or revisited) initiative (0005): what it
+    set out to do vs. what happened, plus learnings. Embedded for cross-initiative
+    retrieval. Never edited — a revisit becomes a new row (constraint 4). The embedding
+    is a DB column, not a model field (like Decision)."""
+
+    id: str = Field(default_factory=lambda: _id("mem"))
+    initiative_id: str
+    summary: str
+    learnings: str | None = None
+    outcome: dict | None = None  # an optional structured snapshot (e.g. per-unit results)
+    created_at: str = Field(default_factory=_now)
+
+
+def _memory_from_row(row: asyncpg.Record) -> Memory:
+    return Memory(
+        id=row["id"],
+        initiative_id=row["initiative_id"],
+        summary=row["summary"],
+        learnings=row["learnings"],
+        outcome=json.loads(row["outcome"]) if row["outcome"] else None,
+        created_at=row["created_at"].isoformat(),
+    )
+
+
+class ContextHit(BaseModel):
+    """One retrieved memory snippet (0005 u3). Source-attributed so the executor can
+    judge whether to trust it (constraint 5): which initiative, which kind of record,
+    the text, and a relevance score (1 - cosine distance; higher is closer)."""
+
+    initiative_id: str
+    type: Literal["decision", "memory"]
+    text: str
+    score: float
 
 
 class Initiative(BaseModel):
@@ -262,9 +321,24 @@ SPEC_CACHE_TTL = 300  # seconds; cache is derived, so a short TTL is just a safe
 
 
 class SpecStore:
-    def __init__(self, pg: asyncpg.Pool, redis: aioredis.Redis):
+    def __init__(
+        self,
+        pg: asyncpg.Pool,
+        redis: aioredis.Redis,
+        embedder: EmbeddingProvider | None = None,
+    ):
         self.pg = pg
         self.redis = redis
+        # Pluggable + lazy: the default provider is built on first use so a store
+        # never needs an embedding key just to read/write specs (0005 constraint 2).
+        self._embedder = embedder
+        # fire-and-forget embedding tasks; kept referenced so the loop doesn't GC them.
+        self._bg: set[asyncio.Task] = set()
+
+    def _get_embedder(self) -> EmbeddingProvider:
+        if self._embedder is None:
+            self._embedder = get_embedding_provider()
+        return self._embedder
 
     # --- hot read path: Redis read-through -----------------------------------
     async def get_spec(self, initiative_id: str) -> Spec | None:
@@ -423,6 +497,25 @@ class SpecStore:
         )
         return [Decision.model_validate_json(r["payload"]) for r in rows]
 
+    async def list_decisions(
+        self, initiative_id: str, status: str | None = None
+    ) -> list[Decision]:
+        """All of an initiative's decisions, oldest first, optionally filtered by status.
+        The Learn review (0005 a4) reads the resolved set — the chosen calls + rationale
+        that explain what happened."""
+        if status is None:
+            rows = await self.pg.fetch(
+                "SELECT payload FROM decisions WHERE initiative_id = $1 ORDER BY created_at",
+                initiative_id,
+            )
+        else:
+            rows = await self.pg.fetch(
+                """SELECT payload FROM decisions
+                   WHERE initiative_id = $1 AND status = $2 ORDER BY created_at""",
+                initiative_id, status,
+            )
+        return [Decision.model_validate_json(r["payload"]) for r in rows]
+
     async def resolve_decision(
         self, decision_id: str, chosen: str, rationale: str, decided_by: str
     ) -> Decision:
@@ -444,6 +537,10 @@ class SpecStore:
         await self._resume_units_blocked_on(decision_id)
         # wake any agent parked on this exact decision — push, not poll
         await self.redis.publish(f"decision:{decision_id}", d.model_dump_json())
+        # embed the resolved reasoning into memory, async + best-effort (0005 constraint 3):
+        # it must not block (or break) the resolve. A failure leaves a null embedding for
+        # the backfill to pick up.
+        self._spawn(self.embed_decision(decision_id))
         return d
 
     async def wait_for_decision(self, decision_id: str, timeout: float = 600) -> Decision:
@@ -465,6 +562,130 @@ class SpecStore:
         finally:
             await pubsub.unsubscribe(f"decision:{decision_id}")
         raise DecisionTimeout(decision_id)
+
+    # --- embeddings: decisions become retrievable memory (0005 u1) -----------
+    async def embed_decision(self, decision_id: str) -> bool:
+        """Embed a decision's resolved reasoning onto its row. Returns False if the
+        decision is gone. Synchronous + awaited — the backfill and tests call it
+        directly; resolve_decision schedules it in the background instead."""
+        row = await self.pg.fetchrow(
+            "SELECT payload FROM decisions WHERE id = $1", decision_id
+        )
+        if row is None:
+            return False
+        d = Decision.model_validate_json(row["payload"])
+        [vec] = await self._get_embedder().embed([_decision_text(d)])
+        await self.pg.execute(
+            "UPDATE decisions SET embedding = $2::vector WHERE id = $1",
+            decision_id, _vector_literal(vec),
+        )
+        return True
+
+    def _spawn(self, coro) -> None:
+        """Run an embed in the background, kept referenced so the loop won't GC it.
+        Best-effort: a missing key or API hiccup is logged, never raised at the caller
+        (0005 constraint 3 — resolving / completing must not block or break)."""
+        task = asyncio.create_task(self._safe(coro))
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
+
+    @staticmethod
+    async def _safe(coro) -> None:
+        try:
+            await coro
+        except Exception:
+            logger.warning("background embed task failed", exc_info=True)
+
+    async def _drain(self) -> None:
+        """Await any in-flight background embeds — for graceful shutdown and tests."""
+        if self._bg:
+            await asyncio.gather(*self._bg, return_exceptions=True)
+
+    # --- memory: the append-only record the Learn stage writes (0005 u2) -----
+    async def create_memory(
+        self,
+        initiative_id: str,
+        summary: str,
+        learnings: str | None = None,
+        outcome: dict | None = None,
+    ) -> Memory:
+        """Write a completed initiative's memory row and embed it async (constraint 3:
+        completing Learn must not block). Append-only — every call is a new row."""
+        mem = Memory(
+            initiative_id=initiative_id, summary=summary, learnings=learnings, outcome=outcome
+        )
+        await self.pg.execute(
+            """INSERT INTO memory (id, initiative_id, summary, learnings, outcome, created_at)
+               VALUES ($1, $2, $3, $4, $5, now())""",
+            mem.id, initiative_id, summary, learnings,
+            json.dumps(outcome) if outcome is not None else None,
+        )
+        self._spawn(self.embed_memory(mem.id))
+        return mem
+
+    async def embed_memory(self, memory_id: str) -> bool:
+        row = await self.pg.fetchrow(
+            "SELECT summary, learnings FROM memory WHERE id = $1", memory_id
+        )
+        if row is None:
+            return False
+        text = row["summary"] + (f"\n\nLearnings: {row['learnings']}" if row["learnings"] else "")
+        [vec] = await self._get_embedder().embed([text])
+        await self.pg.execute(
+            "UPDATE memory SET embedding = $2::vector WHERE id = $1",
+            memory_id, _vector_literal(vec),
+        )
+        return True
+
+    async def list_memory(self, initiative_id: str) -> list[Memory]:
+        """An initiative's memory rows, newest first."""
+        rows = await self.pg.fetch(
+            """SELECT id, initiative_id, summary, learnings, outcome, created_at
+               FROM memory WHERE initiative_id = $1 ORDER BY created_at DESC""",
+            initiative_id,
+        )
+        return [_memory_from_row(r) for r in rows]
+
+    async def get_context(self, query: str, limit: int = 8) -> list[ContextHit]:
+        """Similarity search over the memory corpus — resolved decisions + completed-
+        initiative memory (D2 scope) — across ALL initiatives, so an executor shaping or
+        building the next feature retrieves relevant prior patterns (0005 a6/a7/a8).
+        Ranked by cosine similarity; rows without an embedding are skipped."""
+        if not query.strip():
+            return []
+        [qvec] = await self._get_embedder().embed([query])
+        rows = await self.pg.fetch(
+            """
+            SELECT type, initiative_id, txt, dist FROM (
+                SELECT 'decision' AS type, initiative_id,
+                       concat_ws(' — ', payload->>'question',
+                           NULLIF('Chosen: ' || coalesce(payload->>'chosen', ''), 'Chosen: '),
+                           NULLIF('Rationale: ' || coalesce(payload->>'rationale', ''), 'Rationale: ')
+                       ) AS txt,
+                       embedding <=> $1::vector AS dist
+                  FROM decisions WHERE embedding IS NOT NULL
+                UNION ALL
+                SELECT 'memory' AS type, initiative_id,
+                       concat_ws(' — ', summary,
+                           NULLIF('Learnings: ' || coalesce(learnings, ''), 'Learnings: ')
+                       ) AS txt,
+                       embedding <=> $1::vector AS dist
+                  FROM memory WHERE embedding IS NOT NULL
+            ) q
+            ORDER BY dist
+            LIMIT $2
+            """,
+            _vector_literal(qvec), limit,
+        )
+        return [
+            ContextHit(
+                initiative_id=r["initiative_id"],
+                type=r["type"],
+                text=r["txt"],
+                score=round(1.0 - float(r["dist"]), 4),
+            )
+            for r in rows
+        ]
 
     # --- work units: durable rows in their own table (0003) ------------------
     async def create_unit(self, unit: WorkUnit) -> WorkUnit:
