@@ -2,9 +2,9 @@
 
 These are the durable shapes the whole app speaks in: the living Spec (one JSONB document
 per initiative), its items, the parent Initiative, durable Decisions, append-only Memory,
-and retrieval hits. They carry no I/O — the repository (app.store) persists them and the
-routers/services orchestrate them. API request/response shapes live in app.schemas;
-persistence in app.store.
+and retrieval hits. They carry no I/O — the repository (app.store) persists them (with the
+exception of Message, which is browser-local) and the routers/services orchestrate them.
+API request/response shapes live in app.schemas; persistence in app.store.
 """
 
 from __future__ import annotations
@@ -249,10 +249,11 @@ MessageRole = Literal["human", "advisor"]  # the two parties on the rail
 
 
 class Message(BaseModel):
-    """One turn on a conversation rail (0009 constraint 1): an individual row, never folded
-    into a JSONB blob. `metadata` carries structured payloads the Advisor attaches — e.g.
-    proposal cards the frontend renders (u2/u3). A message belongs to EITHER an initiative or a
-    project (0010 u5: the project-level rail), never both — exactly one owner is set."""
+    """One turn on a conversation rail (0009 constraint 1): a session data carrier for Advisor
+    turns; browser-local and not persisted in Postgres (spec uvama). `metadata` carries
+    structured payloads the Advisor attaches — e.g. proposal cards the frontend renders (u2/u3).
+    A message belongs to EITHER an initiative or a project (0010 u5: the project-level rail),
+    never both — exactly one owner is set."""
 
     id: str = Field(default_factory=lambda: _id("msg"))
     initiative_id: str | None = None

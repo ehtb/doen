@@ -154,17 +154,15 @@ UI is intentionally crude and read-only). Realise it later, in its own UI spec.
   field and reality. The inferred model can't lie because it just reads the work. BD-5 later
   added a 4th state, `learning` (every criterion verified, learn record not yet written),
   preserving the inferred principle while making the verification-vs-retrospective gap explicit.
-- **Conversation storage in the browser only.** First rejected (BD-14) for fear of losing
-  cross-device continuity and the durable transcript — then **adopted** in spec uvama
-  (Conversations Worth Having). The reversal: raw messages were pre-auth shared state with no
-  user ownership, and the *valuable* outcomes of a conversation (spec items, decisions, memory)
+- **Durable backend storage for messages.** Replaced in spec uvama (Conversations Worth Having)
+  by a browser-local (IndexedDB) model. Raw messages were pre-auth shared state with no user
+  ownership, and the *valuable* outcomes of a conversation (spec items, decisions, memory)
   are already persisted in their own tables — so the chat itself is a session concern that
-  belongs in the browser's IndexedDB. The backend is now stateless about messages: the frontend
-  sends a windowed slice with each Advisor call and the backend discards it. The `messages` table
-  was dropped. The accepted cost (decision dec_0397d7a8f45e/A): the message-derived MCP
-  enrichment — get_spec's `advisor_summary`/per-unit `advisor_review` and get_conversation_summary's
-  `stated_priorities` — degraded to null/empty, and the verify-stage Advisor review (which was
-  delivered only as a rail message) was retired.
+  belongs in the browser's IndexedDB. The backend is now stateless about messages; the
+  `messages` table was dropped in migration 0012. The accepted cost (decision
+  dec_0397d7a8f45e/A): the message-derived MCP enrichment — get_spec's `advisor_summary`/per-unit
+  `advisor_review` and get_conversation_summary's `stated_priorities` — degraded to
+  null/empty, and the verify-stage Advisor review was retired.
 - **Auto-collapsing or dark conversation rail.** Tried briefly; it makes the rail feel modal
   and competitive with the document. The rail stays visible and light — recessive, not absent.
 - **A separate "status" column or "stage" enum on the initiative.** Implied by the

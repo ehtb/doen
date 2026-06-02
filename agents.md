@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-06-01 blind-spot audit -->
+<!-- last-reviewed: 2026-06-02 sync-docs audit -->
 # Doen — Project Context for Claude Code
 
 > Read this first, every session. It is the constitution. A spec governs the work;

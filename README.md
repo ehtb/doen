@@ -19,7 +19,8 @@ the constraints an agent must not cross, the latitude it has, and how the work w
 An executor (Claude Code, over MCP) reads that spec, builds against it, claims work units, and
 escalates the calls it can't make. You verify the result against your acceptance criteria — not
 by reading diffs. When it's done, the initiative's decisions and outcomes become memory the
-next initiative can draw on.
+next initiative can draw on — with continuous drift detection to keep that memory in sync with
+the evolving codebase.
 
 ## The loop
 
@@ -32,7 +33,8 @@ next initiative can draw on.
   decisions it shouldn't make alone.
 - **verify** — you judge each unit against its acceptance criteria; only you issue a verdict.
 - **learn** — capture the outcome; it's embedded into memory and retrieved to inform what comes
-  next.
+  next. Drift detection (BD-12) ensures this memory stays accurate even as the codebase
+  changes.
 
 The loop compounds: every initiative completed makes the next one better-informed.
 

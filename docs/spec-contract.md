@@ -85,6 +85,7 @@ interface Decision {
   rationale?: string;           // the human's reasoning — feeds memory later
   raised_by: "agent" | "human";
   decided_by?: string;
+  resolver_type?: "human" | "agent"; // BD-13: human = steering rail; agent = auditor
   status: "open" | "resolved";
   emitted_item_ids?: string[];  // constraints / criteria this decision wrote into the spec
   created_at: string;
@@ -117,6 +118,7 @@ interface Project {
   name: string;
   prefix: string;               // short handle derived from name (drives short IDs)
   intent: string;
+  onboarding_dismissed: boolean; // BD-9: server-side dismissal of onboarding
   created_at: string;
   updated_at: string;
 }
@@ -138,7 +140,7 @@ Note what is **absent on purpose**: no story points, no effort estimate, no velo
 
 ## The MCP contract (executor-facing)
 
-This is the Implement ↔ Verify loop. Seven tools, in `backend/app/mcp_server.py`. The authoring side (which helps *draft* the spec during shaping) is exposed via the HTTP API, not the MCP — keeping the two surfaces distinct stops the executor from quietly rewriting intent.
+This is the Implement ↔ Verify loop. Eleven tools, in `backend/app/mcp_server.py`. The authoring side (which helps *draft* the spec during shaping) is exposed via the HTTP API, not the MCP — keeping the two surfaces distinct stops the executor from quietly rewriting intent.
 
 ### Ground yourself
 
@@ -204,7 +206,32 @@ get_criteria_status(initiative_id): {
 // Current verification state for all acceptance criteria. Use after submit_evidence to see
 // the human's verdict, or to ground yourself before building.
 
-interface ContextHit { initiative_id: string; type: "decision" | "memory"; text: string; score: number; scope: "project" | "global" | null; }
+### Setup & Verification (BD-9, BD-12)
+
+```typescript
+setup_project(project_path): { status: "ok", project_path, files_written: string[] }
+// Install Doen onboarding documents (CLAUDE.md, agents.md) into the target directory.
+
+report_memory_drift(memory_id, current_evidence, is_obsolete, initiative_id?): {
+  status: "ok", report_id, quality: { passed, overall, feedback, warning }
+}
+// Report a discrepancy between a memory hit and the current codebase. Memory is NOT
+// updated until a human approves. Includes LLM-as-judge quality feedback.
+
+list_memory_for_audit(project_id, staleness_window_days?): {
+  project_id, entries: { memory_id, initiative_id, summary, last_verified_at }[]
+}
+// Drive a batch audit: retrieve stale memory entries to verify against the codebase.
+```
+
+interface ContextHit {
+  initiative_id: string;
+  type: "decision" | "memory";
+  text: string;
+  score: number;
+  scope: "project" | "global" | null;
+  has_pending_drift: boolean; // BD-12: Warns if the memory is already being audited
+}
 ```
 
 ---
