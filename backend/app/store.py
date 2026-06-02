@@ -6,10 +6,11 @@ Architecture:
              rebuildable from Postgres, never the other way round.
 
 Relational surface (see migrations/):
-  initiatives (id pk, org_id, owner_id, appetite, state, title, created_at, updated_at)
-  specs       (initiative_id pk, version int, doc jsonb, updated_at)
-  decisions   (id pk, initiative_id, payload jsonb, status, embedding vector(1536), ...)
-  memory      (id pk, initiative_id, summary, learnings, outcome jsonb, embedding, ...)
+  initiatives   (id pk, org_id, owner_id, appetite, state, title, created_at, updated_at)
+  specs         (initiative_id pk, version int, doc jsonb, updated_at)
+  decisions     (id pk, initiative_id, payload jsonb, status, embedding vector(1536), ...)
+  memory        (id pk, initiative_id, summary, learnings, outcome jsonb, embedding, last_verified_at, ...)
+  drift_reports (id pk, memory_id fk, initiative_id, current_evidence, is_obsolete, status, ...)
 
 Decisions live in their own table (not the spec doc): append-only, individually
 addressable, and vector-searchable for the learn->shape flywheel. The domain models
@@ -22,7 +23,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Callable, Coroutine, Literal
+from typing import Callable, Coroutine
 
 import asyncpg
 from redis import asyncio as aioredis
@@ -36,6 +37,8 @@ from app.exceptions import (
 from app.models import (
     ContextHit,
     Decision,
+    DriftReport,
+    DriftReportStatus,
     Initiative,
     InitiativeAttention,
     Memory,
@@ -45,7 +48,6 @@ from app.models import (
     Spec,
     _now,
     derive_prefix,
-    slug_prefix,
     slugify,
 )
 from app.providers.embeddings import EmbeddingProvider, get_embedding_provider
@@ -57,7 +59,7 @@ logger = logging.getLogger(__name__)
 def _vector_literal(vec: list[float]) -> str:
     """pgvector's text input form: '[0.1,0.2,...]'. Bound as a param + cast ::vector, so
     no pgvector python adapter is needed (0005)."""
-    return "[" + ",".join(repr(float(x)) for x in vec) + "]"
+    return "[" + ",".join(repr(x) for x in vec) + "]"
 
 
 def _decision_text(d: Decision) -> str:
@@ -113,6 +115,7 @@ def _sibling_summary(
 
 
 def _memory_from_row(row: asyncpg.Record) -> Memory:
+    lv = row["last_verified_at"]
     return Memory(
         id=row["id"],
         initiative_id=row["initiative_id"],
@@ -120,6 +123,24 @@ def _memory_from_row(row: asyncpg.Record) -> Memory:
         learnings=row["learnings"],
         outcome=json.loads(row["outcome"]) if row["outcome"] else None,
         created_at=row["created_at"].isoformat(),
+        last_verified_at=lv.isoformat() if lv is not None else None,
+    )
+
+
+def _drift_report_from_row(row: asyncpg.Record) -> DriftReport:
+    ra = row["resolved_at"]
+    quality_raw = row["quality"]
+    return DriftReport(
+        id=row["id"],
+        memory_id=row["memory_id"],
+        initiative_id=row["initiative_id"],
+        current_evidence=row["current_evidence"],
+        is_obsolete=row["is_obsolete"],
+        status=row["status"],
+        resolution_note=row["resolution_note"],
+        quality=json.loads(quality_raw) if quality_raw else None,
+        created_at=row["created_at"].isoformat(),
+        resolved_at=ra.isoformat() if ra is not None else None,
     )
 
 
@@ -530,13 +551,26 @@ class SpecStore:
             project_id,
         )
 
+    async def count_pending_drift_reports(self, project_id: str) -> int:
+        """Pending drift reports across all memory for a project — a whole-project aggregate
+        (BD-12). Includes memory from archived initiatives so no report goes unnoticed."""
+        return await self.pg.fetchval(
+            """SELECT count(*) FROM drift_reports dr
+               JOIN memory m ON m.id = dr.memory_id
+               JOIN initiatives i ON i.id = m.initiative_id
+               WHERE i.project_id = $1 AND dr.status = 'pending'""",
+            project_id,
+        )
+
     async def get_project_attention(
         self, project_id: str
     ) -> dict[str, InitiativeAttention]:
-        """Per-initiative attention counts for the project screen (0011 a8): for each initiative
-        in the project, how many proposed spec items await confirm/reject, how many decisions are
-        open, and how many units are submitted awaiting a verdict. Computed in three set-based
-        passes (no N+1): proposed items from the spec JSONB, decisions + units grouped."""
+        """Per-initiative attention counts for the project screen (0011 a8 / BD-12): for each
+        initiative in the project, how many proposed spec items await confirm/reject, how many
+        decisions are open, how many criteria have evidence_submitted, and how many pending drift
+        reports are attributed to memory from that initiative. Computed in four set-based passes
+        (no N+1): proposed items from the spec JSONB, decisions grouped, criteria from JSONB,
+        and drift reports via the memory join."""
         item_rows = await self.pg.fetch(
             """SELECT i.id,
                       (SELECT count(*) FROM jsonb_array_elements(s.doc->'constraints') e
@@ -567,13 +601,25 @@ class SpecStore:
                WHERE i.project_id = $1 AND i.archived_at IS NULL""",
             project_id,
         )
+        # BD-12: count pending drift reports attributed to memory from each initiative.
+        drift_rows = await self.pg.fetch(
+            """SELECT m.initiative_id AS id, count(*) AS n
+               FROM drift_reports dr
+               JOIN memory m ON m.id = dr.memory_id
+               JOIN initiatives i ON i.id = m.initiative_id
+               WHERE i.project_id = $1 AND dr.status = 'pending'
+               GROUP BY m.initiative_id""",
+            project_id,
+        )
         decisions = {r["id"]: r["n"] for r in dec_rows}
         crits = {r["id"]: r["criteria_to_verify"] for r in crit_rows}
+        drifts = {r["id"]: r["n"] for r in drift_rows}
         return {
             r["id"]: InitiativeAttention(
                 proposed_items=r["proposed_items"],
                 open_decisions=decisions.get(r["id"], 0),
                 criteria_to_verify=crits.get(r["id"], 0),
+                drift_reports=drifts.get(r["id"], 0),
             )
             for r in item_rows
         }
@@ -785,9 +831,148 @@ class SpecStore:
     async def list_memory(self, initiative_id: str) -> list[Memory]:
         """An initiative's memory rows, newest first."""
         rows = await self.pg.fetch(
-            """SELECT id, initiative_id, summary, learnings, outcome, created_at
+            """SELECT id, initiative_id, summary, learnings, outcome, created_at, last_verified_at
                FROM memory WHERE initiative_id = $1 ORDER BY created_at DESC""",
             initiative_id,
+        )
+        return [_memory_from_row(r) for r in rows]
+
+    async def get_memory(self, memory_id: str) -> Memory | None:
+        """Fetch a single memory entry by id. Returns None if not found."""
+        row = await self.pg.fetchrow(
+            """SELECT id, initiative_id, summary, learnings, outcome, created_at, last_verified_at
+               FROM memory WHERE id = $1""",
+            memory_id,
+        )
+        return _memory_from_row(row) if row else None
+
+    # --- BD-12: drift reports — agent-flagged memory discrepancies, human-gated --------
+    async def create_drift_report(
+        self,
+        memory_id: str,
+        current_evidence: str,
+        is_obsolete: bool,
+        initiative_id: str | None = None,
+        quality: dict | None = None,
+    ) -> DriftReport:
+        """Record an agent's report that a memory entry may no longer reflect the codebase.
+        Validates that the memory entry exists; raises NotFoundError otherwise so the MCP tool
+        can surface a descriptive error and write no record (BD-12 AC item_78571d0266a6).
+        `quality` is the serialised JudgeResult from the LLM-as-judge evaluation — None if
+        the judge was skipped or unavailable."""
+        exists = await self.pg.fetchval("SELECT 1 FROM memory WHERE id = $1", memory_id)
+        if not exists:
+            raise NotFoundError(f"no memory entry with id {memory_id!r}")
+        report = DriftReport(
+            memory_id=memory_id,
+            initiative_id=initiative_id,
+            current_evidence=current_evidence,
+            is_obsolete=is_obsolete,
+            quality=quality,
+        )
+        await self.pg.execute(
+            """INSERT INTO drift_reports
+               (id, memory_id, initiative_id, current_evidence, is_obsolete, status, quality, created_at)
+               VALUES ($1, $2, $3, $4, $5, 'pending', $6, now())""",
+            report.id, memory_id, initiative_id, current_evidence, is_obsolete,
+            json.dumps(quality) if quality is not None else None,
+        )
+        return report
+
+    async def list_drift_reports_by_project(
+        self, project_id: str, *, status: DriftReportStatus | None = None
+    ) -> list[DriftReport]:
+        """All drift reports for a project's memory (via memory → initiative → project).
+        Optionally filtered by status. Ordered newest-first."""
+        rows = await self.pg.fetch(
+            """SELECT dr.id, dr.memory_id, dr.initiative_id, dr.current_evidence,
+                      dr.is_obsolete, dr.status, dr.resolution_note, dr.quality,
+                      dr.created_at, dr.resolved_at
+               FROM drift_reports dr
+               JOIN memory m ON m.id = dr.memory_id
+               JOIN initiatives i ON i.id = m.initiative_id
+               WHERE i.project_id = $1
+                 AND ($2::text IS NULL OR dr.status = $2)
+               ORDER BY dr.created_at DESC""",
+            project_id, status,
+        )
+        return [_drift_report_from_row(r) for r in rows]
+
+    async def resolve_drift_report(
+        self,
+        report_id: str,
+        action: DriftReportStatus,
+        memory_update: dict | None = None,
+        resolution_note: str | None = None,
+    ) -> DriftReport:
+        """Human resolves a drift report with one of: approved, dismissed, initiative_created.
+        On 'approved', optionally patches the memory entry's summary/learnings and stamps
+        last_verified_at. Memory is never mutated without explicit human approval."""
+        row = await self.pg.fetchrow(
+            """SELECT dr.*, m.id AS mem_id FROM drift_reports dr
+               JOIN memory m ON m.id = dr.memory_id WHERE dr.id = $1""",
+            report_id,
+        )
+        if row is None:
+            raise NotFoundError(f"no drift report with id {report_id!r}")
+        if row["status"] != "pending":
+            raise ValidationError(f"drift report {report_id!r} is already resolved")
+        if action not in ("approved", "dismissed", "initiative_created"):
+            raise ValidationError(f"unknown resolution action {action!r}")
+
+        async with self.pg.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """UPDATE drift_reports
+                       SET status = $2, resolution_note = $3, resolved_at = now()
+                       WHERE id = $1""",
+                    report_id, action, resolution_note,
+                )
+                if action == "approved":
+                    if memory_update:
+                        if "summary" in memory_update:
+                            await conn.execute(
+                                "UPDATE memory SET summary = $2 WHERE id = $1",
+                                row["mem_id"], memory_update["summary"],
+                            )
+                        if "learnings" in memory_update:
+                            await conn.execute(
+                                "UPDATE memory SET learnings = $2 WHERE id = $1",
+                                row["mem_id"], memory_update.get("learnings"),
+                            )
+                # stamp last_verified_at on both approved and dismissed — a dismissal means
+                # "human reviewed this," so it should not re-appear in the next audit cycle.
+                # Content is only mutated on approved (constraint item_f3ddf0841091 holds).
+                if action in ("approved", "dismissed"):
+                    await conn.execute(
+                        "UPDATE memory SET last_verified_at = now() WHERE id = $1",
+                        row["mem_id"],
+                    )
+
+        updated = await self.pg.fetchrow(
+            """SELECT id, memory_id, initiative_id, current_evidence, is_obsolete,
+                      status, resolution_note, quality, created_at, resolved_at
+               FROM drift_reports WHERE id = $1""",
+            report_id,
+        )
+        return _drift_report_from_row(updated)
+
+    async def list_memory_for_audit(
+        self, project_id: str, staleness_days: int = 30
+    ) -> list[Memory]:
+        """Memory entries for the project whose last_verified_at is older than staleness_days,
+        or NULL (never verified). Never returns the unfiltered memory table — the staleness
+        filter is non-optional (BD-12 constraint item_444e2af3a93b)."""
+        rows = await self.pg.fetch(
+            """SELECT m.id, m.initiative_id, m.summary, m.learnings, m.outcome,
+                      m.created_at, m.last_verified_at
+               FROM memory m
+               JOIN initiatives i ON i.id = m.initiative_id
+               WHERE i.project_id = $1
+                 AND (m.last_verified_at IS NULL
+                      OR m.last_verified_at < now() - ($2 * interval '1 day'))
+               ORDER BY m.last_verified_at ASC NULLS FIRST""",
+            project_id, staleness_days,
         )
         return [_memory_from_row(r) for r in rows]
 
@@ -829,23 +1014,28 @@ class SpecStore:
         """One ranked pass over the corpus. `project_id` restricts to a project's initiatives;
         `exclude_project` restricts to everything outside one (the global fallback). The join
         to initiatives never drops rows — decisions/memory cascade-delete with their
-        initiative, so every embedded row has a live parent."""
+        initiative, so every embedded row has a live parent.
+
+        BD-12: `mem_id` is exposed for memory hits so we can batch-lookup pending drift reports
+        and set `has_pending_drift` on affected hits without an N+1 query."""
         rows = await self.pg.fetch(
             """
-            SELECT q.type, q.initiative_id, q.txt, q.dist FROM (
+            SELECT q.type, q.initiative_id, q.txt, q.dist, q.mem_id FROM (
                 SELECT 'decision' AS type, initiative_id,
                        concat_ws(' — ', payload->>'question',
                            NULLIF('Chosen: ' || coalesce(payload->>'chosen', ''), 'Chosen: '),
                            NULLIF('Rationale: ' || coalesce(payload->>'rationale', ''), 'Rationale: ')
                        ) AS txt,
-                       embedding <=> $1::vector AS dist
+                       embedding <=> $1::vector AS dist,
+                       NULL::text AS mem_id
                   FROM decisions WHERE embedding IS NOT NULL
                 UNION ALL
                 SELECT 'memory' AS type, initiative_id,
                        concat_ws(' — ', summary,
                            NULLIF('Learnings: ' || coalesce(learnings, ''), 'Learnings: ')
                        ) AS txt,
-                       embedding <=> $1::vector AS dist
+                       embedding <=> $1::vector AS dist,
+                       id AS mem_id
                   FROM memory WHERE embedding IS NOT NULL
             ) q
             JOIN initiatives i ON i.id = q.initiative_id
@@ -857,12 +1047,23 @@ class SpecStore:
             """,
             _vector_literal(qvec), project_id, exclude_project, limit,
         )
+        # batch-lookup pending drift reports for the memory hits in one round-trip
+        memory_ids = [r["mem_id"] for r in rows if r["mem_id"]]
+        pending_drift: set[str] = set()
+        if memory_ids:
+            pending_rows = await self.pg.fetch(
+                "SELECT DISTINCT memory_id FROM drift_reports "
+                "WHERE memory_id = ANY($1) AND status = 'pending'",
+                memory_ids,
+            )
+            pending_drift = {r["memory_id"] for r in pending_rows}
         return [
             ContextHit(
                 initiative_id=r["initiative_id"],
                 type=r["type"],
                 text=r["txt"],
                 score=round(1.0 - float(r["dist"]), 4),
+                has_pending_drift=r["mem_id"] in pending_drift if r["mem_id"] else False,
             )
             for r in rows
         ]

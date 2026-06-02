@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Check, GitBranch, ClipboardCheck } from "lucide-react";
+import { ArrowRight, Check, GitBranch, ClipboardCheck, AlertTriangle } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { Initiative, InitiativeAttention } from "@/lib/types";
@@ -75,7 +75,10 @@ export function InitiativeCard({
   href?: string;
 }) {
   const total = attention
-    ? attention.proposed_items + attention.open_decisions + (attention.criteria_to_verify ?? 0)
+    ? attention.proposed_items +
+      attention.open_decisions +
+      (attention.criteria_to_verify ?? 0) +
+      (attention.drift_reports ?? 0)
     : 0;
   return (
     <Link
@@ -119,6 +122,12 @@ export function InitiativeCard({
                 icon={ClipboardCheck}
                 n={attention.criteria_to_verify ?? 0}
                 label="to verify"
+                urgent
+              />
+              <AttentionChip
+                icon={AlertTriangle}
+                n={attention.drift_reports ?? 0}
+                label="drift flagged"
                 urgent
               />
               <AttentionChip icon={Check} n={attention.proposed_items} label="to confirm" />

@@ -18,6 +18,7 @@ from app.exceptions import register_exception_handlers
 from app.routers import (
     conversation,
     decisions,
+    drift_reports,
     initiatives,
     learn,
     projects,
@@ -47,7 +48,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="Doen", lifespan=lifespan)
     register_exception_handlers(app)
-    for module in (initiatives, specs, decisions, learn, shaping, conversation, projects):
+    for module in (initiatives, specs, decisions, drift_reports, learn, shaping, conversation, projects):
         app.include_router(module.router)
 
     @app.get("/health")

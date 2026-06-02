@@ -6,6 +6,7 @@ initiative to a project (or detach it). Domain errors map to HTTP centrally (exc
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -99,11 +100,18 @@ async def project_dashboard(project_id: str, store: _Store) -> ProjectDashboard:
     project = await store.get_project(project_id)
     if project is None:
         raise NotFoundError(f"no project {project_id}")
+    initiatives, open_decisions, pending_drift_reports, attention = await asyncio.gather(
+        store.list_project_initiatives(project_id),
+        store.count_open_decisions(project_id),
+        store.count_pending_drift_reports(project_id),
+        store.get_project_attention(project_id),
+    )
     return ProjectDashboard(
         project=project,
-        initiatives=await store.list_project_initiatives(project_id),
-        open_decisions=await store.count_open_decisions(project_id),
-        attention=await store.get_project_attention(project_id),
+        initiatives=initiatives,
+        open_decisions=open_decisions,
+        pending_drift_reports=pending_drift_reports,
+        attention=attention,
         onboarding_prompt=SETUP_PROMPT,
     )
 

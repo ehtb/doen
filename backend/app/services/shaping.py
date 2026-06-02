@@ -15,6 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from app.config import MAX_INJECTED_MEMORY_CRITERIA, MEMORY_VERIFICATION_THRESHOLD
 from app.exceptions import NotFoundError, ValidationError
 from app.models import (
     AcceptanceCriterion,
@@ -135,6 +136,33 @@ class ShapingResult(BaseModel):
     context_used: list[ContextHit]
 
 
+def _memory_verification_criterion(hit: ContextHit) -> AcceptanceCriterion:
+    """BD-12: synthesize a Memory Verification acceptance criterion for a high-scoring memory
+    hit. Indistinguishable in structure from LLM-generated criteria so it flows through the
+    same confirm / submit_evidence / human-verdict lifecycle."""
+    snippet = hit.text[:120].rstrip()
+    if len(hit.text) > 120:
+        snippet += "…"
+    return AcceptanceCriterion(
+        text=(
+            f"Verify that memory entry [{hit.initiative_id}] (\"{snippet}\") still accurately "
+            "reflects the current codebase. If drift is found, call report_memory_drift with "
+            f"memory_id=\"{hit.initiative_id}\" and your findings; if it remains accurate, "
+            "document that as evidence."
+        ),
+        verify=Verify(
+            kind="behavior",
+            detail=(
+                f"Inspect the live codebase against the claim in memory entry {hit.initiative_id}. "
+                "Submit evidence of either accuracy (no action needed) or discrepancy "
+                "(report_memory_drift filed). Human approves once evidence is submitted."
+            ),
+        ),
+        provenance="ai_proposed",
+        status="proposed",
+    )
+
+
 def _build_user_message(description: str, hits: list[ContextHit]) -> str:
     parts = [f"Feature description from the human:\n{description.strip()}"]
     if hits:
@@ -178,6 +206,22 @@ def _parse(raw: dict[str, Any], hits: list[ContextHit]) -> ShapingResult:
         ]
     except (KeyError, TypeError, ValueError) as e:
         raise LLMError(f"shaping output did not match the spec schema: {e}") from e
+
+    # BD-12: inject Memory Verification criteria for high-scoring memory hits. Capped at
+    # MAX_INJECTED_MEMORY_CRITERIA (default 2) to prevent criteria fatigue when many hits
+    # score above the threshold. Deduped by initiative_id; hits already sorted by score.
+    seen_initiatives: set[str] = set()
+    for hit in hits:
+        if len(seen_initiatives) >= MAX_INJECTED_MEMORY_CRITERIA:
+            break
+        if (
+            hit.type == "memory"
+            and hit.score >= MEMORY_VERIFICATION_THRESHOLD
+            and hit.initiative_id not in seen_initiatives
+        ):
+            acceptance.append(_memory_verification_criterion(hit))
+            seen_initiatives.add(hit.initiative_id)
+
     return ShapingResult(
         title=str(raw.get("title", "")).strip(),
         intent=str(raw.get("intent", "")).strip(),

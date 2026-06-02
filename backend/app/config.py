@@ -43,3 +43,18 @@ MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "stdio")
 # values to accept, e.g. "myapp.railway.app". Empty string (default) disables the check —
 # safe when the deployment is already VPC/proxy-controlled (Railway, Fly, etc.).
 MCP_ALLOWED_HOSTS = os.getenv("MCP_ALLOWED_HOSTS", "")
+
+# BD-12: Memory Verification. get_context hits scored at or above this threshold trigger
+# automatic injection of a Memory Verification acceptance criterion during spec shaping.
+MEMORY_VERIFICATION_THRESHOLD = float(os.getenv("MEMORY_VERIFICATION_THRESHOLD", "0.75"))
+
+# BD-12: LLM-as-judge. Separate from SHAPING_MODEL so cost-sensitive self-hosters can route
+# judges to a smaller tier. Defaults to Haiku — fast and cheap enough for inline use.
+JUDGE_MODEL = os.getenv("JUDGE_MODEL", "anthropic/claude-haiku-4-5")
+# BD-12: cap on how many Memory Verification criteria are auto-injected per shaping run.
+# Prevents "criteria fatigue" when many high-scoring hits are present.
+MAX_INJECTED_MEMORY_CRITERIA = int(os.getenv("MAX_INJECTED_MEMORY_CRITERIA", "2"))
+
+# BD-12: Memory audit staleness window in days. list_memory_for_audit returns entries whose
+# last_verified_at is older than this many days, or NULL (never verified).
+MEMORY_AUDIT_STALENESS_DAYS = int(os.getenv("MEMORY_AUDIT_STALENESS_DAYS", "30"))

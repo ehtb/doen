@@ -96,11 +96,16 @@ State is stored on the initiative row and recomputed by `_recompute_state()` whe
 or the learn record change. Two human-facing escape hatches exist (`start-building`,
 `revert-to-draft`) but executors do not call them.
 
-### MCP tool surface (9 tools in `backend/app/mcp_server.py`)
+### MCP tool surface (11 tools in `backend/app/mcp_server.py`)
 - **Ground yourself:** `get_spec`, `get_conversation_summary`, `get_context`
 - **Track criteria:** `submit_evidence`, `get_criteria_status`
 - **Escalate:** `raise_decision`, `resolve_decision`, `wait_for_decision`
 - **Project setup:** `setup_project`
+- **Memory verification (BD-12):** `report_memory_drift`, `list_memory_for_audit`
+  - After every `get_context` memory hit, run a Consistency Check against the codebase; call
+    `report_memory_drift(memory_id, current_evidence, is_obsolete)` when you find a mismatch.
+  - `list_memory_for_audit(project_id, staleness_window_days=30)` returns only entries not
+    verified within the window — use it to drive a batch audit pass.
 
 Full signatures and the operating loop are in `docs/spec-contract.md`.
 

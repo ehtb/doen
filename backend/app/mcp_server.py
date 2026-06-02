@@ -27,10 +27,11 @@ from mcp.server.transport_security import TransportSecuritySettings
 from redis import asyncio as aioredis
 
 from app.config import DATABASE_URL, MCP_ALLOWED_HOSTS, MCP_TRANSPORT, REDIS_URL
-from app.exceptions import DecisionTimeout, NotFoundError
+from app.exceptions import DecisionTimeout, NotFoundError, ValidationError
 from app.models import Decision
 from app.onboarding_config import DOCUMENTS
 from app.services.conversation import spec_enrichment, summarize_conversation
+from app.services.evaluation import DRIFT_EVIDENCE_RUBRIC, evaluate
 from app.store import SpecStore
 
 
@@ -189,7 +190,13 @@ async def get_context(initiative_id: str, query: str, ctx: Context, limit: int =
     search is project-scoped: sibling initiatives within the same project are searched first,
     falling back to the rest of the corpus only when project hits are insufficient. Each hit is
     tagged `scope` (project / global) so you can see what came from this body of work vs.
-    elsewhere. A standalone initiative searches globally, as before."""
+    elsewhere. A standalone initiative searches globally, as before.
+
+    CONSISTENCY CHECK (BD-12): for every memory hit returned, you MUST verify the claim
+    against the current codebase before treating it as current. If you find a mismatch —
+    the code has changed, the pattern no longer applies, or the entry is obsolete — call
+    report_memory_drift with the memory_id, your evidence, and is_obsolete=True/False.
+    Do not skip verification. Memory is a starting point, not ground truth."""
     store = _store(ctx)
     init = await store.get_initiative(initiative_id)
     project_id = init.project_id if init else None
@@ -245,6 +252,132 @@ async def setup_project(project_path: str, ctx: Context) -> dict:
             f"Installed {len(written)} file(s) into {str(root)!r}. "
             "You can re-run setup_project at any time to install updated docs."
         ),
+    }
+
+
+# --- BD-12: memory drift reporting and audit tools ----------------------------------
+@mcp.tool()
+async def report_memory_drift(
+    memory_id: str,
+    current_evidence: str,
+    is_obsolete: bool,
+    ctx: Context,
+    initiative_id: str | None = None,
+) -> dict:
+    """Report a discrepancy between a memory entry and the current codebase (BD-12).
+
+    Call this after the CONSISTENCY CHECK on a get_context memory hit when you find:
+    - The code has changed and the memory no longer reflects reality
+    - The pattern, constraint, or decision described is obsolete
+    - The summary is partially wrong or misleading
+
+    `memory_id`: the id of the memory entry from the get_context hit (e.g. "mem_abc123").
+    `current_evidence`: a concise description of what you found in the codebase that
+      contradicts or qualifies the memory entry. Quote the relevant code or fact.
+    `is_obsolete`: True if the entry is completely stale and should be removed; False if it
+      needs an update (partial drift, not full obsolescence).
+    `initiative_id`: optional — the initiative you are currently working on, for context.
+
+    The report is persisted durably and surfaces as a human-actionable attention item on the
+    project dashboard within the existing 5-second SWR window. The memory entry is NOT
+    mutated until a human explicitly approves the update. Returns the created report id.
+
+    The response includes a `quality` field with an LLM-as-judge evaluation of your
+    evidence on two dimensions: Specificity and Actionability. If `quality.passed` is False,
+    read `quality.warning` — it tells you specifically how to strengthen the evidence before
+    the human reviews it. You may revise and re-file a stronger report if you wish; the
+    original is always persisted regardless.
+
+    Returns an error (and writes no record) if memory_id does not exist."""
+    store = _store(ctx)
+
+    # Fetch memory entry for judge context (also validates existence).
+    mem = await store.get_memory(memory_id)
+    if mem is None:
+        raise ValueError(f"no memory entry with id {memory_id!r}")
+
+    # LLM-as-judge: evaluate evidence quality inline. Non-fatal — judge outages return a
+    # neutral passing result so the report is always persisted.
+    quality = await evaluate(
+        DRIFT_EVIDENCE_RUBRIC,
+        {
+            "memory_summary": mem.summary,
+            "current_evidence": current_evidence,
+            "is_obsolete": str(is_obsolete),
+        },
+    )
+
+    try:
+        report = await store.create_drift_report(
+            memory_id=memory_id,
+            current_evidence=current_evidence,
+            is_obsolete=is_obsolete,
+            initiative_id=initiative_id,
+            quality=quality.model_dump(),
+        )
+    except NotFoundError as e:
+        raise ValueError(str(e))
+
+    base_message = (
+        "Drift report filed. A human reviewer will see this on the project dashboard "
+        "and decide whether to approve the memory update, dismiss it, or create a new "
+        "initiative to fix the underlying code."
+    )
+    quality_note = (
+        f" Quality warning: {quality.warning}" if not quality.passed and quality.warning
+        else ""
+    )
+    return {
+        "status": "ok",
+        "report_id": report.id,
+        "memory_id": memory_id,
+        "is_obsolete": is_obsolete,
+        "quality": {
+            "passed": quality.passed,
+            "overall": quality.overall,
+            "scores": [s.model_dump() for s in quality.scores],
+            "feedback": quality.feedback,
+            "warning": quality.warning,
+        },
+        "message": base_message + quality_note,
+    }
+
+
+@mcp.tool()
+async def list_memory_for_audit(
+    project_id: str,
+    ctx: Context,
+    staleness_window_days: int = 30,
+) -> dict:
+    """Return memory entries for a project that have not been verified against the codebase
+    within the staleness window (BD-12 audit mode).
+
+    Use this to drive a batch audit: retrieve stale entries, check each one against the
+    current codebase, and call report_memory_drift for any you find are outdated. After
+    verifying an entry and finding it still accurate, no action is required — the
+    last_verified_at timestamp is only updated when a human approves a drift report.
+
+    `project_id`: the project to audit (e.g. "build-doen").
+    `staleness_window_days`: entries verified more recently than this many days ago are
+      excluded. Default 30. Entries that have never been verified (NULL) are always included.
+
+    Never returns the full unfiltered memory table — the staleness filter is always applied."""
+    entries = await _store(ctx).list_memory_for_audit(project_id, staleness_window_days)
+    return {
+        "project_id": project_id,
+        "staleness_window_days": staleness_window_days,
+        "count": len(entries),
+        "entries": [
+            {
+                "memory_id": m.id,
+                "initiative_id": m.initiative_id,
+                "summary": m.summary,
+                "learnings": m.learnings,
+                "last_verified_at": m.last_verified_at,
+                "created_at": m.created_at,
+            }
+            for m in entries
+        ],
     }
 
 

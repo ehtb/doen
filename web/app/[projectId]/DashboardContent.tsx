@@ -7,11 +7,13 @@ import useSWR from "swr";
 
 import { shortId } from "@/lib/utils";
 import { InitiativeCard } from "../InitiativeCard";
-import type { Initiative, InitiativeAttention, Project, ProjectDashboard } from "@/lib/types";
+import { DriftReportsPanel } from "./DriftReportsPanel";
+import type { DriftReport, Initiative, InitiativeAttention, Project, ProjectDashboard } from "@/lib/types";
 
-// Attention priority tiers (BD-7 constraint 2):
+// Attention priority tiers (BD-7 constraint 2 / BD-12):
 // 1 = decisions to resolve (blocking the agent)
 // 2 = criteria to verify (evidence submitted, waiting for human judgment)
+// 2 = drift flagged (memory discrepancy reported, needs human resolution)
 // 3 = items to confirm (spec being shaped)
 // 4 = in-progress unblocked (agent is working)
 // 5 = untouched draft (created but not yet shaped)
@@ -21,6 +23,7 @@ function attentionTier(
 ): number {
   if ((attention?.open_decisions ?? 0) > 0) return 1;
   if ((attention?.criteria_to_verify ?? 0) > 0) return 2;
+  if ((attention?.drift_reports ?? 0) > 0) return 2;
   if ((attention?.proposed_items ?? 0) > 0) return 3;
   if (state === "draft") return 5;
   return 4;
@@ -86,9 +89,18 @@ export function DashboardContent({
     fetcher,
     { fallbackData: initialData, refreshInterval: 5000, revalidateOnFocus: false, dedupingInterval: 4000 },
   );
-  const { initiatives, attention, project } = data!;
+  const { initiatives, attention, project, pending_drift_reports } = data!;
   const [search, setSearch] = useState("");
   const [showCompleted, setShowCompleted] = useState(false);
+
+  // BD-12: fetch pending drift reports only when the project has any (avoids unnecessary requests).
+  const { data: driftReports, mutate: mutateDrift } = useSWR<DriftReport[]>(
+    pending_drift_reports > 0
+      ? `/api/projects/${projectId}/drift-reports?status=pending`
+      : null,
+    fetcher,
+    { refreshInterval: 5000, revalidateOnFocus: false, dedupingInterval: 4000 },
+  );
 
   const sId = (i: Initiative) => shortId(project.prefix, i.seq);
   const href = (i: Initiative) => `/${project.id}/${i.id}`;
@@ -128,6 +140,15 @@ export function DashboardContent({
 
   return (
     <>
+      {/* BD-12: Drift reports panel — shown when there are pending reports, above the initiative list */}
+      {driftReports && driftReports.length > 0 && (
+        <DriftReportsPanel
+          projectId={projectId}
+          reports={driftReports}
+          onResolved={() => mutateDrift()}
+        />
+      )}
+
       {/* Search */}
       <div className="relative mt-4">
         <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-ink-faint" />

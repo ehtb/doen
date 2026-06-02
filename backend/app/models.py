@@ -198,6 +198,30 @@ class Memory(BaseModel):
     learnings: str | None = None
     outcome: dict | None = None  # an optional structured snapshot (e.g. per-unit results)
     created_at: str = Field(default_factory=_now)
+    last_verified_at: str | None = None  # BD-12: NULL = never verified against codebase
+
+
+# ----------------------------------------------------------------------------- drift reports (BD-12)
+DriftReportStatus = Literal["pending", "approved", "dismissed", "initiative_created"]
+
+
+class DriftReport(BaseModel):
+    """An agent-reported discrepancy between a memory entry and the live codebase (BD-12).
+    Persisted as a durable row and surfaced as a human-actionable attention item. Memory is
+    only mutated after explicit human approval — never auto-updated on agent report alone.
+    `quality` carries the LLM-as-judge result (JudgeResult serialised) so per-dimension
+    scores are queryable without schema changes."""
+
+    id: str = Field(default_factory=lambda: _id("dr"))
+    memory_id: str
+    initiative_id: str | None = None  # the initiative from which drift was reported (context)
+    current_evidence: str
+    is_obsolete: bool = False
+    status: DriftReportStatus = "pending"
+    resolution_note: str | None = None
+    quality: dict | None = None  # BD-12: JudgeResult as JSONB; None if judge was skipped
+    created_at: str = Field(default_factory=_now)
+    resolved_at: str | None = None
 
 
 class ContextHit(BaseModel):
@@ -205,13 +229,16 @@ class ContextHit(BaseModel):
     whether to trust it (constraint 5): which initiative, which kind of record, the text,
     and a relevance score (1 - cosine distance; higher is closer). `scope` (0010 constraint 4)
     marks whether a hit came from within the calling initiative's project or the global
-    fallback — None when the search wasn't project-scoped."""
+    fallback — None when the search wasn't project-scoped. `has_pending_drift` (BD-12) warns
+    the executor that another agent has already flagged this memory entry as potentially wrong —
+    treat it with extra scepticism and verify before acting on it."""
 
     initiative_id: str
     type: Literal["decision", "memory"]
     text: str
     score: float
     scope: Literal["project", "global"] | None = None
+    has_pending_drift: bool = False  # BD-12: a pending drift report exists for this memory entry
 
 
 # ----------------------------------------------------------------------------- conversation (0009)
@@ -268,10 +295,11 @@ class InitiativeAttention(BaseModel):
     proposed_items: int = 0      # ai_proposed spec items awaiting confirm / reject
     open_decisions: int = 0      # escalations awaiting a verdict
     criteria_to_verify: int = 0  # acceptance criteria with evidence_submitted awaiting verdict (BD-7)
+    drift_reports: int = 0       # pending drift reports attributed to this initiative's memory (BD-12)
 
     @property
     def total(self) -> int:
-        return self.proposed_items + self.open_decisions + self.criteria_to_verify
+        return self.proposed_items + self.open_decisions + self.criteria_to_verify + self.drift_reports
 
 
 class ConversationContext(BaseModel):

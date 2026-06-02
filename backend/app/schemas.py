@@ -58,14 +58,15 @@ class ArchiveInitiative(BaseModel):
 
 
 class ProjectDashboard(BaseModel):
-    """The project dashboard view (0010 a2 / 0011 a8): the project, its grouped initiatives, a
-    project-wide aggregate (open decisions across all of them), and per-initiative attention
-    counts keyed by initiative id. State distribution is derived on the client from the
-    initiatives list."""
+    """The project dashboard view (0010 a2 / 0011 a8 / BD-12): the project, its grouped
+    initiatives, project-wide aggregates (open decisions + pending drift reports), and
+    per-initiative attention counts keyed by initiative id. State distribution is derived on
+    the client from the initiatives list."""
 
     project: Project
     initiatives: list[Initiative]
     open_decisions: int  # open escalations across every initiative in the project
+    pending_drift_reports: int = 0  # BD-12: pending drift reports across all project memory
     attention: dict[str, InitiativeAttention] = {}
     onboarding_prompt: str = ""  # BD-9: the setup prompt from server config (empty = not set)
 

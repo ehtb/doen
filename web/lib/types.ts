@@ -67,6 +67,7 @@ export interface InitiativeAttention {
   proposed_items: number;
   open_decisions: number;
   criteria_to_verify: number; // BD-7: acceptance criteria with evidence submitted awaiting verdict
+  drift_reports: number;      // BD-12: pending drift reports attributed to this initiative's memory
 }
 
 // The project dashboard payload (backend ProjectDashboard, schemas.py).
@@ -74,8 +75,32 @@ export interface ProjectDashboard {
   project: Project;
   initiatives: Initiative[];
   open_decisions: number;
+  pending_drift_reports: number; // BD-12: pending drift reports across all project memory
   attention: Record<string, InitiativeAttention>;
   onboarding_prompt: string; // BD-9: setup prompt from server config for the onboarding hint
+}
+
+// LLM-as-judge result stored on a drift report (BD-12).
+export interface DriftReportQuality {
+  passed: boolean;
+  overall: number;        // 0–1 normalised mean score
+  scores: { name: string; score: number; reasoning: string }[];
+  feedback: string;
+  warning: string | null; // improvement suggestion when not passed
+}
+
+// A drift report — an agent-filed memory discrepancy awaiting human resolution (BD-12).
+export interface DriftReport {
+  id: string;
+  memory_id: string;
+  initiative_id: string | null;
+  current_evidence: string;
+  is_obsolete: boolean;
+  status: "pending" | "approved" | "dismissed" | "initiative_created";
+  resolution_note: string | null;
+  quality: DriftReportQuality | null; // null if judge was skipped or unavailable
+  created_at: string;
+  resolved_at: string | null;
 }
 
 // An append-only record the Learn stage writes (backend Memory, store.py).

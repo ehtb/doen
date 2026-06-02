@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { Archive, GitBranch, Layers } from "lucide-react";
+import { AlertTriangle, Archive, GitBranch, Layers } from "lucide-react";
 
 import { getProjectDashboard } from "@/lib/api";
 import { SetBreadcrumb } from "@/app/_shell/breadcrumb";
@@ -26,7 +26,7 @@ export default async function ProjectDashboardPage({
   const data = await getProjectDashboard(projectId);
   if (!data) notFound();
 
-  const { project, initiatives, open_decisions, onboarding_prompt } = data;
+  const { project, initiatives, open_decisions, pending_drift_reports, onboarding_prompt } = data;
 
   const activeCount = initiatives.filter((i) =>
     ACTIVE_STATES.has(i.state),
@@ -83,6 +83,13 @@ export default async function ProjectDashboardPage({
             </span>{" "}
             open decision{open_decisions === 1 ? "" : "s"}
           </span>
+          {pending_drift_reports > 0 && (
+            <span className="flex items-center gap-1.5">
+              <AlertTriangle className="size-3 text-accent-deep" />
+              <span className="text-accent-deep">{pending_drift_reports}</span>{" "}
+              drift report{pending_drift_reports === 1 ? "" : "s"}
+            </span>
+          )}
           {/* BD-14 u4: trigger a drift audit of the three constitution docs from any project. */}
           <span className="ml-auto">
             <CopySyncDocsPrompt />
