@@ -90,7 +90,7 @@ export default async function ProjectDashboardPage({
               drift report{pending_drift_reports === 1 ? "" : "s"}
             </span>
           )}
-          {/* BD-14 u4: trigger a drift audit of the three constitution docs from any project. */}
+          {/* BD-14 u4: trigger a drift audit of core documentation from any project. */}
           <span className="ml-auto">
             <CopySyncDocsPrompt />
           </span>
