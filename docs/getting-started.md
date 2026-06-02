@@ -18,8 +18,10 @@ cd doen
 cp backend/.env.example backend/.env
 ```
 
-Open `backend/.env` and set `LLM_API_KEY` to your key. That's the only value you need to
-change — Compose wires up the database and Redis for you.
+Open `backend/.env` and set two values:
+
+- `LLM_API_KEY` — your OpenRouter key.
+- `MCP_TRANSPORT=http` — exposes the MCP server over HTTP so Claude Code can connect to the running container.
 
 ## 3. Start the stack
 
@@ -33,99 +35,83 @@ up, open:
 
 **http://localhost:3000**
 
-You'll land on an empty dashboard.
+You'll land on the home page, showing your projects.
 
-## 4. Create an initiative
+## 4. Create a project
+
+On first visit the Advisor greets you and prompts you to create your first project — a container
+for related work. Give it a name (for example, _My product_) and a one-sentence intent, then
+click **Create project**.
+
+You land on the project dashboard.
+
+## 5. Shape a spec
 
 Click **New initiative**, give it a title (for example, _Passwordless sign-in_), and create it.
-You land in its spec — empty, at the `discover` stage.
+You land in its spec — empty, in the `draft` state.
 
-## 5. Shape a spec with AI
-
-In the spec view, click **Shape with AI**. Describe the feature in a few sentences — the
-problem, who it's for, what success looks like — and click **Generate spec**.
+Click **Shape with AI**. Describe the feature in a few sentences — the problem, who it's for,
+what success looks like — and click **Generate spec**.
 
 In a few seconds the AI proposes a full spec: an intent paragraph, constraints, discretion, and
 acceptance criteria, all as _proposed_ items (shown dashed — they don't govern yet). Read them,
 edit or retire any that miss, and **Confirm** the rest. That's the core move: you're correcting
 a knowledgeable first draft, not filling a blank form.
 
+Once all items are confirmed, click **Start building**. The spec is now locked and the initiative
+transitions to `building`.
+
 You now have a governing spec. **That's the ten-minute milestone.**
 
 ## 6. Connect Claude Code — the executor
 
-Doen exposes its spec, decisions, work units, and memory to an executor over an MCP server.
-The repo ships a `.mcp.json` configured for the Docker setup:
+With `MCP_TRANSPORT=http` set, the MCP server is available at `http://localhost:8000/mcp/`
+once the stack is running.
+
+Add the server to Claude Code — either globally (`~/.claude/settings.json`) or per-project
+(`.claude/settings.json` in your codebase):
 
 ```json
 {
   "mcpServers": {
     "doen": {
-      "type": "stdio",
-      "command": "docker",
-      "args": [
-        "compose",
-        "exec",
-        "-T",
-        "backend",
-        "python",
-        "-m",
-        "app.mcp_server"
-      ]
+      "type": "http",
+      "url": "http://localhost:8000/mcp/"
     }
   }
 }
 ```
 
-With `docker compose up` running, open the repo in Claude Code from the repo root. Claude Code
-launches the MCP server inside the backend container, sharing your database. Ask it to
-`get_spec` for your initiative — it reads the spec you just shaped, and can propose work units,
-report progress, and raise decisions, all back through Doen.
+Once the spec is in `building` state, the spec view shows a ready-to-use MCP prompt — click
+**Execute** (or **Plan first** to review a build plan before committing). Paste it into Claude
+Code. The executor reads the spec, builds against the confirmed acceptance criteria, and submits
+evidence back through Doen — all without you writing a brief.
 
-> **Running the backend on your host instead** (`make dev`, no containers)?
-> The backend reads `backend/.env`. Point `.mcp.json` at the local interpreter:
->
-> ```json
-> {
->   "mcpServers": {
->     "doen": {
->       "type": "stdio",
->       "command": "./backend/.venv/bin/python",
->       "args": ["-m", "app.mcp_server"],
->       "env": { "PYTHONPATH": "./backend" }
->     }
->   }
-> }
-> ```
-
-> **Running Claude Code on a different machine?** Use HTTP transport instead of stdio.
-> Set `MCP_TRANSPORT=http` in `backend/.env`, restart the stack, then point `.mcp.json` at
-> the backend URL:
+> **Running Claude Code on a different machine?** If Claude Code runs on a remote server or in
+> the cloud (e.g. a Railway, Fly, or Render deployment), point it at the backend's public URL
+> instead of localhost:
 >
 > ```json
 > {
 >   "mcpServers": {
 >     "doen": {
 >       "type": "http",
->       "url": "https://doen.example.com/mcp/"
+>       "url": "https://your-backend.example.com/mcp/"
 >     }
 >   }
 > }
 > ```
 >
-> The MCP server mounts at `/mcp/` on the FastAPI app (trailing slash required). If
-> you're exposing the backend directly without a reverse proxy, use port 8000
-> (e.g. `http://your-host:8000/mcp/`). Keep this on a private network — there is no
-> authentication in front of it yet.
+> The trailing slash on `/mcp/` is required. If you're exposing the backend on a raw port without
+> a reverse proxy, use `http://your-host:8000/mcp/`. Keep this endpoint on a private network or
+> behind a VPC — there is no authentication in front of it yet.
 
 ## The full loop
 
 From here, the rest of the loop runs inside Doen:
 
-- **decompose** the spec into work units (the executor proposes them; you confirm),
-- **implement** — the executor claims a unit, builds, and submits it with per-criterion evidence,
-- **verify** — you approve or request changes against the acceptance criteria,
-- **learn** — advance to the Learn stage and capture the outcome; it's embedded into memory, and
-  the next initiative you shape will retrieve it.
+- **implement** — the executor reads the spec, builds against confirmed acceptance criteria, and submits evidence,
+- **verify** — you approve or request changes on the steering rail; the executor re-submits until each criterion is verified,
+- **learn** — once every criterion is verified the initiative transitions to `learning`; write the retrospective to close it out and feed its outcomes back into memory.
 
 That's the thesis, running end to end on your machine.
