@@ -164,7 +164,23 @@ export interface Decision {
   rationale?: string | null;
   raised_by: string;
   decided_by?: string | null;
+  // BD-13: "human" = human resolved on steering rail; "agent" = Discretion Auditor intercepted.
+  resolver_type?: "human" | "agent" | null;
   status: "open" | "resolved";
   created_at: string;
   resolved_at?: string | null;
+}
+
+// BD-13: a cause-effect rationale claim cited to a specific decision or criterion record.
+export interface RationaleClaim {
+  claim: string;
+  source_id: string;  // a decision ID (dec_…) or criterion ID (item_…)
+  source_type: "decision" | "criterion";
+}
+
+// BD-13: the Advisor's draft outcome including structured rationale claims.
+export interface OutcomeDraft {
+  summary: string;
+  learnings: string;
+  rationale_claims: RationaleClaim[];
 }

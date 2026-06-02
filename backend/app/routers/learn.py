@@ -32,5 +32,8 @@ async def draft_outcome(initiative_id: str, store: _Store) -> OutcomeDraft:
 async def submit_learn(initiative_id: str, body: SubmitLearn, store: _Store) -> LearnReview:
     return await learn_service.submit_learn(
         store, initiative_id,
-        summary=body.summary, learnings=body.learnings, outcome=body.outcome,
+        summary=body.summary,
+        learnings=body.learnings,
+        outcome=body.outcome,
+        rationale_claims=body.rationale_claims or None,
     )

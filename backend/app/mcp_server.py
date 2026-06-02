@@ -31,6 +31,7 @@ from app.exceptions import DecisionTimeout, NotFoundError, ValidationError
 from app.models import Decision
 from app.onboarding_config import DOCUMENTS
 from app.services.conversation import spec_enrichment, summarize_conversation
+from app.services.discretion_auditor import audit_decision
 from app.services.evaluation import DRIFT_EVIDENCE_RUBRIC, evaluate
 from app.store import SpecStore
 
@@ -117,9 +118,36 @@ async def raise_decision(
     recommendation: str | None = None,
 ) -> dict:
     """Surface a product/intent call that is outside the spec's constraints + discretion.
-    Do not guess in code. Returns the open Decision; await it with wait_for_decision."""
+    Do not guess in code. Returns the Decision — check `status`:
+    - 'resolved' with resolver_type='agent': the Discretion Auditor handled it within spec
+      discretion; `chosen` carries the suggestion, `rationale` cites the discretion item.
+      No need to call wait_for_decision — act on the suggestion or refine it.
+    - 'open': awaiting the human; call wait_for_decision to block until resolved."""
+    store = _store(ctx)
     d = Decision(question=question, options=options, recommendation=recommendation)
-    saved = await _store(ctx).raise_decision(d, initiative_id)
+
+    # BD-13: run the Discretion Auditor synchronously before creating any attention item.
+    spec = await store.get_spec(initiative_id)
+    discretion_items = spec.discretion if spec else []
+    audit = await audit_decision(question, options, recommendation, discretion_items)
+
+    if audit.within_discretion and audit.discretion_item_id:
+        rationale = (
+            f"[Discretion Auditor] This falls within discretion item {audit.discretion_item_id}: "
+            f'"{audit.discretion_item_text}". {audit.reasoning}'
+        )
+        chosen = audit.suggestion or options[0]
+        saved = await store.agent_resolve_decision(
+            d,
+            initiative_id,
+            chosen=chosen,
+            rationale=rationale,
+            discretion_item_id=audit.discretion_item_id,
+        )
+        return saved.model_dump()
+
+    # Not within discretion — surface to the human dashboard as normal.
+    saved = await store.raise_decision(d, initiative_id)
     return saved.model_dump()
 
 

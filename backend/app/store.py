@@ -664,6 +664,49 @@ class SpecStore:
         )
         return d
 
+    async def agent_resolve_decision(
+        self,
+        d: Decision,
+        initiative_id: str,
+        *,
+        chosen: str,
+        rationale: str,
+        discretion_item_id: str,
+    ) -> Decision:
+        """BD-13 Discretion Auditor path: save a decision as agent-resolved without creating
+        an attention item or publishing to the human's steering rail.
+
+        The decision is durably persisted with resolver_type='agent' so it appears in the
+        decision log — distinguished from human-resolved — but never surfaces as an open
+        escalation waiting for human judgment."""
+        d.chosen = chosen
+        d.rationale = rationale
+        d.decided_by = f"auditor:{discretion_item_id}"
+        d.resolver_type = "agent"
+        d.status = "resolved"
+        d.resolved_at = _now()
+        await self.pg.execute(
+            """INSERT INTO decisions (id, initiative_id, payload, status, created_at, resolved_at)
+               VALUES ($1, $2, $3, 'resolved', now(), now())""",
+            d.id, initiative_id, d.model_dump_json(),
+        )
+        # embed the reasoning async + best-effort so it's retrievable via get_context
+        self._spawn(lambda: self.embed_decision(d.id))
+        return d
+
+    async def count_human_resolved_decisions(self, initiative_id: str) -> int:
+        """BD-13: count decisions resolved by a human (not the Discretion Auditor).
+        Used to compute the steering-ratio threshold (5+ → surface observation to Advisor)."""
+        rows = await self.pg.fetch(
+            "SELECT payload FROM decisions WHERE initiative_id = $1 AND status = 'resolved'",
+            initiative_id,
+        )
+        return sum(
+            1
+            for r in rows
+            if Decision.model_validate_json(r["payload"]).resolver_type != "agent"
+        )
+
     async def get_decision(self, decision_id: str) -> Decision | None:
         row = await self.pg.fetchrow(
             "SELECT payload FROM decisions WHERE id = $1", decision_id
@@ -710,6 +753,7 @@ class SpecStore:
         )
         d = Decision.model_validate_json(row["payload"])
         d.chosen, d.rationale, d.decided_by = chosen, rationale, decided_by
+        d.resolver_type = "human"  # BD-13: mark as human-resolved for steering-ratio count
         d.status, d.resolved_at = "resolved", _now()
 
         await self.pg.execute(

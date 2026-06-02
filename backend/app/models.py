@@ -179,6 +179,9 @@ class Decision(BaseModel):
     rationale: str | None = None
     raised_by: Literal["agent", "human"] = "agent"
     decided_by: str | None = None
+    # BD-13: "human" = resolved by the human on the steering rail;
+    # "agent" = intercepted by the Discretion Auditor as within-discretion.
+    resolver_type: Literal["human", "agent"] | None = None
     status: Literal["open", "resolved"] = "open"
     emitted_item_ids: list[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=_now)

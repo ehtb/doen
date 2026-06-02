@@ -183,11 +183,25 @@ class SubmitLearn(BaseModel):
     summary: str
     learnings: str | None = None
     outcome: dict | None = None
+    rationale_claims: list["RationaleClaim"] = []  # BD-13: human-confirmed cause-effect claims
+
+
+class RationaleClaim(BaseModel):
+    """BD-13: a single cause-effect rationale claim traceable to a specific decision or
+    criterion record. The Advisor drafts these; the human confirms/edits before memory write.
+    No claim may reference a source ID that is not present in the initiative's actual record."""
+
+    claim: str
+    source_id: str  # a decision ID (dec_…) or criterion ID (item_…)
+    source_type: Literal["decision", "criterion"]
 
 
 class OutcomeDraft(BaseModel):
-    """The Advisor's draft of a learn-stage outcome (0009 a8). Returned for the human to
-    correct and confirm — submitting it via SubmitLearn is what writes to memory."""
+    """BD-13 enriched learn-stage draft (0009 a8). Returned for the human to correct and
+    confirm — submitting via SubmitLearn is what writes to memory. `rationale_claims` carries
+    cause-effect claims each traceable to a specific decision or criterion record; the human
+    must confirm these before they enter long-term memory (constraint item_b3048b678ce4)."""
 
     summary: str
     learnings: str
+    rationale_claims: list[RationaleClaim] = []

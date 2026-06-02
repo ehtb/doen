@@ -227,6 +227,18 @@ PROJECT_ADVISOR_SCHEMA: dict[str, Any] = {
 _SHAPE_COMMAND = re.compile(r"^\s*shape\s+this(?:\s+initiative)?\s*:\s*(?P<desc>.+)", re.IGNORECASE | re.DOTALL)
 MESSAGE_WINDOW_NOTE = "(showing the most recent turns)"
 
+# BD-13: steering-ratio threshold — surface an observation when the human has resolved
+# this many decisions on one initiative (agent-resolved discretion calls excluded).
+STEERING_RATIO_THRESHOLD = 5
+
+STEERING_RATIO_NOTE = """STEERING-RATIO OBSERVATION (include this naturally in your reply, \
+do not skip): This initiative has had {count} decisions resolved by the human. That is at or \
+above the threshold that suggests the spec's discretion section may be too narrow — these \
+recurring judgment calls could have been pre-authorised. In your reply, mention this observation \
+in a natural, collegial way: acknowledge the count, note that it may indicate the discretion \
+section needs expansion, and offer to help draft new discretion items that would cover the \
+patterns you've seen. Keep it conversational — one short paragraph at most."""
+
 
 class AdvisorReply(BaseModel):
     text: str
@@ -237,11 +249,17 @@ class AdvisorReply(BaseModel):
         return {"proposals": [p.model_dump() for p in self.proposals]} if self.proposals else {}
 
 
-def build_system_prompt(state: str, *, in_project: bool = False) -> str:
+def build_system_prompt(
+    state: str, *, in_project: bool = False, steering_count: int = 0
+) -> str:
     """Identity + spec-contract discipline + the state's mode (+ project coherence when the
     initiative is in a project) + the output contract. The state line makes the same Advisor
     shift behaviour across the lifecycle (a5); the project block widens it to reason across
-    siblings (0010 a3/a5) — one Advisor, scoped (D2 -> a)."""
+    siblings (0010 a3/a5) — one Advisor, scoped (D2 -> a).
+
+    BD-13: when steering_count >= STEERING_RATIO_THRESHOLD, injects a note instructing the
+    Advisor to include a steering-ratio observation in its reply — delivered conversationally,
+    not as a dashboard item (constraint item_55058254c501)."""
     guidance = STATE_GUIDANCE.get(state, STATE_GUIDANCE["draft"])
     parts = [
         ADVISOR_BASE_PROMPT,
@@ -249,6 +267,8 @@ def build_system_prompt(state: str, *, in_project: bool = False) -> str:
     ]
     if in_project:
         parts.append(PROJECT_COHERENCE_PROMPT)
+    if steering_count >= STEERING_RATIO_THRESHOLD:
+        parts.append(STEERING_RATIO_NOTE.format(count=steering_count))
     parts.append(ADVISOR_OUTPUT_CONTRACT)
     return "\n\n".join(parts)
 
@@ -407,9 +427,15 @@ def _coerce_proposal(p: dict[str, Any]) -> Proposal:
     return prop
 
 
-async def _converse(ctx: ConversationContext, llm: StructuredLLM) -> AdvisorReply:
+async def _converse(
+    ctx: ConversationContext, llm: StructuredLLM, *, steering_count: int = 0
+) -> AdvisorReply:
     raw = await llm.complete_structured(
-        system=build_system_prompt(ctx.initiative.state, in_project=ctx.project is not None),
+        system=build_system_prompt(
+            ctx.initiative.state,
+            in_project=ctx.project is not None,
+            steering_count=steering_count,
+        ),
         user=build_user_message(ctx),
         schema=ADVISOR_SCHEMA,
         schema_name="advisor_turn",
@@ -490,7 +516,10 @@ async def advise(
     else:
         window = _window_with_pending(history, initiative_id=initiative_id, content=content)
         ctx = await assemble_context(store, initiative_id, messages=window)
-        reply = await _converse(ctx, llm)
+        # BD-13: check steering ratio — if the human has resolved >= 5 decisions on this
+        # initiative (agent-resolved discretion calls excluded), inject the observation.
+        steering_count = await store.count_human_resolved_decisions(initiative_id)
+        reply = await _converse(ctx, llm, steering_count=steering_count)
 
     return Message(
         initiative_id=initiative_id, role="advisor", content=reply.text, metadata=reply.metadata()

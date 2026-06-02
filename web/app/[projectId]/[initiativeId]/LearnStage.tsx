@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { BookOpen, Check, GitBranch, Loader2, Sparkles } from "lucide-react";
+import { BookOpen, Bot, Check, GitBranch, Loader2, Sparkles, Trash2, User } from "lucide-react";
 
-import type { AcceptanceCriterion, LearnReview } from "@/lib/types";
+import type { AcceptanceCriterion, Decision, LearnReview, OutcomeDraft, RationaleClaim } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -23,6 +23,100 @@ function buildDraft(intent: string, acceptance: AcceptanceCriterion[]): string {
   ].join("\n");
 }
 
+// BD-13: source type badge for rationale claims.
+function SourceBadge({ sourceType, sourceId }: { sourceType: string; sourceId: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded bg-card/80 border border-border px-1.5 py-0.5 font-mono text-[9.5px] tracking-wide text-ink-faint">
+      {sourceType} · {sourceId}
+    </span>
+  );
+}
+
+// BD-13: rationale claims — human confirms before memory write.
+function RationaleClaims({
+  claims,
+  onChange,
+}: {
+  claims: RationaleClaim[];
+  onChange: (claims: RationaleClaim[]) => void;
+}) {
+  if (claims.length === 0) return null;
+
+  return (
+    <div className="mt-4 rounded-lg border border-border bg-card/40 p-4">
+      <p className="font-mono text-[10px] tracking-widest text-ink-faint uppercase">
+        Cause-effect rationale
+        <span className="ml-1.5 normal-case font-normal tracking-normal text-ink-faint">
+          · each claim is traceable to a record entry — remove any you disagree with
+        </span>
+      </p>
+      <ul className="mt-2.5 space-y-2">
+        {claims.map((c, i) => (
+          <li key={i} className="flex items-start gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-[12.5px] leading-snug text-foreground">{c.claim}</p>
+              <div className="mt-0.5">
+                <SourceBadge sourceType={c.source_type} sourceId={c.source_id} />
+              </div>
+            </div>
+            <button
+              type="button"
+              title="Remove this claim"
+              onClick={() => onChange(claims.filter((_, j) => j !== i))}
+              className="mt-0.5 shrink-0 rounded p-0.5 text-ink-faint hover:text-proposed-foreground hover:bg-proposed/10 transition-colors"
+            >
+              <Trash2 className="size-3.5" />
+            </button>
+          </li>
+        ))}
+      </ul>
+      {claims.length > 0 && (
+        <p className="mt-2.5 font-mono text-[10px] tracking-wide text-ink-faint">
+          {claims.length} claim{claims.length !== 1 ? "s" : ""} — will be written to memory on confirm
+        </p>
+      )}
+    </div>
+  );
+}
+
+// BD-13: decision row with agent-resolved / human-resolved visual distinction.
+function DecisionRow({ d }: { d: Decision }) {
+  const isAgentResolved = d.resolver_type === "agent";
+  return (
+    <li className="text-[12.5px] leading-snug">
+      <span className="flex items-center gap-1.5 font-mono text-[10.5px] text-ink-faint">
+        <GitBranch className="size-3" />
+        {isAgentResolved ? (
+          <>
+            <Bot className="size-3 text-ink-faint" />
+            <span className="text-ink-faint">auto-resolved by discretion auditor</span>
+          </>
+        ) : (
+          <>
+            <User className="size-3 text-ink-faint" />
+            <span>human judgment</span>
+          </>
+        )}
+      </span>
+      <span className="mt-0.5 block font-mono text-[10.5px] text-ink-soft">{d.question}</span>
+      <span className="mt-0.5 block text-foreground">
+        <span className={isAgentResolved ? "text-ink-soft" : "text-confirmed-foreground"}>
+          {d.chosen}
+        </span>
+        {d.rationale && (
+          <span className="text-ink-soft">
+            {" "}
+            —{" "}
+            {isAgentResolved
+              ? d.rationale.replace(/^\[Discretion Auditor\] /, "")
+              : d.rationale}
+          </span>
+        )}
+      </span>
+    </li>
+  );
+}
+
 export default function LearnStage({
   initiativeId,
   intent,
@@ -36,6 +130,8 @@ export default function LearnStage({
   const [summary, setSummary] = useState(() => buildDraft(intent, acceptance));
   const [busy, setBusy] = useState(false);
   const [drafting, setDrafting] = useState(false);
+  // BD-13: rationale claims from the AI draft — human must confirm/remove before submit.
+  const [rationaleClaims, setRationaleClaims] = useState<RationaleClaim[]>([]);
   // The outcome form is the active surface only when a reflection is being written. After it's
   // captured the form closes; an explicit "Add another reflection" reopens it with blank fields
   // so a stray re-click can't duplicate the memory.
@@ -68,10 +164,12 @@ export default function LearnStage({
     try {
       const res = await fetch(`/api/initiatives/${initiativeId}/learn/draft`, { method: "POST" });
       if (!res.ok) throw new Error(`couldn't draft the outcome (${res.status})`);
-      const draft = await res.json();
+      const draft: OutcomeDraft = await res.json();
       // fold any draft "learnings" into the summary so the human corrects one body, not two
       const tail = draft.learnings ? `\n\nLearnings:\n${draft.learnings}` : "";
       setSummary((draft.summary ?? "") + tail);
+      // BD-13: populate rationale claims from the draft — human reviews before submit.
+      setRationaleClaims(draft.rationale_claims ?? []);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -86,13 +184,15 @@ export default function LearnStage({
       const res = await fetch(`/api/initiatives/${initiativeId}/learn`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ summary, learnings: null }),
+        // BD-13: include human-confirmed rationale claims in the submit body.
+        body: JSON.stringify({ summary, learnings: null, rationale_claims: rationaleClaims }),
       });
       if (!res.ok) throw new Error(`couldn't save the outcome (${res.status})`);
       await refreshReview(await res.json(), { revalidate: false });
       // close the form so the captured memory above reads as the resting state, and clear the
       // field so a stray re-open isn't pre-populated with the prior reflection.
       setSummary("");
+      setRationaleClaims([]);
       setShowForm(false);
       router.refresh(); // capturing learn may complete the initiative — reflect the inferred state
     } catch (e) {
@@ -104,6 +204,8 @@ export default function LearnStage({
 
   const decisions = review?.decisions ?? [];
   const memory = review?.memory ?? [];
+  const humanDecisions = decisions.filter((d) => d.resolver_type !== "agent");
+  const agentDecisions = decisions.filter((d) => d.resolver_type === "agent");
 
   return (
     <section id="learn" className="mt-10 animate-rise scroll-mt-6 border-t border-border pt-7 [animation-delay:360ms]">
@@ -125,24 +227,31 @@ export default function LearnStage({
         <p className="font-mono text-[10px] tracking-widest text-ink-faint uppercase">Intent</p>
         <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{intent}</p>
 
+        {/* BD-13: decisions split into human-resolved and agent-resolved groups */}
         <p className="mt-4 font-mono text-[10px] tracking-widest text-ink-faint uppercase">
           Decisions made
         </p>
         {decisions.length === 0 ? (
           <p className="mt-1 text-[13px] text-ink-faint">No decisions were escalated.</p>
         ) : (
-          <ul className="mt-1.5 space-y-2">
-            {decisions.map((d) => (
-              <li key={d.id} className="text-[12.5px] leading-snug">
-                <span className="flex items-center gap-1.5 font-mono text-[10.5px] text-ink-faint">
-                  <GitBranch className="size-3" /> {d.question}
-                </span>
-                <span className="mt-0.5 block text-foreground">
-                  <span className="text-confirmed-foreground">{d.chosen}</span>
-                  {d.rationale && <span className="text-ink-soft"> — {d.rationale}</span>}
-                </span>
-              </li>
+          <ul className="mt-1.5 space-y-3">
+            {humanDecisions.map((d) => (
+              <DecisionRow key={d.id} d={d} />
             ))}
+            {agentDecisions.length > 0 && (
+              <>
+                {humanDecisions.length > 0 && (
+                  <li className="border-t border-border/50 pt-2">
+                    <span className="flex items-center gap-1.5 font-mono text-[10px] tracking-widest text-ink-faint uppercase">
+                      <Bot className="size-3" /> auto-resolved by discretion auditor ({agentDecisions.length})
+                    </span>
+                  </li>
+                )}
+                {agentDecisions.map((d) => (
+                  <DecisionRow key={d.id} d={d} />
+                ))}
+              </>
+            )}
           </ul>
         )}
 
@@ -202,6 +311,10 @@ export default function LearnStage({
             }
             className="mt-2 bg-card text-[13px]"
           />
+
+          {/* BD-13: rationale claims — only shown after AI draft, human must confirm */}
+          <RationaleClaims claims={rationaleClaims} onChange={setRationaleClaims} />
+
           <div className="mt-3 flex items-center gap-3">
             <Button
               disabled={busy || !summary.trim()}
@@ -216,6 +329,7 @@ export default function LearnStage({
                 disabled={busy}
                 onClick={() => {
                   setSummary("");
+                  setRationaleClaims([]);
                   setShowForm(false);
                 }}
               >
@@ -242,6 +356,7 @@ export default function LearnStage({
             className="ml-auto h-8 px-3"
             onClick={() => {
               setSummary("");
+              setRationaleClaims([]);
               setShowForm(true);
             }}
           >
