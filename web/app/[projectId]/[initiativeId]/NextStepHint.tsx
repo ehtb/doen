@@ -15,7 +15,7 @@ Call get_spec("${initiativeId}") and get_conversation_summary("${initiativeId}")
 function buildPlanPrompt(initiativeId: string, title: string) {
   return `Plan the build for initiative ${initiativeId} — ${title}.
 
-Call get_spec("${initiativeId}") and get_conversation_summary("${initiativeId}") to ground yourself in the spec and its resolved decisions. Lay out a step-by-step build plan — one step per work unit — covering what you'll build, in what order, and which decisions you might need to raise. Do NOT start building yet. Present the plan for review first.`;
+Call get_spec("${initiativeId}") and get_conversation_summary("${initiativeId}") to ground yourself in the spec and its resolved decisions. Lay out a step-by-step build plan — one step per work unit — covering what you'll build, in what order, and which decisions you might need to raise. Do NOT start building yet. Present the plan for review first. When approved follow the spec-contract: claim units, build against confirmed items only, escalate decisions with raise_decision, submit_for_verification when done.`;
 }
 
 export default function NextStepHint() {
