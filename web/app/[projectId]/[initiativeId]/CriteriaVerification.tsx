@@ -1,7 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, ChevronDown, ChevronRight, RotateCcw, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  HelpCircle,
+  RotateCcw,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
 import type { AcceptanceCriterion } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -98,6 +107,36 @@ function CriterionVerificationCard({ criterion }: { criterion: AcceptanceCriteri
           <span className="mr-1 text-[10px] tracking-wide uppercase">feedback ·</span>
           {criterion.feedback}
         </p>
+      )}
+
+      {/* BD-14: Advisor preliminary verdict — shown before the human acts */}
+      {status === "evidence_submitted" && criterion.advisor_preliminary_verdict && (
+        <div className="mt-2.5 rounded border border-border/60 bg-muted/30 px-2.5 py-2">
+          <div className="flex items-center gap-1.5 font-mono text-[9.5px] tracking-widest text-ink-faint uppercase">
+            <Sparkles className="size-2.5" />
+            Advisor · preliminary
+            {criterion.advisor_preliminary_verdict === "pass" && (
+              <span className="ml-1 flex items-center gap-1 text-confirmed-foreground">
+                <Check className="size-2.5" /> pass
+              </span>
+            )}
+            {criterion.advisor_preliminary_verdict === "borderline" && (
+              <span className="ml-1 flex items-center gap-1 text-amber-600">
+                <AlertTriangle className="size-2.5" /> borderline
+              </span>
+            )}
+            {criterion.advisor_preliminary_verdict === "needs_your_eye" && (
+              <span className="ml-1 flex items-center gap-1 text-proposed-foreground">
+                <HelpCircle className="size-2.5" /> needs your eye
+              </span>
+            )}
+          </div>
+          {criterion.advisor_preliminary_notes && (
+            <p className="mt-1 font-mono text-[11.5px] leading-relaxed text-muted-foreground">
+              {criterion.advisor_preliminary_notes}
+            </p>
+          )}
+        </div>
       )}
 
       {/* Human verdict actions — shown when evidence exists and not yet verified */}
@@ -268,6 +307,20 @@ export default function CriteriaVerification({
               />
             </div>
           )}
+
+          {/* BD-14: verification synthesis — Advisor's summary of submitted evidence */}
+          {spec.verification_synthesis &&
+            criteria.some((c) => c.verification_status === "evidence_submitted") && (
+              <div className="mt-3 rounded-md border border-border bg-muted/40 px-3.5 py-3">
+                <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[9.5px] font-semibold tracking-widest text-ink-soft uppercase">
+                  <Sparkles className="size-2.5" />
+                  Advisor review
+                </div>
+                <pre className="whitespace-pre-wrap font-mono text-[11.5px] leading-relaxed text-foreground">
+                  {spec.verification_synthesis}
+                </pre>
+              </div>
+            )}
 
           <ul className="mt-4 space-y-2.5">
             {criteria.map((c) => (

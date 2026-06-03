@@ -2,14 +2,17 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Check,
   ChevronDown,
   ChevronRight,
   CircleCheck,
   CircleDot,
   Compass,
+  HelpCircle,
   Lock,
   Plus,
+  Sparkles,
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -63,15 +66,70 @@ const STATUS = {
   retired: { dot: "bg-retired", text: "text-retired" },
 } as const;
 
-function Cue({ status, provenance }: { status: string; provenance: string }) {
+// BD-14: classification badge config
+const CLASSIFICATION_CONFIG = {
+  confident: {
+    icon: Check,
+    label: "confident",
+    className: "text-confirmed-foreground bg-confirmed/10",
+  },
+  flagged: {
+    icon: AlertTriangle,
+    label: "flagged",
+    className: "text-amber-600 bg-amber-50 dark:bg-amber-950/40",
+  },
+  uncertain: {
+    icon: HelpCircle,
+    label: "uncertain",
+    className: "text-ink-soft bg-muted/60",
+  },
+} as const;
+
+function ClassificationBadge({
+  classification,
+  reason,
+}: {
+  classification: "confident" | "flagged" | "uncertain";
+  reason?: string | null;
+}) {
+  const cfg = CLASSIFICATION_CONFIG[classification];
+  const Icon = cfg.icon;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9.5px] tracking-wide uppercase",
+        cfg.className,
+      )}
+      title={reason ?? undefined}
+    >
+      <Icon className="size-2.5" />
+      {cfg.label}
+    </span>
+  );
+}
+
+function Cue({
+  status,
+  provenance,
+  classification,
+  classificationReason,
+}: {
+  status: string;
+  provenance: string;
+  classification?: "confident" | "flagged" | "uncertain" | null;
+  classificationReason?: string | null;
+}) {
   const s = STATUS[status as keyof typeof STATUS] ?? STATUS.proposed;
   return (
-    <div className="mb-2 flex items-center gap-2 font-mono text-[10px] tracking-widest uppercase">
+    <div className="mb-2 flex flex-wrap items-center gap-2 font-mono text-[10px] tracking-widest uppercase">
       <span className="flex items-center gap-1.5">
         <span className={cn("size-1.5 rounded-full", s.dot)} />
         <span className={s.text}>{status}</span>
       </span>
       <span className="text-ink-faint">· {PROV_LABEL[provenance] ?? provenance}</span>
+      {status === "proposed" && classification && (
+        <ClassificationBadge classification={classification} reason={classificationReason} />
+      )}
     </div>
   );
 }
@@ -89,6 +147,20 @@ export default function SpecDocument() {
   const [verifyDetail, setVerifyDetail] = useState("");
 
   const iid = spec.initiative_id;
+
+  // BD-14: batch approve confident items
+  const confidentProposed = [...spec.constraints, ...spec.discretion, ...spec.acceptance].filter(
+    (i) => i.status === "proposed" && i.advisor_classification === "confident",
+  );
+  const hasSynthesis =
+    !!spec.shaping_review_synthesis &&
+    [...spec.constraints, ...spec.discretion, ...spec.acceptance].some(
+      (i) => i.status === "proposed",
+    );
+
+  async function batchApproveConfident() {
+    await mutate(`/api/specs/${iid}/batch-approve-confident`, "POST", { version: spec.version });
+  }
 
   // Progressive disclosure (a1/a2): governing sections collapse by default; the guided flow keeps
   // exactly one open — the first with items still awaiting review — and advances to the next when
@@ -173,7 +245,12 @@ export default function SpecDocument() {
     const editing = editingId === it.id;
     return (
       <li key={it.id} className={cn("list-none", itemClasses(it.status))}>
-        <Cue status={it.status} provenance={it.provenance} />
+        <Cue
+          status={it.status}
+          provenance={it.provenance}
+          classification={it.advisor_classification}
+          classificationReason={it.advisor_classification_reason}
+        />
 
         {editing ? (
           <div className="space-y-2">
@@ -359,6 +436,34 @@ export default function SpecDocument() {
               style={{ width: `${reviewPct}%` }}
             />
           </div>
+        </div>
+      )}
+
+      {/* BD-14: shaping review synthesis — Advisor's classification summary + batch approve */}
+      {hasSynthesis && (
+        <div className="mb-5 rounded-md border border-border bg-muted/40 px-4 py-3.5">
+          <div className="mb-2 flex items-center gap-1.5 font-mono text-[10px] font-semibold tracking-widest text-ink-soft uppercase">
+            <Sparkles className="size-3" />
+            Advisor review
+          </div>
+          <pre className="whitespace-pre-wrap font-mono text-[12px] leading-relaxed text-foreground">
+            {spec.shaping_review_synthesis}
+          </pre>
+          {confidentProposed.length > 0 && (
+            <div className="mt-3 flex items-center gap-3">
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={batchApproveConfident}
+                className="h-7 bg-confirmed px-3 text-[11px] text-white shadow-sm hover:bg-confirmed/90"
+              >
+                <Check /> Approve {confidentProposed.length} confident item{confidentProposed.length !== 1 ? "s" : ""}
+              </Button>
+              <span className="font-mono text-[10px] text-ink-faint">
+                flagged and uncertain items stay open
+              </span>
+            </div>
+          )}
         </div>
       )}
 

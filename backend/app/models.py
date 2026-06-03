@@ -79,6 +79,10 @@ STATES: tuple[str, ...] = ("draft", "building", "learning", "complete")
 
 
 # ----------------------------------------------------------------------------- spec models
+AdvisorClassification = Literal["confident", "flagged", "uncertain"]
+AdvisorVerdict = Literal["pass", "needs_your_eye", "borderline"]
+
+
 class SpecItem(BaseModel):
     id: str = Field(default_factory=lambda: _id("item"))
     text: str
@@ -86,6 +90,9 @@ class SpecItem(BaseModel):
     status: ItemStatus = "proposed"  # proposed items do NOT govern agents
     created_at: str = Field(default_factory=_now)
     confirmed_at: str | None = None
+    # BD-14: Advisor self-review classification — set after shaping, before human confirmation.
+    advisor_classification: AdvisorClassification | None = None
+    advisor_classification_reason: str | None = None
 
 
 class Verify(BaseModel):
@@ -104,6 +111,9 @@ class AcceptanceCriterion(SpecItem):
     evidence: str | None = None
     verdict: CriterionVerdict | None = None
     feedback: str | None = None
+    # BD-14: Advisor preliminary verification verdict — set after evidence submission.
+    advisor_preliminary_verdict: AdvisorVerdict | None = None
+    advisor_preliminary_notes: str | None = None
 
 
 class Reference(BaseModel):
@@ -127,6 +137,9 @@ class Spec(BaseModel):
     acceptance: list[AcceptanceCriterion] = Field(default_factory=list)
     references: list[Reference] = Field(default_factory=list)
     memory_links: list[str] = Field(default_factory=list)
+    # BD-14: Advisor self-review outputs — set after shaping and after evidence submission.
+    shaping_review_synthesis: str | None = None
+    verification_synthesis: str | None = None
 
     def confirmed_constraints(self) -> list[SpecItem]:
         """What actually governs an agent — proposed items are not yet binding."""

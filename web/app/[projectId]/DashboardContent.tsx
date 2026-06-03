@@ -2,13 +2,25 @@
 
 import { useState, useMemo } from "react";
 import Link from "next/link";
-import { Search, CheckCircle2, ArrowRight, ChevronDown, ChevronUp } from "lucide-react";
+import {
+  Search,
+  CheckCircle2,
+  ArrowRight,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
 import useSWR from "swr";
 
 import { shortId } from "@/lib/utils";
 import { InitiativeCard } from "../InitiativeCard";
 import { DriftReportsPanel } from "./DriftReportsPanel";
-import type { DriftReport, Initiative, InitiativeAttention, Project, ProjectDashboard } from "@/lib/types";
+import type {
+  DriftReport,
+  Initiative,
+  InitiativeAttention,
+  Project,
+  ProjectDashboard,
+} from "@/lib/types";
 
 // Attention priority tiers (BD-7 constraint 2 / BD-12):
 // 1 = decisions to resolve (blocking the agent)
@@ -29,10 +41,17 @@ function attentionTier(
   return 4;
 }
 
-function matchesSearch(initiative: Initiative, sId: string, query: string): boolean {
+function matchesSearch(
+  initiative: Initiative,
+  sId: string,
+  query: string,
+): boolean {
   if (!query) return true;
   const q = query.toLowerCase();
-  return sId.toLowerCase().includes(q) || (initiative.title ?? "").toLowerCase().includes(q);
+  return (
+    sId.toLowerCase().includes(q) ||
+    (initiative.title ?? "").toLowerCase().includes(q)
+  );
 }
 
 function formatCompletionDate(dateStr: string): string {
@@ -87,7 +106,12 @@ export function DashboardContent({
   const { data } = useSWR<ProjectDashboard>(
     `/api/projects/${projectId}/dashboard`,
     fetcher,
-    { fallbackData: initialData, refreshInterval: 5000, revalidateOnFocus: false, dedupingInterval: 4000 },
+    {
+      fallbackData: initialData,
+      refreshInterval: 5000,
+      revalidateOnFocus: false,
+      dedupingInterval: 4000,
+    },
   );
   const { initiatives, attention, project, pending_drift_reports } = data!;
   const [search, setSearch] = useState("");
@@ -190,7 +214,7 @@ export function DashboardContent({
         </ul>
       ) : active.length === 0 && !query ? (
         <p className="mt-5 text-sm text-muted-foreground">
-          No active initiatives — describe one above and the Advisor shapes it.
+          No active initiatives — describe one and the Advisor shapes it.
         </p>
       ) : null}
 
@@ -212,7 +236,12 @@ export function DashboardContent({
           {showCompleted && (
             <ul className="mt-2 divide-y divide-border rounded-md border border-border">
               {completed.map((i) => (
-                <CompletedRow key={i.id} initiative={i} sId={sId(i)} linkHref={href(i)} />
+                <CompletedRow
+                  key={i.id}
+                  initiative={i}
+                  sId={sId(i)}
+                  linkHref={href(i)}
+                />
               ))}
             </ul>
           )}
@@ -227,7 +256,12 @@ export function DashboardContent({
           </p>
           <ul className="divide-y divide-border rounded-md border border-border">
             {filteredCompleted.map((i) => (
-              <CompletedRow key={i.id} initiative={i} sId={sId(i)} linkHref={href(i)} />
+              <CompletedRow
+                key={i.id}
+                initiative={i}
+                sId={sId(i)}
+                linkHref={href(i)}
+              />
             ))}
           </ul>
         </div>

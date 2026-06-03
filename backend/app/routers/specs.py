@@ -78,6 +78,14 @@ async def confirm_all(initiative_id: str, body: ConfirmAll, store: _Store) -> Sp
     )
 
 
+@router.post("/specs/{initiative_id}/batch-approve-confident")
+async def batch_approve_confident(
+    initiative_id: str, body: ItemVersion, store: _Store
+) -> Spec:
+    """BD-14: confirm all proposed items the Advisor classified as confident in one action."""
+    return await authoring.batch_approve_confident(store, initiative_id, version=body.version)
+
+
 @router.post("/specs/{initiative_id}/criteria/{criterion_id}/verdict")
 async def criterion_verdict(
     initiative_id: str, criterion_id: str, body: CriterionVerdictBody, store: _Store

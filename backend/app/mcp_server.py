@@ -33,6 +33,7 @@ from app.onboarding_config import DOCUMENTS
 from app.services.conversation import spec_enrichment, summarize_conversation
 from app.services.discretion_auditor import audit_decision
 from app.services.evaluation import DRIFT_EVIDENCE_RUBRIC, evaluate
+from app.services.review import generate_verification_synthesis
 from app.store import SpecStore
 
 
@@ -191,6 +192,9 @@ async def submit_evidence(
         spec = await _store(ctx).submit_evidence(initiative_id, criteria_results)
     except NotFoundError as e:
         raise ValueError(str(e))
+    # BD-14: generate Advisor preliminary verdicts after evidence is stored.
+    # Non-fatal — synthesis failure never blocks evidence submission.
+    await generate_verification_synthesis(_store(ctx), initiative_id)
     return {"version": spec.version, "updated_criteria": [r["criterion_id"] for r in criteria_results]}
 
 

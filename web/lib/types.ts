@@ -7,6 +7,9 @@ export interface SpecItem {
   status: string;
   created_at: string;
   confirmed_at?: string | null;
+  // BD-14: Advisor self-review classification — set after shaping, before human confirmation.
+  advisor_classification?: "confident" | "flagged" | "uncertain" | null;
+  advisor_classification_reason?: string | null;
 }
 
 export interface AcceptanceCriterion extends SpecItem {
@@ -16,6 +19,9 @@ export interface AcceptanceCriterion extends SpecItem {
   evidence?: string | null;
   verdict?: "approved" | "changes_requested" | null;
   feedback?: string | null;
+  // BD-14: Advisor preliminary verification verdict — set after evidence submission.
+  advisor_preliminary_verdict?: "pass" | "needs_your_eye" | "borderline" | null;
+  advisor_preliminary_notes?: string | null;
 }
 
 export interface Spec {
@@ -34,6 +40,9 @@ export interface Spec {
   // by ref via /projects/{id}/specs/{ref}. Resolved from the project prefix + per-project seq.
   short_id?: string;
   short_slug?: string;
+  // BD-14: Advisor self-review outputs — set after shaping and after evidence submission.
+  shaping_review_synthesis?: string | null;
+  verification_synthesis?: string | null;
 }
 
 // The parent entity listed on the dashboard (backend Initiative, store.py).

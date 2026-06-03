@@ -19,13 +19,14 @@ from app.config import MAX_INJECTED_MEMORY_CRITERIA, MEMORY_VERIFICATION_THRESHO
 from app.exceptions import NotFoundError, ValidationError
 from app.models import (
     AcceptanceCriterion,
+    AdvisorClassification,
     ContextHit,
     Initiative,
     Spec,
     SpecItem,
     Verify,
 )
-from app.providers.llm import LLMError, StructuredLLM, get_shaping_llm
+from app.providers.llm import LLMError, StructuredLLM, get_review_llm, get_shaping_llm
 from app.store import SpecStore
 
 SHAPING_SYSTEM_PROMPT = """You are shaping a Doen spec — the living-spec artifact that governs \
@@ -112,6 +113,182 @@ SPEC_SCHEMA: dict[str, Any] = {
     },
     "required": ["title", "intent", "constraints", "discretion", "acceptance"],
 }
+
+
+# --- BD-14: Advisor self-review classification pass ----------------------------------
+
+CLASSIFICATION_SYSTEM_PROMPT = """You are the Doen Advisor performing a self-review \
+classification pass on newly proposed spec items.
+
+Classify each item into exactly one category:
+- **confident**: Clear, well-formed, and consistent with prior organisational memory. \
+No obvious concerns — safe to batch-approve.
+- **flagged**: Has a specific, nameable concern — conflicts with a prior initiative's \
+decision, vague wording that creates executor ambiguity, or an acceptance criterion that \
+cannot be practically verified. Name the exact concern.
+- **uncertain**: A genuine judgment call where you cannot determine the right answer from \
+the context provided — a design or intent decision that needs the human's input. Explain \
+what the judgment is.
+
+HARD RULE: If an item's text contradicts or conflicts with any "HIGH-RELEVANCE PRIOR" \
+listed below (score ≥ 0.75), you MUST classify it as "flagged", not "confident" or \
+"uncertain". Cite the memory entry by its initiative_id.
+
+Acceptance criteria notes:
+- A "test" criterion must describe a concrete automated check; if it doesn't → flag it.
+- "human_judgment" criteria are inherently verifiable — fine as-is.
+
+Return every item. Provide a reason for every item — brief for confident ("looks good"), \
+specific for flagged or uncertain."""
+
+CLASSIFICATION_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "classifications": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "item_id": {"type": "string"},
+                    "category": {
+                        "type": "string",
+                        "enum": ["confident", "flagged", "uncertain"],
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": (
+                            "Brief for confident. Specific concern for flagged — "
+                            "cite the memory initiative_id when it conflicts with a prior. "
+                            "The judgment question for uncertain."
+                        ),
+                    },
+                },
+                "required": ["item_id", "category", "reason"],
+            },
+        }
+    },
+    "required": ["classifications"],
+}
+
+
+def _build_classification_user_message(
+    proposed: list[tuple[str, SpecItem]],
+    high_score_hits: list[ContextHit],
+) -> str:
+    parts: list[str] = []
+    if high_score_hits:
+        priors = "\n".join(
+            f"  - [{h.initiative_id}] ({h.type}, score {h.score:.2f}): {h.text}"
+            for h in high_score_hits
+        )
+        parts.append(
+            "HIGH-RELEVANCE PRIORS (score ≥ 0.75) — any item that contradicts one of "
+            "these MUST be classified as 'flagged':\n" + priors
+        )
+    item_lines: list[str] = []
+    for section, item in proposed:
+        if isinstance(item, AcceptanceCriterion):
+            item_lines.append(
+                f"  item_id={item.id}  section={section}\n"
+                f"    text: {item.text}\n"
+                f"    verify: [{item.verify.kind}] {item.verify.detail}"
+            )
+        else:
+            item_lines.append(
+                f"  item_id={item.id}  section={section}\n"
+                f"    text: {item.text}"
+            )
+    parts.append("Items to classify:\n" + "\n".join(item_lines))
+    return "\n\n".join(parts)
+
+
+def _build_shaping_synthesis(
+    confident: list[SpecItem],
+    flagged: list[tuple[SpecItem, str]],
+    uncertain: list[tuple[SpecItem, str]],
+) -> str:
+    lines: list[str] = []
+    n = len(confident)
+    if n:
+        noun = "item" if n == 1 else "items"
+        pronoun = "it" if n == 1 else "them"
+        lines.append(f"{n} {noun} look solid — approve {pronoun} as a batch?")
+    if flagged:
+        m = len(flagged)
+        lines.append(f"\n{m} flagged:")
+        for item, reason in flagged:
+            snippet = item.text[:80].rstrip() + ("…" if len(item.text) > 80 else "")
+            lines.append(f"  • \"{snippet}\" — {reason}")
+    if uncertain:
+        k = len(uncertain)
+        verb = "needs" if k == 1 else "need"
+        lines.append(f"\n{k} {verb} your call:")
+        for item, reason in uncertain:
+            snippet = item.text[:80].rstrip() + ("…" if len(item.text) > 80 else "")
+            lines.append(f"  • \"{snippet}\" — {reason}")
+    return "\n".join(lines)
+
+
+async def _classify_and_annotate(
+    spec: Spec,
+    context_used: list[ContextHit],
+    *,
+    llm: StructuredLLM | None = None,
+) -> None:
+    """BD-14: run the Advisor's self-review classification pass on all proposed items.
+
+    Mutates each proposed item's advisor_classification / advisor_classification_reason
+    in-place and sets spec.shaping_review_synthesis. Failures are non-fatal — items are
+    saved without classification data rather than blocking shaping."""
+    proposed: list[tuple[str, SpecItem]] = []
+    for section in ("constraints", "discretion", "acceptance"):
+        for item in getattr(spec, section):
+            if item.status == "proposed":
+                proposed.append((section, item))
+    if not proposed:
+        return
+
+    llm = llm or get_review_llm()
+    high_score_hits = [h for h in context_used if h.score >= MEMORY_VERIFICATION_THRESHOLD]
+
+    try:
+        raw = await llm.complete_structured(
+            system=CLASSIFICATION_SYSTEM_PROMPT,
+            user=_build_classification_user_message(proposed, high_score_hits),
+            schema=CLASSIFICATION_SCHEMA,
+            schema_name="classify_items",
+        )
+    except Exception:
+        return  # degraded but not broken — items saved without classification
+
+    cls_map: dict[str, dict] = {
+        c["item_id"]: c for c in raw.get("classifications", [])
+    }
+
+    confident: list[SpecItem] = []
+    flagged: list[tuple[SpecItem, str]] = []
+    uncertain: list[tuple[SpecItem, str]] = []
+
+    for _section, item in proposed:
+        cls = cls_map.get(item.id)
+        if cls is None:
+            # LLM omitted this item — default to uncertain
+            item.advisor_classification = "uncertain"
+            item.advisor_classification_reason = "Not classified — treat as uncertain"
+            uncertain.append((item, item.advisor_classification_reason))
+            continue
+        category: AdvisorClassification = cls.get("category", "uncertain")
+        reason: str = cls.get("reason", "")
+        item.advisor_classification = category
+        item.advisor_classification_reason = reason
+        if category == "confident":
+            confident.append(item)
+        elif category == "flagged":
+            flagged.append((item, reason))
+        else:
+            uncertain.append((item, reason))
+
+    spec.shaping_review_synthesis = _build_shaping_synthesis(confident, flagged, uncertain)
 
 
 class ProposedUnit(BaseModel):
@@ -256,10 +433,19 @@ async def shape_spec(
     return _parse(raw, hits)
 
 
-async def shape_and_persist(store: SpecStore, initiative_id: str, description: str) -> Spec:
+async def shape_and_persist(
+    store: SpecStore,
+    initiative_id: str,
+    description: str,
+    *,
+    classification_llm: StructuredLLM | None = None,
+) -> Spec:
     """Shape a spec from a description, then persist the proposal: refresh the proposed
     items (keeping confirmed ones), and set intent only when it's still blank. A failed LLM
-    call raises LLMError before the save, so the spec is left untouched (constraint 7)."""
+    call raises LLMError before the save, so the spec is left untouched (constraint 7).
+
+    BD-14: runs the Advisor's self-review classification pass automatically after shaping.
+    Classification failure is non-fatal — items are saved without classification data."""
     if not description.strip():
         raise ValidationError("a description is required to shape a spec")
     spec = await store.get_spec(initiative_id)
@@ -273,6 +459,8 @@ async def shape_and_persist(store: SpecStore, initiative_id: str, description: s
     spec.acceptance = [i for i in spec.acceptance if i.status != "proposed"] + result.acceptance
     if not spec.intent.strip() and result.intent:
         spec.intent = result.intent
+    # BD-14: classify proposed items; non-fatal if the LLM call fails
+    await _classify_and_annotate(spec, result.context_used, llm=classification_llm)
     return await store.save_spec(spec)
 
 
@@ -289,12 +477,15 @@ async def create_from_description(
     description: str,
     *,
     llm: StructuredLLM | None = None,
+    classification_llm: StructuredLLM | None = None,
 ) -> Initiative:
     """Creation IS shaping (0011 C2): from a free-text description, the Advisor drafts the whole
     spec — title, intent, constraints, discretion, acceptance — all ai_proposed for the human to
     confirm item by item. Shapes first (a failed LLM call -> 502 leaves nothing created), then
     scaffolds the initiative under its generated title and persists the proposed items.
-    Every initiative belongs to a project (no orphan specs) — an unknown project_id -> 404."""
+    Every initiative belongs to a project (no orphan specs) — an unknown project_id -> 404.
+
+    BD-14: runs the Advisor's self-review classification pass automatically after shaping."""
     if not description.strip():
         raise ValidationError("a description is required to start an initiative")
     if await store.get_project(project_id) is None:
@@ -310,5 +501,7 @@ async def create_from_description(
     spec.constraints = result.constraints
     spec.discretion = result.discretion
     spec.acceptance = result.acceptance
+    # BD-14: classify proposed items; non-fatal if the LLM call fails
+    await _classify_and_annotate(spec, result.context_used, llm=classification_llm)
     await store.save_spec(spec)
     return init

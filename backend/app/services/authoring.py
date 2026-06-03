@@ -165,3 +165,26 @@ async def confirm_all(
     if confirmed == 0:
         return spec  # nothing proposed; don't bump the version for a no-op
     return await store.save_spec(spec)
+
+
+async def batch_approve_confident(
+    store: SpecStore, initiative_id: str, *, version: int
+) -> Spec:
+    """BD-14: confirm all proposed items the Advisor classified as confident in one action.
+
+    Produces the same persisted state as individually confirming each item — same provenance
+    update (ai_proposed → ai_confirmed_by_human), same confirmed_at timestamp, same version
+    bump via save_spec. Flagged and uncertain items are left untouched."""
+    spec = await _load_at(store, initiative_id, version)
+    confirmed = 0
+    for sec in _SECTIONS:
+        for it in getattr(spec, sec):
+            if it.status == "proposed" and it.advisor_classification == "confident":
+                it.status = "confirmed"
+                it.confirmed_at = _now()
+                if it.provenance == "ai_proposed":
+                    it.provenance = "ai_confirmed_by_human"
+                confirmed += 1
+    if confirmed == 0:
+        return spec  # nothing confident and proposed; no-op, don't bump version
+    return await store.save_spec(spec)

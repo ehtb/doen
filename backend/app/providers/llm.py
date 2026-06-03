@@ -107,3 +107,10 @@ def get_advisor_llm() -> StructuredLLM:
     second AI integration path (0009 constraint 2). Kept as its own factory so the Advisor
     has a clean monkeypatch seam in tests, mirroring get_shaping_llm."""
     return OpenAICompatibleLLM()
+
+
+def get_review_llm() -> StructuredLLM:
+    """The Advisor's self-review pass (BD-14): shaping classification and verification
+    synthesis. Separate factory from get_shaping_llm so each can be patched independently
+    in tests without affecting the other."""
+    return OpenAICompatibleLLM()
