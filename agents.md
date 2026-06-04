@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-06-02 sync-docs audit -->
+<!-- last-reviewed: 2026-06-04 sync-docs audit -->
 # Doen — Project Context for Claude Code
 
 > Read this first, every session. It is the constitution. A spec governs the work;
@@ -124,10 +124,10 @@ doen/
 │   ├── schemas.py            # API request/response models — separate from the domain
 │   ├── exceptions.py         # domain errors + the HTTP error-mapping handlers
 │   ├── store.py              # SpecStore — the only place that touches Postgres / Redis
-│   ├── services/             # business logic: shaping, authoring, conversation, learn, decisions
+│   ├── services/             # business logic: advisor, authoring, conversation, decisions, discretion_auditor, evaluation, learn, review, shaping
 │   ├── providers/            # external integrations: llm, embeddings (pluggable)
 │   ├── routers/              # thin APIRouters per domain (specs, decisions, projects,
-│   │                         #   initiatives, conversation, learn, shaping)
+│   │                         #   initiatives, conversation, learn, shaping, drift_reports)
 │   ├── mcp_server.py         # the executor-facing MCP tools (stdio)
 │   └── migrate.py / backfill_embeddings.py   # ops
 └── web/app/…                 # Next.js: project dashboards, living-spec page, conversation rail
@@ -135,6 +135,7 @@ doen/
 
 ### Data model — what is a table, what is JSONB
 - `initiatives` — one row per initiative. Has `project_id` (required), `seq` (per-project),
+  `initiative_type` ("engineering" or "research", set at creation, immutable — BD-15),
   `archived_at` / `archived_reason` (soft delete).
 - `specs` — one JSONB document per initiative. Holds intent, constraints, discretion,
   acceptance, references, memory_links.

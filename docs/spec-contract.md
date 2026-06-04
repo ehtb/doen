@@ -36,6 +36,8 @@ interface SpecItem {
   status: ItemStatus;           // proposed items do NOT govern agents; only confirmed ones do
   created_at: string;
   confirmed_at?: string;
+  advisor_classification?: "confident" | "flagged" | "uncertain";  // BD-14: Advisor shaping-review classification
+  advisor_classification_reason?: string;
 }
 
 interface AcceptanceCriterion extends SpecItem {
@@ -48,6 +50,8 @@ interface AcceptanceCriterion extends SpecItem {
   evidence?:  string;           // the executor's submitted evidence text
   verdict?:   "approved" | "changes_requested";  // human's verdict on the evidence
   feedback?:  string;           // human's feedback when requesting changes
+  advisor_preliminary_verdict?: "pass" | "needs_your_eye" | "borderline";  // BD-14: Advisor pre-verdict
+  advisor_preliminary_notes?: string;
 }
 
 interface Reference {
@@ -70,6 +74,9 @@ interface Spec {
   acceptance: AcceptanceCriterion[];
   references: Reference[];
   memory_links: string[];       // prior initiatives surfaced during shaping
+  initiative_type: "engineering" | "research";  // BD-15: set at creation, mirrored from initiative
+  shaping_review_synthesis?: string;            // BD-14: Advisor self-review output after shaping
+  verification_synthesis?: string;              // BD-14: Advisor synthesis after evidence submission
 }
 ```
 
@@ -93,10 +100,6 @@ interface Decision {
 }
 ```
 
-Work units are the decomposition — also a separate table:
-
-```typescript
-```
 
 Surrounding objects an executor will also encounter:
 
@@ -107,6 +110,7 @@ interface Initiative {
   seq: number;                  // per-project sequence number
   title: string;
   state: State;                 // mirrors the spec's derived state
+  initiative_type: "engineering" | "research";  // BD-15: set at creation, immutable
   archived_at?: string;
   archived_reason?: string;
   created_at: string;
@@ -119,6 +123,7 @@ interface Project {
   prefix: string;               // short handle derived from name (drives short IDs)
   intent: string;
   onboarding_dismissed: boolean; // BD-9: server-side dismissal of onboarding
+  archived: boolean;             // BD-11: true when project is soft-archived
   created_at: string;
   updated_at: string;
 }
@@ -146,7 +151,7 @@ This is the Implement ↔ Verify loop. Eleven tools, in `backend/app/mcp_server.
 
 ```typescript
 get_spec(initiative_id): Spec & {
-  initiative: { id, title, state },
+  initiative: { id, title, state, type },  // type = BD-15: "engineering" | "research"
   advisor_summary: null,   // always null since spec uvama (conversations are browser-local)
   unit_context: {},        // always empty — work units were dropped in BD-5
 }
@@ -231,6 +236,7 @@ interface ContextHit {
   score: number;
   scope: "project" | "global" | null;
   has_pending_drift: boolean; // BD-12: Warns if the memory is already being audited
+  initiative_type?: string;   // BD-15: "engineering" | "research" for memory hits; null for decision hits
 }
 ```
 
@@ -258,7 +264,7 @@ On `complete` (every criterion verified + learn record written), Doen embeds the
 | `decisions` | append-only judgment log | `decision_embedding` — retrieved by `get_context` |
 | _(conversation history)_ | NOT a Postgres table — browser-local in IndexedDB since spec uvama; the backend is stateless about messages | — |
 | `projects` | id, name, prefix, intent | — |
-| `memory` | completed-initiative summaries + outcomes | embedding for cross-initiative retrieval |
+| `memory` | completed-initiative summaries + outcomes; `initiative_type` column (BD-15) tracks source initiative type | embedding for cross-initiative retrieval |
 
 Spec items (constraints, discretion, acceptance) live inside the `specs` JSONB document — they are *not* a separate table. The spec is read whole. Drift detection runs by embedding confirmed constraints and scoring new scope against them; the same mechanism is reused for the Advisor's contextual briefings.
 

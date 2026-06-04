@@ -27,9 +27,17 @@ escalate everything else that is a product or intent call.** Constraints and dis
 partition the decision space the human has already reasoned about; anything outside both, if it
 bears on intent, is an escalation — never a silent choice in code.
 
+**The Discretion Auditor narrows the escalation surface (BD-13).** Before any decision reaches
+the human, `raise_decision` runs an LLM-as-judge auditor that checks whether the question falls
+within an existing discretion item. If it does, the auditor resolves it automatically
+(`resolver_type: "agent"`) citing the matching item — no human attention required. Only
+decisions genuinely outside granted discretion surface as attention items on the human's rail.
+The human's attention stays on novel calls, not repetitions of latitude already granted.
+
 What AI is good at here: shaping (drafting, surfacing missing pieces, asking the right
-questions), slicing a first draft, drift detection, narrative/status generation, and
-remembering across initiatives. What stays human, always: deciding what's worth doing
+questions), slicing a first draft, drift detection, narrative/status generation, remembering
+across initiatives, and preliminary verification — classifying spec items during shaping and
+generating a synthesis before the human inspects evidence (BD-14). What stays human, always: deciding what's worth doing
 (bets/prioritisation), setting appetite, judging quality and outcome, and authoring the spec's
 intent. These are not gaps to close later — they are the product.
 
@@ -89,8 +97,8 @@ output of a pure derivation is a cache, not a source of truth.
 ## The Advisor — one voice, two rails
 
 A single Advisor service (`backend/app/services/conversation.py`) is the conversation partner
-on both the initiative rail and the project rail. It knows the spec, the units in flight, the
-memory across past initiatives, and the conversation it's a turn within. It is *not* a chat
+on both the initiative rail and the project rail. It knows the spec, the verification state of
+each acceptance criterion, the memory across past initiatives, and the conversation it's a turn within. It is *not* a chat
 assistant — it is the voice that walks the human through shaping, guided review, kickoff,
 verification, and learning. Two rails, one voice, so the human builds one mental model of who
 they're talking to.
@@ -135,6 +143,23 @@ Advisor has something to surface, the surfacing is calm, not modal.
 UI — the two-surface model, provenance cues, the constraint/discretion boundary, the escalation
 card. It is a reference, **not production code**, and explicitly **out of scope for 0001** (whose
 UI is intentionally crude and read-only). Realise it later, in its own UI spec.
+
+## Initiative types
+
+Two types — **engineering** and **research** — set at creation and immutable (BD-15). Most
+initiatives are engineering: a spec, criteria, and a deliverable. Research initiatives are for
+open-ended exploration where the output is insight rather than code; the Advisor reasons about
+criteria differently for each. The type is first-class, not a tag, because the verification
+model differs: engineering criteria have clear pass/fail signals; research criteria typically
+require `human_judgment`.
+
+## Prompt quality and evaluation
+
+A promptfoo harness (BD-16) covers the prompts that govern agentic and verification decisions
+— shaping, Advisor classification, Discretion Auditor, drift-evidence scoring. Treat prompt
+regressions the same as code regressions: any change to a governed prompt should come with a
+promptfoo test run. The convention: prompts have eval harnesses, eval harnesses ship alongside
+prompt changes, and drift in prompt behaviour is a bug.
 
 ## Deliberately rejected — do not re-propose
 
