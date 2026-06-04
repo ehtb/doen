@@ -143,24 +143,28 @@ classification pass on newly proposed spec items.
 
 Classify each item into exactly one category:
 - **confident**: Clear, well-formed, and consistent with prior organisational memory. \
-No obvious concerns — safe to batch-approve.
-- **flagged**: Has a specific, nameable concern — conflicts with a prior initiative's \
-decision, vague wording that creates executor ambiguity, or an acceptance criterion that \
-cannot be practically verified. Name the exact concern.
-- **uncertain**: A genuine judgment call where you cannot determine the right answer from \
-the context provided — a design or intent decision that needs the human's input. Explain \
-what the judgment is.
+Safe to batch-approve.
+- **flagged**: Has a specific, nameable concern — conflicts with a prior decision, \
+vague wording that creates executor ambiguity, or an acceptance criterion that \
+cannot be practically verified.
+- **uncertain**: A genuine design or intent decision the human must make.
 
 HARD RULE: If an item's text contradicts or conflicts with any "HIGH-RELEVANCE PRIOR" \
-listed below (score ≥ 0.75), you MUST classify it as "flagged", not "confident" or \
-"uncertain". Cite the memory entry by its initiative_id.
+listed below (score ≥ 0.75), you MUST classify it as "flagged".
 
-Acceptance criteria notes:
+Acceptance criteria rules:
 - A "test" criterion must describe a concrete automated check; if it doesn't → flag it.
 - "human_judgment" criteria are inherently verifiable — fine as-is.
 
-Return every item. Provide a reason for every item — brief for confident ("looks good"), \
-specific for flagged or uncertain."""
+Reason rules (apply to every item):
+- One sentence, ≤ 15 words.
+- Never reference any item by its ID (item_XXXX), whether from this batch or elsewhere. When two items in the same batch conflict, quote a short phrase from the other item's text instead of citing its ID.
+- **confident**: one short phrase ("looks good", "clear and verifiable").
+- **flagged**: state the specific concern. If a prior initiative is relevant, \
+cite it by initiative ID (e.g., BD-12), not by item ID.
+- **uncertain**: phrase as a direct question (e.g., "Reuse BD-12 or add a new tool?").
+
+Return every item."""
 
 CLASSIFICATION_SCHEMA: dict = {
     "type": "object",
@@ -178,9 +182,10 @@ CLASSIFICATION_SCHEMA: dict = {
                     "reason": {
                         "type": "string",
                         "description": (
-                            "Brief for confident. Specific concern for flagged — "
-                            "cite the memory initiative_id when it conflicts with a prior. "
-                            "The judgment question for uncertain."
+                            "One sentence, ≤ 15 words. No internal item IDs. "
+                            "Confident: short phrase. "
+                            "Flagged: the specific concern; cite initiative ID if relevant. "
+                            "Uncertain: a direct question ending in '?'."
                         ),
                     },
                 },

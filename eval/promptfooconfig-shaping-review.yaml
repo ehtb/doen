@@ -1,0 +1,221 @@
+# BD-14: Shaping Review Classification — Promptfoo Evaluation Harness
+#
+# Validates three properties of the classification prompt:
+#   1. Reasons never reference internal item IDs (item_XXXX)
+#   2. Reasons are short (≤ 15 words)
+#   3. Uncertain reasons are phrased as direct questions
+#
+# Usage (from repo root):
+#   LLM_API_KEY=<your-key> npx promptfoo eval --config eval/promptfooconfig-shaping-review.yaml
+#
+# The production prompt (CLASSIFICATION_SYSTEM_PROMPT in backend/app/services/shaping.py)
+# enforces JSON via tool calling. This harness appends a JSON instruction to the system
+# prompt so assertions can parse the output without tool calling support.
+
+description: "BD-14 — shaping review classification prompt"
+
+prompts:
+  - id: shaping-classification
+    label: "shaping-classification"
+    raw: |
+      [
+        {
+          "role": "system",
+          "content": "You are the Doen Advisor performing a self-review classification pass on newly proposed spec items.\n\nClassify each item into exactly one category:\n- **confident**: Clear, well-formed, and consistent with prior organisational memory. Safe to batch-approve.\n- **flagged**: Has a specific, nameable concern — conflicts with a prior decision, vague wording that creates executor ambiguity, or an acceptance criterion that cannot be practically verified.\n- **uncertain**: A genuine design or intent decision the human must make.\n\nHARD RULE: If an item's text contradicts or conflicts with any \"HIGH-RELEVANCE PRIOR\" listed below (score ≥ 0.75), you MUST classify it as \"flagged\".\n\nAcceptance criteria rules:\n- A \"test\" criterion must describe a concrete automated check; if it doesn't → flag it.\n- \"human_judgment\" criteria are inherently verifiable — fine as-is.\n\nReason rules (apply to every item):\n- One sentence, ≤ 15 words.\n- Never reference any item by its ID (item_XXXX), whether from this batch or elsewhere. When two items in the same batch conflict, quote a short phrase from the other item's text instead of citing its ID.\n- **confident**: one short phrase (\"looks good\", \"clear and verifiable\").\n- **flagged**: state the specific concern. If a prior initiative is relevant, cite it by initiative ID (e.g., BD-12), not by item ID.\n- **uncertain**: phrase as a direct question (e.g., \"Reuse BD-12 or add a new tool?\").\n\nReturn every item.\n\nRespond with JSON only, no prose. Format: {\"classifications\": [{\"item_id\": \"...\", \"category\": \"...\", \"reason\": \"...\"}]}"
+        },
+        {
+          "role": "user",
+          "content": "{{input}}"
+        }
+      ]
+
+providers:
+  - id: openai:chat:anthropic/claude-sonnet-4.6
+    config:
+      apiBaseUrl: https://openrouter.ai/api/v1
+      apiKeyEnvar: LLM_API_KEY
+      max_tokens: 1024
+
+# Each test checks the three target properties:
+#   1. No item_XXXX IDs leak into reasons
+#   2. Reasons are short
+#   3. Uncertain → direct question; flagged → cites initiative ID not item ID
+
+tests:
+  # ── Case 1: Conflict with a prior initiative ──────────────────────────────────────────
+  # An item that contradicts BD-12's decision to use report_memory_drift exclusively.
+  # Expected: flagged, cites "BD-12" in the reason, does NOT cite the other item's ID.
+  - description: "Conflict with prior — cites initiative ID, not internal item IDs"
+    vars:
+      input: |
+        HIGH-RELEVANCE PRIORS (score ≥ 0.75) — any item that contradicts one of these MUST be classified as 'flagged':
+          - [BD-12] (decision, score 0.88): report_memory_drift is the designated tool for detecting memory discrepancies; adding parallel drift detection pathways was explicitly rejected to avoid tool proliferation.
+
+        Items to classify:
+          item_id=item_aaa111  section=acceptance
+            text: A dedicated /drift/detect endpoint runs nightly and reports discrepancies independently of report_memory_drift.
+            verify: [behavior] Run the endpoint, confirm a drift report appears in the admin panel.
+
+          item_id=item_bbb222  section=constraints
+            text: All initiative state transitions are derived by _recompute_state(); executors never set state directly.
+    assert:
+      # item_aaa111 must be flagged due to BD-12 conflict
+      - type: javascript
+        value: |
+          try {
+            const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+            const parsed = JSON.parse(j);
+            const cls = parsed.classifications?.find(c => c.item_id === 'item_aaa111');
+            return cls?.category === 'flagged';
+          } catch (e) { return false; }
+      # Reason must cite "BD-12", not an internal item ID
+      - type: javascript
+        value: |
+          try {
+            const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+            const parsed = JSON.parse(j);
+            const cls = parsed.classifications?.find(c => c.item_id === 'item_aaa111');
+            const reason = cls?.reason ?? '';
+            return reason.includes('BD-12') && !/item_[a-z0-9]{6,}/.test(reason);
+          } catch (e) { return false; }
+      # item_bbb222 should be confident (clean constraint, no conflict)
+      - type: javascript
+        value: |
+          try {
+            const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+            const parsed = JSON.parse(j);
+            const cls = parsed.classifications?.find(c => c.item_id === 'item_bbb222');
+            return cls?.category === 'confident';
+          } catch (e) { return false; }
+
+  # ── Case 2: Manual "test" criterion ───────────────────────────────────────────────────
+  # A criterion labelled [test] but described as a manual inspection step.
+  # Expected: flagged, reason is short (< 100 chars total).
+  - description: "Manual criterion labelled as test — flagged with short reason"
+    vars:
+      input: |
+        Items to classify:
+          item_id=item_ccc333  section=acceptance
+            text: The Advisor surfaces heuristics alongside decision records in get_context responses.
+            verify: [test] Manually inspect the memory display surface to confirm heuristics appear alongside decisions.
+    assert:
+      # Must be flagged — "manually inspect" is not a concrete automated check
+      - type: javascript
+        value: |
+          try {
+            const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+            const parsed = JSON.parse(j);
+            const cls = parsed.classifications?.find(c => c.item_id === 'item_ccc333');
+            return cls?.category === 'flagged';
+          } catch (e) { return false; }
+      # Reason must be short — ≤ 15 words
+      - type: javascript
+        value: |
+          try {
+            const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+            const parsed = JSON.parse(j);
+            const cls = parsed.classifications?.find(c => c.item_id === 'item_ccc333');
+            const words = (cls?.reason ?? '').trim().split(/\s+/).length;
+            return words <= 15;
+          } catch (e) { return false; }
+
+  # ── Case 3: Design fork — uncertain, phrased as a question ────────────────────────────
+  # A discretion item leaving a two-way architectural choice to the executor.
+  # Expected: uncertain, reason ends with '?'.
+  - description: "Design fork — uncertain reason must be a direct question"
+    vars:
+      input: |
+        Items to classify:
+          item_id=item_ddd444  section=discretion
+            text: The mechanism for detecting drift against agents.md entries may reuse report_memory_drift (BD-12) or introduce a dedicated pathway — the executor decides.
+    assert:
+      # Must be uncertain
+      - type: javascript
+        value: |
+          try {
+            const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+            const parsed = JSON.parse(j);
+            const cls = parsed.classifications?.find(c => c.item_id === 'item_ddd444');
+            return cls?.category === 'uncertain';
+          } catch (e) { return false; }
+      # Reason must be a direct question (ends with '?')
+      - type: javascript
+        value: |
+          try {
+            const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+            const parsed = JSON.parse(j);
+            const cls = parsed.classifications?.find(c => c.item_id === 'item_ddd444');
+            return (cls?.reason ?? '').trim().endsWith('?');
+          } catch (e) { return false; }
+      # No internal item IDs
+      - type: javascript
+        value: |
+          try {
+            const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+            const parsed = JSON.parse(j);
+            const cls = parsed.classifications?.find(c => c.item_id === 'item_ddd444');
+            return !/item_[a-z0-9]{6,}/.test(cls?.reason ?? '');
+          } catch (e) { return false; }
+
+  # ── Case 4: Clear, well-formed item — confident with brief reason ─────────────────────
+  # A clean constraint with no ambiguity. Expected: confident, ≤ 5 words.
+  - description: "Clean constraint — confident with a very short reason"
+    vars:
+      input: |
+        Items to classify:
+          item_id=item_eee555  section=constraints
+            text: No estimation anywhere — no story points, no hours, no velocity. Ever.
+    assert:
+      # Must be confident
+      - type: javascript
+        value: |
+          try {
+            const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+            const parsed = JSON.parse(j);
+            const cls = parsed.classifications?.find(c => c.item_id === 'item_eee555');
+            return cls?.category === 'confident';
+          } catch (e) { return false; }
+      # Confident reason should be brief — ≤ 8 words
+      - type: javascript
+        value: |
+          try {
+            const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+            const parsed = JSON.parse(j);
+            const cls = parsed.classifications?.find(c => c.item_id === 'item_eee555');
+            const words = (cls?.reason ?? '').trim().split(/\s+/).length;
+            return words <= 8;
+          } catch (e) { return false; }
+
+  # ── Case 5: Cross-item conflict — no item IDs in reasons ──────────────────────────────
+  # Two items in the same spec that conflict with each other (additive vs breaking change).
+  # The model must not cite the other item by its internal ID; plain language only.
+  - description: "Cross-spec-item conflict — reasons use plain language, no item_XXXX IDs"
+    vars:
+      input: |
+        Items to classify:
+          item_id=item_3f8a12c94b01  section=acceptance
+            text: get_context must return heuristics alongside decision records in its response payload.
+            verify: [test] Call get_context with a matching query and assert the response contains both heuristic and narrative entries.
+
+          item_id=item_7d2e60f5a3bc  section=constraints
+            text: The get_context response payload is frozen — no new top-level fields may be added without a migration spec.
+    assert:
+      # Neither reason may contain any item_XXXX ID (hex or alphanumeric)
+      - type: javascript
+        value: |
+          try {
+            const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+            const parsed = JSON.parse(j);
+            for (const cls of parsed.classifications ?? []) {
+              if (/item_[a-z0-9]{6,}/.test(cls.reason ?? '')) return false;
+            }
+            return true;
+          } catch (e) { return false; }
+      # At least one item must be flagged (the conflicting pair)
+      - type: javascript
+        value: |
+          try {
+            const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+            const parsed = JSON.parse(j);
+            return (parsed.classifications ?? []).some(c => c.category === 'flagged');
+          } catch (e) { return false; }
