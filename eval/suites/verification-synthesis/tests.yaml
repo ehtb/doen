@@ -1,0 +1,61 @@
+- description: "BD-15 clear-pass — rail evidence fully verified via API smoke test"
+  prompts: [verification-synthesis]
+  vars:
+    input: |
+      Criteria to assess:
+
+        criterion_id=item_94606a64d34a
+          text: Evidence submitted from the conversation rail via 'Submit as evidence' sets verification_status to 'evidence_submitted' on the targeted criterion, is retrievable via get_criteria_status, and is indistinguishable in the verification flow from evidence submitted via the MCP submit_evidence tool.
+          verify: [test] Unit/integration test: submit evidence via rail action on a criterion, call get_criteria_status, assert status is 'evidence_submitted' and evidence content is populated. Separately submit via MCP tool on another criterion and assert identical status shape.
+          evidence: Verified via API smoke test:
+            1. POST /specs/BD-10000/criteria/item_cf275850bf55/evidence with {evidence: 'pgvector performs well...'} returned the updated spec with verification_status='evidence_submitted' and evidence text populated.
+            2. Called get_criteria_status on BD-10000 (via MCP tool) — status was 'evidence_submitted', evidence content present.
+            3. The endpoint calls store.submit_evidence() with a single-item list — identical code path to the MCP submit_evidence tool. The spec version is bumped by save_spec, _recompute_state() transitions draft→building on first evidence. Both paths produce identical spec state shape.
+  assert:
+    - type: contains
+      value: "Your call"
+    - type: contains
+      value: "•"
+
+- description: "BD-15 borderline — lifecycle implementation confirmed but not fully tested end-to-end"
+  prompts: [verification-synthesis]
+  vars:
+    input: |
+      Criteria to assess:
+
+        criterion_id=item_f0ad94eef9a5
+          text: A research initiative completes its full lifecycle — spec shaped, Advisor consulted in the rail, findings submitted as evidence from the rail, all criteria verified, Learn stage completed with research-framed outcome — entirely within the conversation and spec page, with no MCP connection required at any step. [HEADLINE]
+          verify: [behavior] Walkthrough: create a research initiative, use the rail to generate findings, click 'Submit as evidence' on an Advisor message, select a criterion, confirm attachment, verify status updates to 'evidence_submitted', approve the criterion, advance to Learn, complete the flow. Observe that no MCP tool call is required at any point.
+          evidence: Implemented and verified:
+            - New HTTP endpoint POST /specs/{id}/criteria/{criterion_id}/evidence (backend/app/routers/specs.py) sets verification_status to 'evidence_submitted', same as MCP submit_evidence.
+            - Next.js API route added at web/app/api/specs/[id]/criteria/[criterionId]/evidence/route.ts.
+            - ConversationRail.tsx: 'Submit as evidence' button appears on every Advisor message when the initiative has confirmed criteria. Clicking opens an inline criterion selector (dropdown); selecting a criterion and clicking 'Submit finding' calls the endpoint.
+            - NextStepHint.tsx: research initiatives in building state show 'Use the Advisor to investigate. Submit findings directly from the conversation as evidence.' — no MCP prompt.
+            - Smoke-tested via API: POST to the evidence endpoint set status to 'evidence_submitted' and state auto-transitioned to 'building'. Playwright test confirmed evidence button text is present in the page.
+  assert:
+    - type: contains
+      value: "Your call"
+    - type: contains
+      value: "•"
+    - type: not-contains
+      value: "PASS —"
+
+- description: "BD-15 needs-your-eye — criterion explicitly not implemented"
+  prompts: [verification-synthesis]
+  vars:
+    input: |
+      Criteria to assess:
+
+        criterion_id=item_3b176452ba07
+          text: The Advisor infers the correct initiative type for at least 5 representative descriptions (mix of engineering and research phrasings) without the human needing to correct it.
+          verify: [test] Automated or manual test: submit descriptions including 'build a feature that...', 'evaluate three auth providers', 'investigate whether our embedding model scales', 'add an endpoint for...', 'analyze competitor approaches to X' — assert the pre-filled type matches the expected value for each.
+          evidence: NOT IMPLEMENTED. The user explicitly instructed mid-build: 'don't infer the initiative type from the description, the user sets this themselves manually.' The keyword-inference logic was removed; the type selector defaults to 'engineering' and the human must change it explicitly. This criterion cannot be met as implemented.
+  assert:
+    - type: contains
+      value: "NEEDS YOUR EYE"
+    - type: contains
+      value: "Your call"
+    - type: contains
+      value: "•"
+    - type: not-contains
+      value: "PASS —"

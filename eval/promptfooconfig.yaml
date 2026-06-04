@@ -1,141 +1,28 @@
-# BD-16: Verification Prompt Clarity — Promptfoo Evaluation Harness
+# Master Promptfoo Configuration
 #
-# Ground-truth cases drawn from real BD-15 verification data (initiative BD-15:
-# "Initiative Types: Engineering and Research"). Each case is a real criterion +
-# evidence pair with a known expected verdict.
+# This file consolidates all evaluation suites for the Doen project.
+# Separation is maintained by organizing prompts and tests into suites/.
 #
-# Usage (from repo root):
+# Usage:
 #   LLM_API_KEY=<your-key> npx promptfoo eval --config eval/promptfooconfig.yaml
-#   npx promptfoo eval --config eval/promptfooconfig.yaml --verbose
-#
-# Uses the same LLM_API_KEY + OpenRouter setup as the backend (backend/.env).
-# To use a different provider, change the provider id and apiBaseUrl below.
-# Prompt: inlined in the `raw:` block below (required for JSON array format).
-# Readable reference: eval/prompts/verification-synthesis.yaml
-# Production source:  VERIFICATION_SYNTHESIS_SYSTEM_PROMPT in
-#                     backend/app/services/review.py
 
-description: "BD-16 — verification prompt clarity"
+description: "Doen LLM Evaluation Harness"
 
 prompts:
   - id: verification-synthesis
-    label: "verification-synthesis"
-    raw: |
-      [
-        {
-          "role": "system",
-          "content": "You are the Doen Advisor performing a preliminary verification review on submitted evidence.\n\nFor each criterion with submitted evidence, give a structured assessment using the exact format below. Use plain text — no markdown. Keep it short: your job is to reduce what the human must read, not add to it.\n\nVerdict options:\n  PASS           — evidence clearly satisfies the criterion\n  NEEDS YOUR EYE — evidence is incomplete, raises a concern, or misses something\n  BORDERLINE     — ambiguous; either verdict is defensible; human must decide\n\nFormat for PASS:\n  PASS — [one-line reason]\n  [optional: one bullet caveat starting with •, only if worth flagging]\n\nFormat for NEEDS YOUR EYE:\n  NEEDS YOUR EYE — [one-line summary of the gap]\n\n  Missing or concerning:\n  • [specific gap — cite the criterion wording or evidence directly]\n  • [additional gap if any]\n\n  Your call: [one sentence framing what the human must decide]\n\nFormat for BORDERLINE:\n  BORDERLINE — [one-line summary of the ambiguity]\n\n  Supports passing:\n  • [what the evidence does cover]\n\n  Creates doubt:\n  • [what the evidence doesn't cover or contradicts]\n\n  Your call: [one sentence framing the judgment]\n\nRules:\n• Use the exact verdict words above — they are rendered as labels.\n• Don't re-quote the full criterion text — refer by key phrase only.\n• Be specific: name the gap, the test that's missing, or the claim that's unverified.\n\nReturn every criterion you were given."
-        },
-        {
-          "role": "user",
-          "content": "{{input}}"
-        }
-      ]
+    label: verification-synthesis
+    raw: "file://suites/verification-synthesis/prompt.yaml"
+  - id: shaping-review
+    label: shaping-review
+    raw: "file://suites/shaping-review/prompt.yaml"
 
 providers:
-  # Uses the same OpenRouter + LLM_API_KEY setup as the backend.
-  # Swap apiBaseUrl and apiKeyEnvar if you prefer a different provider.
   - id: openai:chat:anthropic/claude-sonnet-4.6
     config:
       apiBaseUrl: https://openrouter.ai/api/v1
       apiKeyEnvar: LLM_API_KEY
       max_tokens: 1024
 
-# Each test checks:
-#  1. A verdict label appears at the start (PASS / NEEDS YOUR EYE / BORDERLINE)
-#     — the machine-readable signal required by BD-16 criterion item_75afe00e5b7e
-#  2. Output is concise (< 700 chars per criterion) — not a wall of prose
-#  3. For flagged/ambiguous cases: bullet structure and human guidance are present
-#
-# Test 3 (not-implemented) is the only case with a fixed expected verdict —
-# "criterion not implemented" is unambiguous. Tests 1 and 2 accept any reasonable
-# verdict label because the evidence is genuinely ambiguous between models.
-#
-# Cases sourced from BD-15 (BD-15: "Initiative Types: Engineering and Research").
-
 tests:
-  # ── Case 1: Clear pass ────────────────────────────────────────────────────
-  # BD-15 criterion item_94606a64d34a — "Evidence submitted from the rail sets
-  # verification_status to evidence_submitted..."
-  # The evidence provided three concrete assertions, all verified via API smoke
-  # test and shared code path analysis. Original advisor verdict: pass.
-  - description: "BD-15 clear-pass — rail evidence fully verified via API smoke test"
-    vars:
-      input: |
-        Criteria to assess:
-
-          criterion_id=item_94606a64d34a
-            text: Evidence submitted from the conversation rail via 'Submit as evidence' sets verification_status to 'evidence_submitted' on the targeted criterion, is retrievable via get_criteria_status, and is indistinguishable in the verification flow from evidence submitted via the MCP submit_evidence tool.
-            verify: [test] Unit/integration test: submit evidence via rail action on a criterion, call get_criteria_status, assert status is 'evidence_submitted' and evidence content is populated. Separately submit via MCP tool on another criterion and assert identical status shape.
-            evidence: Verified via API smoke test:
-              1. POST /specs/BD-10000/criteria/item_cf275850bf55/evidence with {evidence: 'pgvector performs well...'} returned the updated spec with verification_status='evidence_submitted' and evidence text populated.
-              2. Called get_criteria_status on BD-10000 (via MCP tool) — status was 'evidence_submitted', evidence content present.
-              3. The endpoint calls store.submit_evidence() with a single-item list — identical code path to the MCP submit_evidence tool. The spec version is bumped by save_spec, _recompute_state() transitions draft→building on first evidence. Both paths produce identical spec state shape.
-    assert:
-      # Verdict signal must be present — the output must contain a clearly labelled verdict
-      # (machine-readable signal required by BD-16 criterion item_75afe00e5b7e).
-      # This case's evidence is genuinely ambiguous so we accept BORDERLINE or NEEDS YOUR EYE.
-      - type: contains
-        value: "Your call"
-      # Structured guidance required for any non-trivial verdict
-      - type: contains
-        value: "•"
-
-  # ── Case 2: Borderline ────────────────────────────────────────────────────
-  # BD-15 criterion item_f0ad94eef9a5 — HEADLINE criterion about the full
-  # research lifecycle. Implementation was solid but the Playwright test only
-  # confirmed button text, not the full end-to-end walkthrough.
-  # Original advisor verdict: borderline.
-  - description: "BD-15 borderline — lifecycle implementation confirmed but not fully tested end-to-end"
-    vars:
-      input: |
-        Criteria to assess:
-
-          criterion_id=item_f0ad94eef9a5
-            text: A research initiative completes its full lifecycle — spec shaped, Advisor consulted in the rail, findings submitted as evidence from the rail, all criteria verified, Learn stage completed with research-framed outcome — entirely within the conversation and spec page, with no MCP connection required at any step. [HEADLINE]
-            verify: [behavior] Walkthrough: create a research initiative, use the rail to generate findings, click 'Submit as evidence' on an Advisor message, select a criterion, confirm attachment, verify status updates to 'evidence_submitted', approve the criterion, advance to Learn, complete the flow. Observe that no MCP tool call is required at any point.
-            evidence: Implemented and verified:
-              - New HTTP endpoint POST /specs/{id}/criteria/{criterion_id}/evidence (backend/app/routers/specs.py) sets verification_status to 'evidence_submitted', same as MCP submit_evidence.
-              - Next.js API route added at web/app/api/specs/[id]/criteria/[criterionId]/evidence/route.ts.
-              - ConversationRail.tsx: 'Submit as evidence' button appears on every Advisor message when the initiative has confirmed criteria. Clicking opens an inline criterion selector (dropdown); selecting a criterion and clicking 'Submit finding' calls the endpoint.
-              - NextStepHint.tsx: research initiatives in building state show 'Use the Advisor to investigate. Submit findings directly from the conversation as evidence.' — no MCP prompt.
-              - Smoke-tested via API: POST to the evidence endpoint set status to 'evidence_submitted' and state auto-transitioned to 'building'. Playwright test confirmed evidence button text is present in the page.
-    assert:
-      # Verdict signal — this case is ambiguous so BORDERLINE or NEEDS YOUR EYE both valid
-      - type: contains
-        value: "Your call"
-      # Must cite specific missing lifecycle steps
-      - type: contains
-        value: "•"
-      # Must not mislabel as a clear pass
-      - type: not-contains
-        value: "PASS —"
-
-  # ── Case 3: Needs your eye ────────────────────────────────────────────────
-  # BD-15 criterion item_3b176452ba07 — "The Advisor infers the correct type
-  # for at least 5 representative descriptions." The executor explicitly stated
-  # it was NOT IMPLEMENTED because the user removed the inference feature.
-  # Original advisor verdict: needs_your_eye.
-  - description: "BD-15 needs-your-eye — criterion explicitly not implemented"
-    vars:
-      input: |
-        Criteria to assess:
-
-          criterion_id=item_3b176452ba07
-            text: The Advisor infers the correct initiative type for at least 5 representative descriptions (mix of engineering and research phrasings) without the human needing to correct it.
-            verify: [test] Automated or manual test: submit descriptions including 'build a feature that...', 'evaluate three auth providers', 'investigate whether our embedding model scales', 'add an endpoint for...', 'analyze competitor approaches to X' — assert the pre-filled type matches the expected value for each.
-            evidence: NOT IMPLEMENTED. The user explicitly instructed mid-build: 'don't infer the initiative type from the description, the user sets this themselves manually.' The keyword-inference logic was removed; the type selector defaults to 'engineering' and the human must change it explicitly. This criterion cannot be met as implemented.
-    assert:
-      # Must flag as NEEDS YOUR EYE — "NOT IMPLEMENTED" is unambiguous; no reasonable
-      # model should call this PASS or BORDERLINE
-      - type: contains
-        value: "NEEDS YOUR EYE"
-      # Must direct the human to a decision
-      - type: contains
-        value: "Your call"
-      # Must be structured with bullets
-      - type: contains
-        value: "•"
-      # Must not misclassify as passing
-      - type: not-contains
-        value: "PASS —"
+  - suites/verification-synthesis/tests.yaml
+  - suites/shaping-review/tests.yaml

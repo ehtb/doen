@@ -1,15 +1,3 @@
-# Readable reference copy of the verification synthesis prompt.
-#
-# The promptfoo test suite (eval/promptfooconfig.yaml) inlines this prompt
-# in its `raw:` block. If you change the prompt, update BOTH places:
-#   1. This file (the readable reference)
-#   2. The `raw:` block in eval/promptfooconfig.yaml
-#   3. VERIFICATION_SYNTHESIS_SYSTEM_PROMPT in backend/app/services/review.py
-#      (the production version used by the application)
-#
-# This file mirrors the system message only; the user message is:
-#   "{{input}}" — the formatted criteria text from _build_verification_user_message().
-
 - role: system
   content: |
     You are the Doen Advisor performing a preliminary verification review on submitted evidence.
