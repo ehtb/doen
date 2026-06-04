@@ -208,6 +208,7 @@ export default function CriteriaVerification({
   initiativeId: string;
 }) {
   const { spec, mutate, busy } = useSpec();
+  const isResearch = spec.initiative_type === "research";
   const criteria = spec.acceptance;
   const isPostBuild = spec.state === "learning" || spec.state === "complete";
   const [collapsed, setCollapsed] = useState(isPostBuild);
@@ -298,6 +299,13 @@ export default function CriteriaVerification({
 
       {!collapsed && (
         <>
+          {/* BD-15: empty evidence state for research */}
+          {withEvidence === 0 && isResearch && (
+            <p className="mt-3 font-mono text-[11px] text-ink-faint">
+              No findings yet — submit findings from the conversation rail to track progress.
+            </p>
+          )}
+
           {/* Progress bar */}
           {withEvidence > 0 && (
             <div className="mt-2 h-1 overflow-hidden rounded-full bg-border/70">

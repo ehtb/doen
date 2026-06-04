@@ -30,6 +30,8 @@ from app.models import (
 class CreateInitiative(BaseModel):
     title: str
     project_id: str  # every initiative belongs to a project (0010, no orphan specs)
+    # BD-15: user-selected type; defaults to engineering when omitted.
+    initiative_type: Literal["engineering", "research"] = "engineering"
 
 
 # --- projects (0010) -----------------------------------------------------------------
@@ -123,9 +125,16 @@ class CriterionVerdictBody(BaseModel):
     feedback: str | None = None
 
 
+# BD-15: evidence submission from the conversation rail (no MCP required for research).
+class SubmitCriterionEvidence(BaseModel):
+    evidence: str
+
+
 # --- AI-assisted shaping -------------------------------------------------------------
 class ShapeWithAI(BaseModel):
     description: str
+    # BD-15: user-selected type sent with the creation request.
+    initiative_type: Literal["engineering", "research"] = "engineering"
 
 
 # --- conversation rail ---------------------------------------------------------------

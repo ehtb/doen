@@ -14,24 +14,27 @@ team learns compounds.
 
 ## What Doen is
 
-Doen is a living spec that governs an executor. You shape an initiative's spec — its intent,
-the constraints an agent must not cross, the latitude it has, and how the work will be judged.
-An executor (Claude Code, over MCP) reads that spec, builds against it, claims work units, and
-escalates the calls it can't make. You verify the result against your acceptance criteria — not
-by reading diffs. When it's done, the initiative's decisions and outcomes become memory the
+Doen is a living spec that governs an agent or an investigation. You choose a framing:
+- **Engineering** initiatives drive an executor (Claude Code, over MCP) to build code against
+  your constraints.
+- **Research** initiatives guide a collaborative investigation with the Advisor to reach a
+  well-reasoned conclusion or finding.
+
+In both, you shape the spec — its intent, the constraints that must not be crossed, the latitude
+available, and how the work will be judged. You verify the result against your criteria — not
+by reading diffs or raw notes. When it's done, the decisions and outcomes become memory the
 next initiative can draw on — with continuous drift detection to keep that memory in sync with
 the evolving codebase.
 
 ## The loop
 
-**shape → decompose → implement → verify → learn**
+**shape → investigate/implement → verify → learn**
 
-- **shape** — describe a feature; the AI drafts a full spec, informed by past initiatives, that
-  you correct and confirm.
-- **decompose** — break it into tracked, independently verifiable work units.
-- **implement** — an executor claims units over MCP, builds, reports progress, and raises the
-  decisions it shouldn't make alone.
-- **verify** — you judge each unit against its acceptance criteria; only you issue a verdict.
+- **shape** — describe a feature or question; the AI drafts a full spec, informed by past
+  initiatives, that you correct and confirm.
+- **investigate/implement** — for engineering, an executor claims units over MCP and builds;
+  for research, you work with the Advisor to gather findings and resolve the question.
+- **verify** — you judge findings or code against the criteria; only you issue a verdict.
 - **learn** — capture the outcome; it's embedded into memory and retrieved to inform what comes
   next. Drift detection (BD-12) ensures this memory stays accurate even as the codebase
   changes.

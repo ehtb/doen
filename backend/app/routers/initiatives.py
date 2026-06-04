@@ -30,7 +30,9 @@ async def create_initiative(
     Every initiative belongs to a project (0010) — an unknown project_id -> 404."""
     if not body.title.strip():
         raise ValidationError("initiative title must not be empty")
-    return await store.create_initiative(body.title, body.project_id)
+    return await store.create_initiative(
+        body.title, body.project_id, initiative_type=body.initiative_type
+    )
 
 
 @router.post("/initiatives/{initiative_id}/start-building", status_code=200)

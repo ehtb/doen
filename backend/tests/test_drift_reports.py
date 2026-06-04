@@ -188,7 +188,7 @@ def test_resolve_drift_report_dismissed_leaves_memory(make_initiative: Callable[
     resolved, mem_row, original_summary = _run(go())
     assert resolved.status == "dismissed"
     assert mem_row["summary"] == original_summary, "dismissed should not update memory"
-    assert mem_row["last_verified_at"] is None, "dismissed should not stamp last_verified_at"
+    assert mem_row["last_verified_at"] is not None, "dismissed should stamp last_verified_at to prevent re-audit"
 
 
 # --- MCP tool surface: new tools registered ----------------------------------------

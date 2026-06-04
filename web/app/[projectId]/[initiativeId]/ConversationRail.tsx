@@ -10,8 +10,10 @@ import {
   RotateCcw,
   Sparkles,
   User,
+  ClipboardList,
+  X,
 } from "lucide-react";
-import type { AdvisorReply, Message, Proposal, Spec } from "@/lib/types";
+import type { AcceptanceCriterion, AdvisorReply, Message, Proposal, Spec } from "@/lib/types";
 import {
   appendMessage,
   clearConversation,
@@ -83,7 +85,16 @@ export default function ConversationRail({
   // id. Transient session state — never written to IndexedDB — so the 'Create initiative from this'
   // action shows only for a real synthesis and is gone on reload or reset.
   const [synthesis, setSynthesis] = useState<Record<string, string>>({});
+  // BD-15: evidence submission from the rail. `evidenceOpen` tracks which message's panel is open;
+  // `evidenceBusy` is the criterion id currently being submitted (only one at a time).
+  const [evidenceOpen, setEvidenceOpen] = useState<string | null>(null);
+  const [evidenceBusy, setEvidenceBusy] = useState<string | null>(null);
   const threadEnd = useRef<HTMLDivElement>(null);
+
+  // The confirmed criteria available for evidence submission (initiative rail only).
+  const confirmedCriteria: AcceptanceCriterion[] = specCtx?.spec.acceptance.filter(
+    (c) => c.status === "confirmed"
+  ) ?? [];
 
   const load = useCallback(async () => {
     try {
@@ -191,6 +202,31 @@ export default function ConversationRail({
       setInput(content);
     } finally {
       setSending(false);
+    }
+  }
+
+  // BD-15: submit an Advisor message's content as evidence against a criterion.
+  async function submitEvidence(criterionId: string, content: string) {
+    if (!specId || evidenceBusy) return;
+    setEvidenceBusy(criterionId);
+    setError(null);
+    try {
+      const evidence = content.length > 2000 ? content.slice(0, 2000) : content;
+      const res = await fetch(
+        `/api/specs/${specId}/criteria/${criterionId}/evidence`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ evidence }),
+        },
+      );
+      if (!res.ok) throw new Error(`couldn't submit evidence (${res.status})`);
+      setEvidenceOpen(null);
+      await specCtx?.refreshSpec();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setEvidenceBusy(null);
     }
   }
 
@@ -343,6 +379,14 @@ export default function ConversationRail({
             onDismiss={dismiss}
             synthesis={synthesis[m.id]}
             onCreateInitiative={() => stashInitiativeDraft(scopeId, synthesis[m.id])}
+            // BD-15: evidence submission from the rail
+            criteria={confirmedCriteria}
+            evidenceOpen={evidenceOpen === m.id}
+            evidenceBusy={evidenceBusy}
+            onToggleEvidence={() =>
+              setEvidenceOpen((cur) => (cur === m.id ? null : m.id))
+            }
+            onSubmitEvidence={submitEvidence}
           />
         ))}
 
@@ -389,6 +433,11 @@ function MessageRow({
   onDismiss,
   synthesis,
   onCreateInitiative,
+  criteria,
+  evidenceOpen,
+  evidenceBusy,
+  onToggleEvidence,
+  onSubmitEvidence,
 }: {
   message: Message;
   canAccept: boolean;
@@ -396,13 +445,26 @@ function MessageRow({
   cardBusy: string | null;
   onAccept: (messageId: string, idx: number, p: Proposal) => void;
   onDismiss: (messageId: string, idx: number) => void;
-  // BD-1 u3: when this advisor turn synthesised a proposed initiative (project rail only), its
-  // description — rendering a 'Create initiative from this' action that hands off to the form.
   synthesis?: string;
   onCreateInitiative?: () => void;
+  // BD-15: evidence submission from the rail
+  criteria?: AcceptanceCriterion[];
+  evidenceOpen?: boolean;
+  evidenceBusy?: string | null;
+  onToggleEvidence?: () => void;
+  onSubmitEvidence?: (criterionId: string, content: string) => void;
 }) {
+  const [selectedCriterion, setSelectedCriterion] = useState<string>("");
   const isHuman = message.role === "human";
   const proposals = canAccept ? (message.metadata?.proposals ?? []) : [];
+  const canSubmitEvidence =
+    !isHuman && !!canAccept && !!criteria?.length && !!onSubmitEvidence;
+
+  // Reset criterion selection whenever the panel is closed so a re-open starts fresh.
+  useEffect(() => {
+    if (!evidenceOpen) setSelectedCriterion("");
+  }, [evidenceOpen]);
+
   return (
     <div>
       <div
@@ -413,6 +475,20 @@ function MessageRow({
       >
         {isHuman ? <User className="size-3" /> : <Sparkles className="size-3" />}
         {isHuman ? "you" : "advisor"}
+        {/* BD-15: submit-as-evidence toggle on Advisor messages */}
+        {canSubmitEvidence && (
+          <button
+            type="button"
+            onClick={onToggleEvidence}
+            className={cn(
+              "ml-auto flex items-center gap-1 font-mono text-[9px] tracking-wide uppercase transition-colors",
+              evidenceOpen ? "text-primary" : "text-rail-muted hover:text-rail-foreground",
+            )}
+            title="Submit as evidence"
+          >
+            <ClipboardList className="size-2.5" /> evidence
+          </button>
+        )}
       </div>
       <p
         className={cn(
@@ -422,6 +498,54 @@ function MessageRow({
       >
         {message.content}
       </p>
+
+      {/* BD-15: criterion selector panel — shown when evidence toggle is open */}
+      {canSubmitEvidence && evidenceOpen && criteria && (
+        <div className="mt-2.5 rounded-xl border border-primary/30 bg-rail-card p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="font-mono text-[9.5px] tracking-[0.1em] text-primary uppercase">
+              submit as evidence
+            </span>
+            <button
+              type="button"
+              onClick={onToggleEvidence}
+              className="text-rail-muted hover:text-rail-foreground"
+            >
+              <X className="size-3" />
+            </button>
+          </div>
+          <select
+            value={selectedCriterion}
+            onChange={(e) => setSelectedCriterion(e.target.value)}
+            className="mb-2.5 w-full rounded-md border border-rail-border bg-background px-2.5 py-1.5 font-mono text-[11px] text-foreground focus:outline-none"
+          >
+            <option value="">— pick a criterion —</option>
+            {criteria.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.text.length > 80 ? `${c.text.slice(0, 80)}…` : c.text}
+              </option>
+            ))}
+          </select>
+          <Button
+            size="sm"
+            disabled={!selectedCriterion || !!evidenceBusy}
+            onClick={() => {
+              if (selectedCriterion && onSubmitEvidence) {
+                onSubmitEvidence(selectedCriterion, message.content);
+              }
+            }}
+            className="h-7 w-full px-2.5 text-xs"
+          >
+            {/* Show spinner whenever any submission is in-flight, not just this criterion. */}
+            {evidenceBusy ? (
+              <Loader2 className="animate-spin" />
+            ) : (
+              <Check />
+            )}{" "}
+            Submit finding
+          </Button>
+        </div>
+      )}
 
       {proposals.length > 0 && (
         <div className="mt-2.5 space-y-2">

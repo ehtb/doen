@@ -4,8 +4,12 @@ This document tracks the strategic intent and research foundations behind the ar
 
 ---
 
-## [Current Phase] Shifting to Oversight (BD-12 to BD-14)
+## [Current Phase] Shifting to Oversight (BD-12 to BD-15)
 **Focus:** Minimizing the "Operator" tax and scaling human judgment.
+
+### BD-15: Research Initiatives (Engineering vs. Research Framing)
+*   **Intent:** Expanding Doen's governance model to non-code-shipping outcomes.
+*   **Research Thinking:** Not all software engineering work results in code. Investigations, spikes, and methodology research are critical but often escape formal governance. BD-15 introduces a "Research" framing that shifts the focus from "Acceptance" to "Success Criteria" and from "Evidence" to "Findings." This allows the same structured governance loop to apply to the *reasoning* process itself, enabling a full lifecycle (draft -> investigating -> learning) without an MCP connection.
 
 ### BD-14: Advisor-Led Batch Review
 *   **Intent:** Eliminate the cognitive bottleneck of item-level approval.

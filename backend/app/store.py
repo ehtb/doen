@@ -41,6 +41,7 @@ from app.models import (
     DriftReportStatus,
     Initiative,
     InitiativeAttention,
+    InitiativeType,
     Memory,
     Project,
     ProjectContext,
@@ -77,6 +78,7 @@ def _initiative_from_row(row: asyncpg.Record) -> Initiative:
     return Initiative(
         id=row["id"], title=row["title"], state=row["state"],
         project_id=row["project_id"], seq=row["seq"],
+        initiative_type=row["initiative_type"],
         org_id=row["org_id"], owner_id=row["owner_id"],
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
@@ -122,6 +124,7 @@ def _memory_from_row(row: asyncpg.Record) -> Memory:
         summary=row["summary"],
         learnings=row["learnings"],
         outcome=json.loads(row["outcome"]) if row["outcome"] else None,
+        initiative_type=row["initiative_type"],
         created_at=row["created_at"].isoformat(),
         last_verified_at=lv.isoformat() if lv is not None else None,
     )
@@ -217,6 +220,7 @@ class SpecStore:
         title: str,
         project_id: str,
         *,
+        initiative_type: InitiativeType = "engineering",
         org_id: str | None = None,
         owner_id: str | None = None,
     ) -> Initiative:
@@ -224,7 +228,8 @@ class SpecStore:
         (constraint 2): the spec is born at version 0, state=draft (0011), with empty item lists.
         The id is {project.prefix}-{seq} (e.g. BD-1), assigned server-side — the client never
         supplies it. Every initiative belongs to a project — `project_id` is required and must
-        exist (no orphan specs)."""
+        exist (no orphan specs). BD-15: `initiative_type` persists the creation-time choice
+        (engineering / research) and is mirrored into the spec JSONB so both read paths expose it."""
         if await self.get_project(project_id) is None:
             raise NotFoundError(f"no project {project_id}")
         async with self.pg.acquire() as conn:
@@ -239,13 +244,16 @@ class SpecStore:
                     project_id,
                 )
                 new_id = f"{prefix}-{seq}"
-                spec = Spec(initiative_id=new_id, title=title, state="draft")
+                spec = Spec(
+                    initiative_id=new_id, title=title, state="draft",
+                    initiative_type=initiative_type,
+                )
                 await conn.execute(
                     """INSERT INTO initiatives
                            (id, title, project_id, seq, org_id, owner_id,
-                            state, created_at, updated_at)
-                       VALUES ($1, $2, $3, $4, $5, $6, 'draft', now(), now())""",
-                    new_id, title, project_id, seq, org_id, owner_id,
+                            state, initiative_type, created_at, updated_at)
+                       VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, now(), now())""",
+                    new_id, title, project_id, seq, org_id, owner_id, initiative_type,
                 )
                 # Scaffold the spec at version 0 directly. A brand-new spec has no prior
                 # row to guard, so this doesn't bypass the optimistic lock — the first real
@@ -257,6 +265,7 @@ class SpecStore:
                 )
         return Initiative(
             id=new_id, title=title, state="draft",
+            initiative_type=initiative_type,
             project_id=project_id, seq=seq, org_id=org_id, owner_id=owner_id,
         )
 
@@ -264,7 +273,8 @@ class SpecStore:
         """The initiative's lifecycle context — surfaced alongside the spec on MCP get_spec
         so an executor grounds itself in the lifecycle state before acting (D1 / 0004)."""
         row = await self.pg.fetchrow(
-            """SELECT id, title, state, project_id, seq, org_id, owner_id, created_at, updated_at
+            """SELECT id, title, state, initiative_type, project_id, seq, org_id, owner_id,
+                      created_at, updated_at
                FROM initiatives WHERE id = $1""",
             initiative_id,
         )
@@ -274,7 +284,8 @@ class SpecStore:
         """Find an initiative by its per-project sequence number (0012 u5) — the resolution
         behind the short id BD-7 / the URL key bd-7-slug."""
         row = await self.pg.fetchrow(
-            """SELECT id, title, state, project_id, seq, org_id, owner_id, created_at, updated_at
+            """SELECT id, title, state, initiative_type, project_id, seq, org_id, owner_id,
+                      created_at, updated_at
                FROM initiatives WHERE project_id = $1 AND seq = $2""",
             project_id, seq,
         )
@@ -313,8 +324,8 @@ class SpecStore:
         """Every active initiative that has a spec — the dashboard's feed (0004 a3). Most
         recently updated first. Archived initiatives are hidden by design (0013 follow-up)."""
         rows = await self.pg.fetch(
-            """SELECT i.id, i.title, i.state, i.project_id, i.seq, i.org_id, i.owner_id,
-                      i.created_at, i.updated_at
+            """SELECT i.id, i.title, i.state, i.initiative_type, i.project_id, i.seq,
+                      i.org_id, i.owner_id, i.created_at, i.updated_at
                FROM initiatives i
                JOIN specs s ON s.initiative_id = i.id
                WHERE i.archived_at IS NULL
@@ -484,8 +495,8 @@ class SpecStore:
         """The active initiatives grouped under a project (0010 a2/a7), most recently updated
         first. Archived initiatives are hidden (0013 follow-up)."""
         rows = await self.pg.fetch(
-            """SELECT i.id, i.title, i.state, i.project_id, i.seq, i.org_id, i.owner_id,
-                      i.created_at, i.updated_at
+            """SELECT i.id, i.title, i.state, i.initiative_type, i.project_id, i.seq,
+                      i.org_id, i.owner_id, i.created_at, i.updated_at
                FROM initiatives i
                JOIN specs s ON s.initiative_id = i.id
                WHERE i.project_id = $1 AND i.archived_at IS NULL
@@ -841,17 +852,24 @@ class SpecStore:
         summary: str,
         learnings: str | None = None,
         outcome: dict | None = None,
+        *,
+        initiative_type: InitiativeType = "engineering",
     ) -> Memory:
         """Write a completed initiative's memory row and embed it async (constraint 3:
-        completing Learn must not block). Append-only — every call is a new row."""
+        completing Learn must not block). Append-only — every call is a new row.
+        BD-15: `initiative_type` is stored so context hits expose whether the learning
+        came from a research or engineering initiative."""
         mem = Memory(
-            initiative_id=initiative_id, summary=summary, learnings=learnings, outcome=outcome
+            initiative_id=initiative_id, summary=summary, learnings=learnings, outcome=outcome,
+            initiative_type=initiative_type,
         )
         await self.pg.execute(
-            """INSERT INTO memory (id, initiative_id, summary, learnings, outcome, created_at)
-               VALUES ($1, $2, $3, $4, $5, now())""",
+            """INSERT INTO memory
+                   (id, initiative_id, summary, learnings, outcome, initiative_type, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, now())""",
             mem.id, initiative_id, summary, learnings,
             json.dumps(outcome) if outcome is not None else None,
+            initiative_type,
         )
         # a learn record can complete the initiative (all criteria verified + learnings captured — 0011 a2)
         await self._recompute_state(initiative_id)
@@ -875,7 +893,8 @@ class SpecStore:
     async def list_memory(self, initiative_id: str) -> list[Memory]:
         """An initiative's memory rows, newest first."""
         rows = await self.pg.fetch(
-            """SELECT id, initiative_id, summary, learnings, outcome, created_at, last_verified_at
+            """SELECT id, initiative_id, summary, learnings, outcome, initiative_type,
+                      created_at, last_verified_at
                FROM memory WHERE initiative_id = $1 ORDER BY created_at DESC""",
             initiative_id,
         )
@@ -884,7 +903,8 @@ class SpecStore:
     async def get_memory(self, memory_id: str) -> Memory | None:
         """Fetch a single memory entry by id. Returns None if not found."""
         row = await self.pg.fetchrow(
-            """SELECT id, initiative_id, summary, learnings, outcome, created_at, last_verified_at
+            """SELECT id, initiative_id, summary, learnings, outcome, initiative_type,
+                      created_at, last_verified_at
                FROM memory WHERE id = $1""",
             memory_id,
         )
@@ -1009,7 +1029,7 @@ class SpecStore:
         filter is non-optional (BD-12 constraint item_444e2af3a93b)."""
         rows = await self.pg.fetch(
             """SELECT m.id, m.initiative_id, m.summary, m.learnings, m.outcome,
-                      m.created_at, m.last_verified_at
+                      m.initiative_type, m.created_at, m.last_verified_at
                FROM memory m
                JOIN initiatives i ON i.id = m.initiative_id
                WHERE i.project_id = $1
@@ -1064,14 +1084,15 @@ class SpecStore:
         and set `has_pending_drift` on affected hits without an N+1 query."""
         rows = await self.pg.fetch(
             """
-            SELECT q.type, q.initiative_id, q.txt, q.dist, q.mem_id FROM (
+            SELECT q.type, q.initiative_id, q.txt, q.dist, q.mem_id, q.init_type FROM (
                 SELECT 'decision' AS type, initiative_id,
                        concat_ws(' — ', payload->>'question',
                            NULLIF('Chosen: ' || coalesce(payload->>'chosen', ''), 'Chosen: '),
                            NULLIF('Rationale: ' || coalesce(payload->>'rationale', ''), 'Rationale: ')
                        ) AS txt,
                        embedding <=> $1::vector AS dist,
-                       NULL::text AS mem_id
+                       NULL::text AS mem_id,
+                       NULL::text AS init_type
                   FROM decisions WHERE embedding IS NOT NULL
                 UNION ALL
                 SELECT 'memory' AS type, initiative_id,
@@ -1079,7 +1100,8 @@ class SpecStore:
                            NULLIF('Learnings: ' || coalesce(learnings, ''), 'Learnings: ')
                        ) AS txt,
                        embedding <=> $1::vector AS dist,
-                       id AS mem_id
+                       id AS mem_id,
+                       initiative_type AS init_type
                   FROM memory WHERE embedding IS NOT NULL
             ) q
             JOIN initiatives i ON i.id = q.initiative_id
@@ -1108,6 +1130,7 @@ class SpecStore:
                 text=r["txt"],
                 score=round(1.0 - float(r["dist"]), 4),
                 has_pending_drift=r["mem_id"] in pending_drift if r["mem_id"] else False,
+                initiative_type=r["init_type"],  # BD-15: None for decision hits
             )
             for r in rows
         ]
@@ -1138,10 +1161,12 @@ class SpecStore:
                 f"criterion id(s) not found in {initiative_id}: {', '.join(unknown)}"
             )
 
+        _MAX_EVIDENCE = 2000
         for r in criteria_results:
             c = criterion_map[r["criterion_id"]]
             c.verification_status = "evidence_submitted"
-            c.evidence = r.get("evidence") or None
+            raw = r.get("evidence") or None
+            c.evidence = raw[:_MAX_EVIDENCE] if raw and len(raw) > _MAX_EVIDENCE else raw
 
         await self.save_spec(spec)
         await self._recompute_state(initiative_id)  # draft → building on first evidence

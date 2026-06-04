@@ -135,6 +135,9 @@ async def resolve_spec(project_id: str, ref: str, store: _Store) -> dict:
         **spec.model_dump(),
         "short_id": short_id(proj.prefix, init.seq),
         "short_slug": short_slug(proj.prefix, init.seq, spec.title),
+        # initiative_type is already in spec.model_dump() (mirrored at creation);
+        # re-assert from the initiative row as the authoritative source.
+        "initiative_type": init.initiative_type,
     }
 
 
@@ -145,10 +148,13 @@ async def create_initiative_from_description(
     """Description-first creation (0011 C2/a3): the human describes what they want; the Advisor
     drafts the whole spec (title, intent, constraints, discretion, acceptance, units) — all
     proposed — and the initiative is scaffolded under it, ready to confirm item by item. A failed
-    LLM call -> 502 leaves nothing created; an unknown project -> 404."""
+    LLM call -> 502 leaves nothing created; an unknown project -> 404.
+    BD-15: `initiative_type` in the body sets engineering vs. research framing."""
     if not body.description.strip():
         raise ValidationError("a description is required to start an initiative")
-    return await shaping_service.create_from_description(store, project_id, body.description)
+    return await shaping_service.create_from_description(
+        store, project_id, body.description, initiative_type=body.initiative_type
+    )
 
 
 @router.post("/initiatives/{initiative_id}/project")

@@ -3,14 +3,20 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { GitBranch } from "lucide-react";
-import type { Decision } from "@/lib/types";
+import type { Decision, InitiativeType } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { DECISIONS_SWR_KEY, decisionsFetcher } from "./AttentionSurface";
 
 // Decisions are fetched via SWR sharing the same key as AttentionSurface, so both components
 // stay in sync from a single network request per interval rather than two parallel polls.
-export default function SteeringRail({ initiativeId }: { initiativeId: string }) {
+export default function SteeringRail({
+  initiativeId,
+  initiativeType = "engineering",
+}: {
+  initiativeId: string;
+  initiativeType?: InitiativeType;
+}) {
   const {
     data: decisions,
     mutate: refreshDecisions,
@@ -71,8 +77,9 @@ export default function SteeringRail({ initiativeId }: { initiativeId: string })
 
         {decisions !== undefined && waiting === 0 && !error && (
           <p className="py-2 text-sm text-rail-muted">
-            No open decisions — the build is unblocked. When the executor hits a call outside the
-            spec, it surfaces here for your judgment.
+            {initiativeType === "research"
+              ? "No open questions — the investigation is unblocked. When a decision falls outside the spec, it surfaces here."
+              : "No open decisions — the build is unblocked. When the executor hits a call outside the spec, it surfaces here for your judgment."}
           </p>
         )}
 

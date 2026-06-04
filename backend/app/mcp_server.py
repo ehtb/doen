@@ -79,9 +79,9 @@ def _store(ctx: Context) -> SpecStore:
 @mcp.tool()
 async def get_spec(initiative_id: str, ctx: Context) -> dict:
     """Read the whole living spec for an initiative at its current version, plus the
-    initiative's lifecycle context as `initiative: {id, title, state}`. Ground yourself in
+    initiative's lifecycle context as `initiative: {id, title, state, type}`. Ground yourself in
     intent, constraints, discretion, acceptance — and state (0011: draft / building / complete;
-    don't reshape a spec already `building`) — before acting.
+    don't reshape a spec already `building`) and type (BD-15: "engineering" or "research") — before acting.
 
     Enriched (0013 u5) with `advisor_summary` (the Advisor's latest guidance note for this
     initiative) and `unit_context` (per unit: the executor's submission summary, the human's
@@ -94,7 +94,14 @@ async def get_spec(initiative_id: str, ctx: Context) -> dict:
     out = spec.model_dump()
     init = await store.get_initiative(initiative_id)
     out["initiative"] = (
-        {"id": init.id, "title": init.title, "state": init.state} if init else None
+        {
+            "id": init.id,
+            "title": init.title,
+            "state": init.state,
+            "type": init.initiative_type,  # BD-15: "engineering" or "research"
+        }
+        if init
+        else None
     )
     out.update(await spec_enrichment(store, initiative_id))
     return out
@@ -192,9 +199,10 @@ async def submit_evidence(
         spec = await _store(ctx).submit_evidence(initiative_id, criteria_results)
     except NotFoundError as e:
         raise ValueError(str(e))
-    # BD-14: generate Advisor preliminary verdicts after evidence is stored.
-    # Non-fatal — synthesis failure never blocks evidence submission.
-    await generate_verification_synthesis(_store(ctx), initiative_id)
+    # BD-14: schedule synthesis via the store's tracked task pool — non-blocking,
+    # same pattern as the HTTP path and embed_decision/embed_memory.
+    store = _store(ctx)
+    store._spawn(lambda: generate_verification_synthesis(store, initiative_id))
     return {"version": spec.version, "updated_criteria": [r["criterion_id"] for r in criteria_results]}
 
 

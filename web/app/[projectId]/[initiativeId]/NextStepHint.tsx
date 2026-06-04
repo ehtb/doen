@@ -82,7 +82,27 @@ export default function NextStepHint() {
     );
   }
 
+  const isResearch = spec.initiative_type === "research";
+
   if (spec.state === "building") {
+    // BD-15: research initiatives don't need an MCP agent — hide the prompt section,
+    // show a rail-focused hint instead.
+    if (isResearch) {
+      return (
+        <div className="animate-rise mt-5 flex flex-wrap items-center gap-4 rounded-xl border border-primary/30 bg-primary/4 px-4 py-3.5">
+          <div className="min-w-0 flex-1">
+            <p className="font-mono text-[10.5px] font-semibold tracking-widest text-accent-deep uppercase">
+              Investigating
+            </p>
+            <p className="text-[13.5px] leading-relaxed text-foreground">
+              Use the Advisor to work through the question. Submit findings
+              directly from the conversation as evidence against your criteria.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="animate-rise mt-5 flex flex-wrap items-center gap-4 rounded-xl border border-primary/30 bg-primary/4 px-4 py-3.5">
         <div className="min-w-0 flex-1">
@@ -138,12 +158,12 @@ export default function NextStepHint() {
     <div className="animate-rise mt-5 flex flex-wrap items-center gap-4 rounded-xl border border-primary/30 bg-primary/4 px-4 py-3.5">
       <div className="min-w-0 flex-1">
         <p className="font-mono text-[10.5px] font-semibold tracking-widest text-accent-deep uppercase">
-          Ready to build
+          {isResearch ? "Ready to investigate" : "Ready to build"}
         </p>
         <p className="text-[13.5px] leading-relaxed text-foreground">
-          Spec is fully reviewed. The Advisor will move to building mode when
-          you start — or it transitions automatically when evidence is
-          submitted.
+          {isResearch
+            ? "Spec is fully reviewed. The Advisor will move to investigating mode when you start — or it transitions automatically when findings are submitted."
+            : "Spec is fully reviewed. The Advisor will move to building mode when you start — or it transitions automatically when evidence is submitted."}
         </p>
       </div>
       <Button
@@ -152,7 +172,7 @@ export default function NextStepHint() {
         onClick={startBuilding}
         className="shadow-sm"
       >
-        <Hammer className="size-3.5" /> Start building
+        <Hammer className="size-3.5" /> {isResearch ? "Start investigating" : "Start building"}
       </Button>
     </div>
   );

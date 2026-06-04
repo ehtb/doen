@@ -1,5 +1,7 @@
 // Mirrors the relevant fields of the backend Spec (backend/app/store.py).
 
+export type InitiativeType = "engineering" | "research";
+
 export interface SpecItem {
   id: string;
   text: string;
@@ -29,6 +31,7 @@ export interface Spec {
   initiative_id: string;
   version: number;
   state: string; // inferred lifecycle (0011): draft / building / complete
+  initiative_type: InitiativeType; // BD-15: engineering or research
   title: string;
   intent: string;
   constraints: SpecItem[];
@@ -50,6 +53,7 @@ export interface Initiative {
   id: string;
   title: string | null;
   state: string; // inferred lifecycle (0011): draft / building / complete
+  initiative_type: InitiativeType; // BD-15: engineering or research
   project_id: string; // the parent project (0010) — every initiative belongs to one
   seq: number; // immutable per-project sequence (0012 u5) — with the project prefix forms BD-7
   org_id?: string | null;

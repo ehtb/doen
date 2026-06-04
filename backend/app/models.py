@@ -77,6 +77,9 @@ Section = Literal["constraints", "discretion", "acceptance"]  # the editable spe
 State = Literal["draft", "building", "learning", "complete"]
 STATES: tuple[str, ...] = ("draft", "building", "learning", "complete")
 
+# BD-15: two initiative types. Set at creation; immutable thereafter.
+InitiativeType = Literal["engineering", "research"]
+
 
 # ----------------------------------------------------------------------------- spec models
 AdvisorClassification = Literal["confident", "flagged", "uncertain"]
@@ -130,6 +133,7 @@ class Spec(BaseModel):
     initiative_id: str
     version: int = 0  # 0 = unsaved; save_spec bumps to 1 on first write
     state: State = "draft"  # inferred lifecycle (0011); mirrored from the initiative
+    initiative_type: InitiativeType = "engineering"  # BD-15: mirrored from initiative row
     title: str
     intent: str = ""
     constraints: list[SpecItem] = Field(default_factory=list)
@@ -159,6 +163,7 @@ class Initiative(BaseModel):
     seq: int = 0  # immutable per-project sequence (0012 u5): with the project prefix -> BD-7
     title: str | None = None
     state: State = "draft"
+    initiative_type: InitiativeType = "engineering"  # BD-15: set at creation, immutable
     org_id: str | None = None
     owner_id: str | None = None
     created_at: str = Field(default_factory=_now)
@@ -213,6 +218,7 @@ class Memory(BaseModel):
     summary: str
     learnings: str | None = None
     outcome: dict | None = None  # an optional structured snapshot (e.g. per-unit results)
+    initiative_type: InitiativeType = "engineering"  # BD-15: type of the source initiative
     created_at: str = Field(default_factory=_now)
     last_verified_at: str | None = None  # BD-12: NULL = never verified against codebase
 
@@ -247,7 +253,9 @@ class ContextHit(BaseModel):
     marks whether a hit came from within the calling initiative's project or the global
     fallback — None when the search wasn't project-scoped. `has_pending_drift` (BD-12) warns
     the executor that another agent has already flagged this memory entry as potentially wrong —
-    treat it with extra scepticism and verify before acting on it."""
+    treat it with extra scepticism and verify before acting on it. `initiative_type` (BD-15)
+    is present for memory hits so the executor knows whether the learning came from a research
+    or engineering initiative; None for decision hits."""
 
     initiative_id: str
     type: Literal["decision", "memory"]
@@ -255,6 +263,7 @@ class ContextHit(BaseModel):
     score: float
     scope: Literal["project", "global"] | None = None
     has_pending_drift: bool = False  # BD-12: a pending drift report exists for this memory entry
+    initiative_type: str | None = None  # BD-15: "engineering" or "research" for memory hits
 
 
 # ----------------------------------------------------------------------------- conversation (0009)

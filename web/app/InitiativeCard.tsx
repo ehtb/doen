@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Check, GitBranch, ClipboardCheck, AlertTriangle } from "lucide-react";
+import { ArrowRight, Check, GitBranch, ClipboardCheck, AlertTriangle, FlaskConical, Wrench } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { Initiative, InitiativeAttention } from "@/lib/types";
@@ -90,13 +90,25 @@ export function InitiativeCard({
           <h3 className="truncate font-serif text-[19px] leading-snug">
             {initiative.title ?? initiative.id}
           </h3>
-          <p className="mt-1 font-mono text-[11px] text-ink-faint">
-            {shortId ? (
-              <span className="font-semibold tracking-wide text-accent-deep">{shortId}</span>
+          <div className="mt-1 flex items-center gap-2">
+            <p className="font-mono text-[11px] text-ink-faint">
+              {shortId ? (
+                <span className="font-semibold tracking-wide text-accent-deep">{shortId}</span>
+              ) : (
+                initiative.id
+              )}
+            </p>
+            {/* BD-15: type indicator — distinguishable at a glance */}
+            {initiative.initiative_type === "research" ? (
+              <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9px] tracking-widest uppercase bg-violet-50 text-violet-600 dark:bg-violet-950/40 dark:text-violet-400">
+                <FlaskConical className="size-2.5" /> research
+              </span>
             ) : (
-              initiative.id
+              <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9px] tracking-widest uppercase bg-sky-50 text-sky-600 dark:bg-sky-950/40 dark:text-sky-400">
+                <Wrench className="size-2.5" /> engineering
+              </span>
             )}
-          </p>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <StateBadge state={initiative.state} />
@@ -121,7 +133,8 @@ export function InitiativeCard({
               <AttentionChip
                 icon={ClipboardCheck}
                 n={attention.criteria_to_verify ?? 0}
-                label="to verify"
+                // BD-15: adapt label per type
+                label={initiative.initiative_type === "research" ? "findings to review" : "to verify"}
                 urgent
               />
               <AttentionChip

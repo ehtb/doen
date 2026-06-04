@@ -22,6 +22,7 @@ from app.models import (
     AdvisorClassification,
     ContextHit,
     Initiative,
+    InitiativeType,
     Spec,
     SpecItem,
     Verify,
@@ -62,6 +63,26 @@ Hard rules:
 - Verifiable acceptance criteria only — if you can't say how it's checked, it doesn't belong.
 - Don't invent intent the description doesn't support. Keep it tight: a spec is a contract, not \
 an essay.
+
+Return the draft via the proposed_spec tool, matching its schema exactly."""
+
+SHAPING_SYSTEM_PROMPT_RESEARCH = """You are shaping a Doen spec for a RESEARCH initiative — \
+one where the goal is to reach a well-reasoned conclusion, not ship code. The spec contract is \
+the same (intent, constraints, discretion, acceptance), but the framing shifts:
+- intent: state the question being investigated and the desired level of certainty or insight.
+- constraints: the scope fences and methodological must-nots (e.g. "must cover providers X, Y, Z", \
+"must not include providers with no API"). Each a hard boundary on the investigation.
+- discretion: where the investigator decides freely (depth of analysis, which secondary sources, \
+presentation format).
+- acceptance: how a satisfactory answer is recognised. Criteria should be verifiable findings \
+or conclusions, not shipped code. Use human_judgment or behavior kinds. Avoid test/metric unless \
+the investigation genuinely produces a measurable output. Mark the most important criterion \
+HEADLINE.
+
+Hard rules:
+- No estimation anywhere — no story points, hours, or velocity.
+- Verifiable acceptance criteria only — if you can't say how it's checked, it doesn't belong.
+- Don't invent intent the description doesn't support.
 
 Return the draft via the proposed_spec tool, matching its schema exactly."""
 
@@ -415,17 +436,21 @@ async def shape_spec(
     description: str,
     *,
     project_id: str | None = None,
+    initiative_type: InitiativeType = "engineering",
     llm: StructuredLLM | None = None,
     context_limit: int = 6,
 ) -> ShapingResult:
     """Draft a proposed spec from a description. get_context runs first (constraint 6 / a4);
     when the initiative belongs to a project the search is project-scoped (0010 constraint 4),
     so sibling patterns surface first. An empty corpus returns nothing and shaping proceeds
-    without priors."""
+    without priors. BD-15: `initiative_type` selects the research vs. engineering framing."""
     llm = llm or get_shaping_llm()
+    system_prompt = (
+        SHAPING_SYSTEM_PROMPT_RESEARCH if initiative_type == "research" else SHAPING_SYSTEM_PROMPT
+    )
     hits = await store.get_context(description, limit=context_limit, project_id=project_id)
     raw = await llm.complete_structured(
-        system=SHAPING_SYSTEM_PROMPT,
+        system=system_prompt,
         user=_build_user_message(description, hits),
         schema=SPEC_SCHEMA,
         schema_name="proposed_spec",
@@ -452,8 +477,11 @@ async def shape_and_persist(
     if spec is None:
         raise NotFoundError(f"no spec for initiative {initiative_id}")
     init = await store.get_initiative(initiative_id)
-    project_id = init.project_id if init else None
-    result = await shape_spec(store, description, project_id=project_id)
+    if init is None:
+        raise NotFoundError(f"no initiative {initiative_id}")
+    result = await shape_spec(
+        store, description, project_id=init.project_id, initiative_type=init.initiative_type
+    )
     spec.constraints = [i for i in spec.constraints if i.status != "proposed"] + result.constraints
     spec.discretion = [i for i in spec.discretion if i.status != "proposed"] + result.discretion
     spec.acceptance = [i for i in spec.acceptance if i.status != "proposed"] + result.acceptance
@@ -476,6 +504,7 @@ async def create_from_description(
     project_id: str,
     description: str,
     *,
+    initiative_type: InitiativeType = "engineering",
     llm: StructuredLLM | None = None,
     classification_llm: StructuredLLM | None = None,
 ) -> Initiative:
@@ -485,16 +514,19 @@ async def create_from_description(
     scaffolds the initiative under its generated title and persists the proposed items.
     Every initiative belongs to a project (no orphan specs) — an unknown project_id -> 404.
 
-    BD-14: runs the Advisor's self-review classification pass automatically after shaping."""
+    BD-14: runs the Advisor's self-review classification pass automatically after shaping.
+    BD-15: `initiative_type` persists the user-selected type (defaults to engineering)."""
     if not description.strip():
         raise ValidationError("a description is required to start an initiative")
     if await store.get_project(project_id) is None:
         raise NotFoundError(f"no project {project_id}")
 
-    result = await shape_spec(store, description, project_id=project_id, llm=llm)
+    result = await shape_spec(
+        store, description, project_id=project_id, initiative_type=initiative_type, llm=llm
+    )
     title = result.title.strip() or _fallback_title(description)
 
-    init = await store.create_initiative(title, project_id)
+    init = await store.create_initiative(title, project_id, initiative_type=initiative_type)
     spec = await store.get_spec(init.id)
     assert spec is not None  # just scaffolded by create_initiative
     spec.intent = result.intent

@@ -169,5 +169,9 @@ async def submit_learn(
     # stored with the memory record and retrievable for future initiatives.
     if rationale_claims:
         outcome = {**(outcome or {}), "rationale_claims": [c.model_dump() for c in rationale_claims]}
-    await store.create_memory(initiative_id, summary.strip(), learnings, outcome)
+    # BD-15: carry the initiative type into memory so context hits expose the source type.
+    await store.create_memory(
+        initiative_id, summary.strip(), learnings, outcome,
+        initiative_type=init.initiative_type,
+    )
     return await learn_review(store, initiative_id)

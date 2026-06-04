@@ -38,9 +38,15 @@ type Section = "constraints" | "discretion" | "acceptance";
 // which render below this component). Intent leads, always open; these two governing sections
 // disclose progressively and auto-advance. Discretion is NOT here — it lives under "Agent
 // latitude" (a3), de-emphasised and outside the auto-expand chain.
-const GOVERNING: { key: Section; title: string; note: string; icon: LucideIcon }[] = [
+const GOVERNING_BASE: { key: Section; title: string; researchTitle?: string; note: string; icon: LucideIcon }[] = [
   { key: "constraints", title: "Constraints", note: "locked — I won't cross these", icon: Lock },
-  { key: "acceptance", title: "Acceptance criteria", note: "how the work gets judged", icon: CircleCheck },
+  {
+    key: "acceptance",
+    title: "Acceptance criteria",
+    researchTitle: "Success criteria",  // BD-15: research initiatives use this label
+    note: "how the work gets judged",
+    icon: CircleCheck,
+  },
 ];
 
 const PROV_LABEL: Record<string, string> = {
@@ -139,6 +145,12 @@ export default function SpecDocument() {
   // or rejecting there updates this document and the progress bar live (a6).
   const { spec, busy, error, mutate } = useSpec();
   const isDraft = spec.state === "draft";
+  const isResearch = spec.initiative_type === "research";
+  // BD-15: adapt acceptance-criteria section title for research initiatives.
+  const GOVERNING = GOVERNING_BASE.map((g) => ({
+    ...g,
+    title: isResearch && g.researchTitle ? g.researchTitle : g.title,
+  }));
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [adding, setAdding] = useState<Section | null>(null);

@@ -13,8 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.database import get_store
 from app.exceptions import NotFoundError
 from app.models import Spec
-from app.schemas import AddItem, CriterionVerdictBody, ConfirmAll, EditItem, ItemVersion
-from app.services import authoring
+from app.schemas import AddItem, CriterionVerdictBody, ConfirmAll, EditItem, ItemVersion, SubmitCriterionEvidence
+from app.services import authoring, review
 from app.store import SpecStore
 
 router = APIRouter(tags=["specs"])
@@ -84,6 +84,24 @@ async def batch_approve_confident(
 ) -> Spec:
     """BD-14: confirm all proposed items the Advisor classified as confident in one action."""
     return await authoring.batch_approve_confident(store, initiative_id, version=body.version)
+
+
+@router.post("/specs/{initiative_id}/criteria/{criterion_id}/evidence")
+async def submit_criterion_evidence(
+    initiative_id: str, criterion_id: str, body: SubmitCriterionEvidence, store: _Store
+) -> Spec:
+    """BD-15: submit evidence against a single criterion from the conversation rail.
+    Sets verification_status to 'evidence_submitted' — identical outcome to the MCP
+    submit_evidence tool (BD-5), enabling research initiatives to complete their full
+    lifecycle without an MCP connection."""
+    spec = await store.submit_evidence(
+        initiative_id, [{"criterion_id": criterion_id, "evidence": body.evidence}]
+    )
+    # BD-14: schedule synthesis in the background via the store's tracked task pool —
+    # same pattern as embed_decision/embed_memory: reference kept, retried 3×, logged
+    # on failure, drained cleanly on shutdown.
+    store._spawn(lambda: review.generate_verification_synthesis(store, initiative_id))
+    return spec
 
 
 @router.post("/specs/{initiative_id}/criteria/{criterion_id}/verdict")

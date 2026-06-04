@@ -24,6 +24,7 @@ from app.models import (
     AcceptanceCriterion,
     ContextHit,
     ConversationContext,
+    InitiativeType,
     Message,
     ProjectContext,
     Spec,
@@ -127,6 +128,38 @@ STATE_GUIDANCE: dict[str, str] = {
     "If there is still conversation to be had about what was learned or what comes next, engage with it. "
     "Don't prompt for new initiatives or next steps unless the human raises it.",
 }
+
+# BD-15: research-specific mode guidance — investigation framing, no executor/MCP references.
+STATE_GUIDANCE_RESEARCH: dict[str, str] = {
+    "draft": "This is a RESEARCH initiative — the goal is a well-reasoned conclusion, not shipped code. "
+    "Help the human sharpen the research question (intent), the methodological constraints, the "
+    "investigation latitude (discretion), and the success criteria that will tell them when the "
+    "question is answered. PROPOSE concrete spec items: each constraint a hard scope or method "
+    "boundary, each criterion a verifiable finding or conclusion. No estimation, no story points. "
+    "Think like a research collaborator, not a delivery partner.",
+    "building": "This initiative is INVESTIGATING — the human is gathering findings and submitting them "
+    "against the success criteria. Surface the angles they may not have covered, flag contradictions "
+    "between emerging findings and the spec's constraints, and help them decide when a criterion's "
+    "evidence is strong enough. When criteria have findings submitted, offer to review them: "
+    "'criteria C1–C2 have findings submitted — want to discuss whether they satisfy the criteria?' "
+    "Lean toward a recommendation where the evidence warrants one. No code execution, no MCP tooling "
+    "— findings come from the conversation rail and the human's own investigation.",
+    "learning": "All findings are verified — the investigation is closing. Help the human articulate "
+    "what the investigation discovered against what they set out to answer, the key decisions and "
+    "methodology choices that shaped the result, and the durable lessons worth carrying forward — "
+    "what the next initiative in this space should know. Keep it transferable, not investigation trivia. "
+    "The human confirms before anything is written to memory.",
+    "complete": "The investigation is complete — its findings and learnings are captured in memory. "
+    "If there is still conversation to be had about what was learned or what it implies for future work, "
+    "engage with it. Don't prompt for follow-on initiatives unless the human raises it.",
+}
+
+# BD-15: Advisor identity prefix adapted per initiative type.
+RESEARCH_TYPE_NOTE = (
+    "This is a RESEARCH initiative — your register is a research collaborator's, not a "
+    "delivery partner's. Offer angles, surface contradictions in the evidence, and lean "
+    "toward a recommendation where the findings support one. No code execution, no MCP guidance."
+)
 
 PROJECT_COHERENCE_PROMPT = """This initiative belongs to a PROJECT — a body of related \
 initiatives under one strategic intent. You are given the project's intent and compact summaries \
@@ -250,7 +283,11 @@ class AdvisorReply(BaseModel):
 
 
 def build_system_prompt(
-    state: str, *, in_project: bool = False, steering_count: int = 0
+    state: str,
+    *,
+    initiative_type: InitiativeType = "engineering",
+    in_project: bool = False,
+    steering_count: int = 0,
 ) -> str:
     """Identity + spec-contract discipline + the state's mode (+ project coherence when the
     initiative is in a project) + the output contract. The state line makes the same Advisor
@@ -259,12 +296,17 @@ def build_system_prompt(
 
     BD-13: when steering_count >= STEERING_RATIO_THRESHOLD, injects a note instructing the
     Advisor to include a steering-ratio observation in its reply — delivered conversationally,
-    not as a dashboard item (constraint item_55058254c501)."""
-    guidance = STATE_GUIDANCE.get(state, STATE_GUIDANCE["draft"])
-    parts = [
-        ADVISOR_BASE_PROMPT,
-        f"This initiative is in the **{state}** state. {guidance}",
-    ]
+    not as a dashboard item (constraint item_55058254c501).
+
+    BD-15: when initiative_type is 'research', uses research-framed mode guidance and injects
+    a collaborator-register note. Underlying model, memory, and tools are unchanged."""
+    is_research = initiative_type == "research"
+    guidance_map = STATE_GUIDANCE_RESEARCH if is_research else STATE_GUIDANCE
+    guidance = guidance_map.get(state, guidance_map["draft"])
+    parts = [ADVISOR_BASE_PROMPT]
+    if is_research:
+        parts.append(RESEARCH_TYPE_NOTE)
+    parts.append(f"This initiative is in the **{state}** state. {guidance}")
     if in_project:
         parts.append(PROJECT_COHERENCE_PROMPT)
     if steering_count >= STEERING_RATIO_THRESHOLD:
@@ -433,6 +475,7 @@ async def _converse(
     raw = await llm.complete_structured(
         system=build_system_prompt(
             ctx.initiative.state,
+            initiative_type=ctx.initiative.initiative_type,
             in_project=ctx.project is not None,
             steering_count=steering_count,
         ),

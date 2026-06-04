@@ -10,27 +10,60 @@ import SpecActions from "./SpecActions";
 import SpecDocument from "./SpecDocument";
 import { SpecProvider } from "./spec-context";
 import SteeringRail from "./SteeringRail";
+import type { InitiativeType } from "@/lib/types";
+
 const STATES = ["draft", "building", "learning", "complete"];
 
-const RAIL_INTRO: Record<string, string> = {
-  draft:
-    "Shape this spec with the Advisor — describe what you want to build, challenge what's here, ask it to propose constraints or acceptance criteria, or request a full first draft.",
-  building:
-    "Steer the build — ask whether something is in scope, question an implementation approach, check whether evidence covers a criterion, or ask the Advisor to flag risks.",
-  learning:
-    "Reflect on the build with the Advisor — what matched the spec, what surprised you, what to carry forward. It can help you draft the retrospective or surface patterns from past initiatives.",
-  complete:
-    "This initiative is closed. Ask the Advisor what was learned here and how those outcomes should inform the next piece of work.",
+const RAIL_INTRO: Record<string, Record<InitiativeType, string>> = {
+  draft: {
+    engineering:
+      "Shape this spec with the Advisor — describe what you want to build, challenge what's here, ask it to propose constraints or acceptance criteria, or request a full first draft.",
+    research:
+      "Shape the investigation with the Advisor — clarify the question you're asking, the constraints on methodology, the criteria that will tell you the investigation succeeded, or request a full first draft.",
+  },
+  building: {
+    engineering:
+      "Steer the build — ask whether something is in scope, question an implementation approach, check whether evidence covers a criterion, or ask the Advisor to flag risks.",
+    research:
+      "Investigate with the Advisor — share findings, ask it to surface contradictions, check whether a finding satisfies a criterion, or ask it to recommend a conclusion.",
+  },
+  learning: {
+    engineering:
+      "Reflect on the build with the Advisor — what matched the spec, what surprised you, what to carry forward. It can help you draft the retrospective or surface patterns from past initiatives.",
+    research:
+      "Reflect on the investigation with the Advisor — what the findings showed against the original question, what was unexpected, and what the next initiative in this space should know.",
+  },
+  complete: {
+    engineering:
+      "This initiative is closed. Ask the Advisor what was learned here and how those outcomes should inform the next piece of work.",
+    research:
+      "This investigation is closed. Ask the Advisor what the findings imply for future work or how this research should inform the next initiative.",
+  },
 };
 
-const RAIL_HINT: Record<string, string | undefined> = {
-  draft: "shape this initiative: [your idea]",
-  building: "is [X] covered by the acceptance criteria?",
-  learning: "draft the retrospective",
-  complete: undefined,
+const RAIL_HINT: Record<string, Record<InitiativeType, string | undefined>> = {
+  draft: {
+    engineering: "shape this initiative: [your idea]",
+    research: "shape this initiative: [your research question]",
+  },
+  building: {
+    engineering: "is [X] covered by the acceptance criteria?",
+    research: "does this finding satisfy criterion [X]?",
+  },
+  learning: {
+    engineering: "draft the retrospective",
+    research: "draft the retrospective",
+  },
+  complete: { engineering: undefined, research: undefined },
 };
 
-function StateStepper({ state }: { state: string }) {
+// BD-15: "building" stage is labelled "Investigating" for research initiatives.
+function stateLabel(s: string, initiativeType: InitiativeType): string {
+  if (s === "building" && initiativeType === "research") return "investigating";
+  return s;
+}
+
+function StateStepper({ state, initiativeType }: { state: string; initiativeType: InitiativeType }) {
   const current = Math.max(0, STATES.indexOf(state));
   return (
     <nav
@@ -58,7 +91,7 @@ function StateStepper({ state }: { state: string }) {
                 !done && !active && "border-border",
               )}
             />
-            {s}
+            {stateLabel(s, initiativeType)}
           </div>
         );
       })}
@@ -85,6 +118,7 @@ export default async function SpecPage({
   }
 
   const project = await getProject(projectId);
+  const itype = spec.initiative_type ?? "engineering";
 
   return (
     <main className="relative z-10 mx-auto max-w-[1180px] px-5 py-8 md:px-8">
@@ -114,10 +148,7 @@ export default async function SpecPage({
           {spec.title}
         </h1>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3.5">
-          <StateStepper state={spec.state} />
-          {/* <span className="font-mono text-[10px] tracking-wide text-ink-faint lowercase">
-            state follows the work — no manual advance
-          </span> */}
+          <StateStepper state={spec.state} initiativeType={itype} />
         </div>
       </header>
 
@@ -147,12 +178,12 @@ export default async function SpecPage({
               scope={{ initiativeId: spec.initiative_id }}
               advisorUrl={`/api/initiatives/${spec.initiative_id}/advisor`}
               mode={stateMode(spec.state)}
-              intro={RAIL_INTRO[spec.state] ?? RAIL_INTRO.draft}
-              hintPrompt={RAIL_HINT[spec.state]}
+              intro={RAIL_INTRO[spec.state]?.[itype] ?? RAIL_INTRO.draft.engineering}
+              hintPrompt={RAIL_HINT[spec.state]?.[itype]}
               specId={spec.initiative_id}
               review={<GuidedReview />}
             />
-            <SteeringRail initiativeId={spec.initiative_id} />
+            <SteeringRail initiativeId={spec.initiative_id} initiativeType={itype} />
           </div>
         </div>
       </SpecProvider>
