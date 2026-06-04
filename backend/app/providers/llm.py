@@ -35,7 +35,11 @@ class LLMError(RuntimeError):
 
 class OpenAICompatibleLLM:
     """Any OpenAI-compatible /chat/completions endpoint. A single forced tool call
-    guarantees the model answers in the requested JSON shape (constraint 4)."""
+    guarantees the model answers in the requested JSON shape (constraint 4).
+
+    The httpx client is created once at init and reused across calls so that TLS
+    sessions and TCP connections are pooled. Pass `transport` to inject a mock in tests;
+    call `aclose()` (wired into the app lifespan) for graceful shutdown."""
 
     def __init__(
         self,
@@ -50,7 +54,13 @@ class OpenAICompatibleLLM:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        self._transport = transport
+        self._client = httpx.AsyncClient(
+            timeout=timeout,
+            transport=transport,
+        )
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     async def complete_structured(
         self, *, system: str, user: str, schema: dict[str, Any], schema_name: str = "result"
@@ -77,15 +87,14 @@ class OpenAICompatibleLLM:
             "tool_choice": {"type": "function", "function": {"name": schema_name}},
         }
         try:
-            async with httpx.AsyncClient(timeout=self.timeout, transport=self._transport) as client:
-                resp = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
+            resp = await self._client.post(
+                f"{self.base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
         except httpx.HTTPError as e:
             raise LLMError(f"shaping request failed: {e}") from e
         if resp.status_code != 200:
@@ -97,20 +106,47 @@ class OpenAICompatibleLLM:
             raise LLMError(f"shaping model returned no parseable tool call: {e}") from e
 
 
+# ---------------------------------------------------------------------------
+# Module-level singletons — one shared client per logical role, created on
+# first use and closed at app shutdown via close_llm_clients().
+# Tests that need a custom transport pass llm=FakeLLM(...) directly to the
+# service under test and never go through these factories.
+
+_shaping: OpenAICompatibleLLM | None = None
+_advisor: OpenAICompatibleLLM | None = None
+_review: OpenAICompatibleLLM | None = None
+
+
 def get_shaping_llm() -> StructuredLLM:
     """The dogfooding default. Swap the body (or branch on an env var) to self-host."""
-    return OpenAICompatibleLLM()
+    global _shaping
+    if _shaping is None:
+        _shaping = OpenAICompatibleLLM()
+    return _shaping
 
 
 def get_advisor_llm() -> StructuredLLM:
     """The Doen Advisor (0009) reuses this same provider — same class, same env key, no
     second AI integration path (0009 constraint 2). Kept as its own factory so the Advisor
     has a clean monkeypatch seam in tests, mirroring get_shaping_llm."""
-    return OpenAICompatibleLLM()
+    global _advisor
+    if _advisor is None:
+        _advisor = OpenAICompatibleLLM()
+    return _advisor
 
 
 def get_review_llm() -> StructuredLLM:
     """The Advisor's self-review pass (BD-14): shaping classification and verification
     synthesis. Separate factory from get_shaping_llm so each can be patched independently
     in tests without affecting the other."""
-    return OpenAICompatibleLLM()
+    global _review
+    if _review is None:
+        _review = OpenAICompatibleLLM()
+    return _review
+
+
+async def close_llm_clients() -> None:
+    """Close all singleton httpx clients — call during app lifespan teardown."""
+    for client in (_shaping, _advisor, _review):
+        if client is not None:
+            await client.aclose()

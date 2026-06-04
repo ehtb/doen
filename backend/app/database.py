@@ -15,6 +15,7 @@ from fastapi import FastAPI, Request
 from redis import asyncio as aioredis
 
 from app.config import DATABASE_URL, REDIS_URL
+from app.providers.llm import close_llm_clients
 from app.store import SpecStore
 
 
@@ -28,6 +29,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await app.state.pg.close()
         await app.state.redis.close()
+        await close_llm_clients()
 
 
 def get_pool(request: Request) -> asyncpg.Pool:

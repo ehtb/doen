@@ -342,48 +342,53 @@ class SpecStore:
         Building → Learning: every criterion is verified.
         Learning → Complete: every criterion is verified AND a learn record exists.
         Learning → Complete (skip): via explicit mark_complete_without_learnings — not here.
+
+        The spec row is locked FOR UPDATE before reading so that the version bump is atomic
+        with the state patch. Any concurrent save_spec that loaded an older version will see
+        a StaleSpecError (409) rather than silently overwriting the new state.
         """
-        doc_raw = await self.pg.fetchval(
-            "SELECT doc FROM specs WHERE initiative_id = $1", initiative_id
-        )
-        if doc_raw is None:
-            return
-        spec = Spec.model_validate_json(doc_raw)
-        criteria = spec.acceptance
-
-        has_learn = bool(await self.pg.fetchval(
-            "SELECT EXISTS (SELECT 1 FROM memory WHERE initiative_id = $1)", initiative_id
-        ))
-
-        EVIDENCE_SEEN = {"evidence_submitted", "verified", "changes_requested"}
-        if not criteria:
-            new_state = "complete" if has_learn else "draft"
-        elif all(c.verification_status == "verified" for c in criteria) and has_learn:
-            new_state = "complete"
-        elif all(c.verification_status == "verified" for c in criteria):
-            new_state = "learning"
-        elif any(c.verification_status in EVIDENCE_SEEN for c in criteria):
-            new_state = "building"
-        else:
-            new_state = "draft"
-
         async with self.pg.acquire() as conn:
             async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT version, doc FROM specs WHERE initiative_id = $1 FOR UPDATE",
+                    initiative_id,
+                )
+                if row is None:
+                    return
+                spec = Spec.model_validate_json(row["doc"])
+                criteria = spec.acceptance
+
+                has_learn = bool(await conn.fetchval(
+                    "SELECT EXISTS (SELECT 1 FROM memory WHERE initiative_id = $1)",
+                    initiative_id,
+                ))
+
+                EVIDENCE_SEEN = {"evidence_submitted", "verified", "changes_requested"}
+                if not criteria:
+                    new_state = "complete" if has_learn else "draft"
+                elif all(c.verification_status == "verified" for c in criteria) and has_learn:
+                    new_state = "complete"
+                elif all(c.verification_status == "verified" for c in criteria):
+                    new_state = "learning"
+                elif any(c.verification_status in EVIDENCE_SEEN for c in criteria):
+                    new_state = "building"
+                else:
+                    new_state = "draft"
+
+                new_version = row["version"] + 1
                 await conn.execute(
                     "UPDATE initiatives SET state = $2, updated_at = now() WHERE id = $1",
                     initiative_id, new_state,
                 )
+                # Patch state and bump version atomically so save_spec detects the change.
                 await conn.execute(
-                    """UPDATE specs SET doc = jsonb_set(doc, '{state}', to_jsonb($2::text)),
-                       updated_at = now() WHERE initiative_id = $1""",
-                    initiative_id, new_state,
+                    """UPDATE specs
+                       SET version = $3,
+                           doc = doc || jsonb_build_object('state', $2::text, 'version', $3::int),
+                           updated_at = now()
+                       WHERE initiative_id = $1""",
+                    initiative_id, new_state, new_version,
                 )
-
-    async def _unique_slug(self, base: str) -> str:
-        slug, n = base, 2
-        while await self.pg.fetchval("SELECT 1 FROM initiatives WHERE id = $1", slug):
-            slug, n = f"{base}-{n}", n + 1
-        return slug
 
     # --- projects: group initiatives under a strategic intent (0010 u1) ------
     async def create_project(
@@ -582,17 +587,30 @@ class SpecStore:
         reports are attributed to memory from that initiative. Computed in four set-based passes
         (no N+1): proposed items from the spec JSONB, decisions grouped, criteria from JSONB,
         and drift reports via the memory join."""
-        item_rows = await self.pg.fetch(
+        # Single LATERAL pass over the JSONB: counts proposed items across all three
+        # sections AND evidence-submitted criteria in one scan per spec document, replacing
+        # the previous four correlated subqueries (three for proposed_items + one for
+        # criteria_to_verify). LEFT JOIN LATERAL preserves initiatives with empty specs.
+        jsonb_rows = await self.pg.fetch(
             """SELECT i.id,
-                      (SELECT count(*) FROM jsonb_array_elements(s.doc->'constraints') e
-                         WHERE e->>'status' = 'proposed')
-                    + (SELECT count(*) FROM jsonb_array_elements(s.doc->'discretion') e
-                         WHERE e->>'status' = 'proposed')
-                    + (SELECT count(*) FROM jsonb_array_elements(s.doc->'acceptance') e
-                         WHERE e->>'status' = 'proposed') AS proposed_items
+                      coalesce(sum(CASE WHEN e->>'status' = 'proposed' THEN 1 END), 0)::int
+                          AS proposed_items,
+                      coalesce(sum(CASE WHEN e->>'verification_status' = 'evidence_submitted' AND sec = 'acceptance' THEN 1 END), 0)::int
+                          AS criteria_to_verify
                FROM initiatives i
                JOIN specs s ON s.initiative_id = i.id
-               WHERE i.project_id = $1 AND i.archived_at IS NULL""",
+               LEFT JOIN LATERAL (
+                   SELECT e, 'constraints' AS sec
+                     FROM jsonb_array_elements(coalesce(s.doc->'constraints', '[]')) e
+                   UNION ALL
+                   SELECT e, 'discretion' AS sec
+                     FROM jsonb_array_elements(coalesce(s.doc->'discretion', '[]')) e
+                   UNION ALL
+                   SELECT e, 'acceptance' AS sec
+                     FROM jsonb_array_elements(coalesce(s.doc->'acceptance', '[]')) e
+               ) items ON true
+               WHERE i.project_id = $1 AND i.archived_at IS NULL
+               GROUP BY i.id""",
             project_id,
         )
         dec_rows = await self.pg.fetch(
@@ -600,16 +618,6 @@ class SpecStore:
                FROM decisions d JOIN initiatives i ON i.id = d.initiative_id
                WHERE i.project_id = $1 AND i.archived_at IS NULL AND d.status = 'open'
                GROUP BY d.initiative_id""",
-            project_id,
-        )
-        # BD-7: count acceptance criteria with evidence_submitted awaiting human verdict.
-        crit_rows = await self.pg.fetch(
-            """SELECT i.id,
-                      (SELECT count(*) FROM jsonb_array_elements(s.doc->'acceptance') e
-                         WHERE e->>'verification_status' = 'evidence_submitted') AS criteria_to_verify
-               FROM initiatives i
-               JOIN specs s ON s.initiative_id = i.id
-               WHERE i.project_id = $1 AND i.archived_at IS NULL""",
             project_id,
         )
         # BD-12: count pending drift reports attributed to memory from each initiative.
@@ -623,16 +631,15 @@ class SpecStore:
             project_id,
         )
         decisions = {r["id"]: r["n"] for r in dec_rows}
-        crits = {r["id"]: r["criteria_to_verify"] for r in crit_rows}
         drifts = {r["id"]: r["n"] for r in drift_rows}
         return {
             r["id"]: InitiativeAttention(
                 proposed_items=r["proposed_items"],
                 open_decisions=decisions.get(r["id"], 0),
-                criteria_to_verify=crits.get(r["id"], 0),
+                criteria_to_verify=r["criteria_to_verify"],
                 drift_reports=drifts.get(r["id"], 0),
             )
-            for r in item_rows
+            for r in jsonb_rows
         }
 
     async def assign_initiative_to_project(
@@ -797,6 +804,10 @@ class SpecStore:
                 async for msg in pubsub.listen():
                     if msg["type"] == "message":
                         return Decision.model_validate_json(msg["data"])
+        except TimeoutError:
+            # asyncio.timeout raises TimeoutError; convert to the domain exception so
+            # callers (MCP wait_for_decision) get the expected type, not a bare TimeoutError.
+            pass
         finally:
             await pubsub.unsubscribe(f"decision:{decision_id}")
         raise DecisionTimeout(decision_id)
