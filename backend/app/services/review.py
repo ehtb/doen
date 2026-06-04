@@ -109,26 +109,54 @@ def _build_verification_synthesis(
     needs_eye: list[tuple[AcceptanceCriterion, str]],
     borderline: list[tuple[AcceptanceCriterion, str]],
 ) -> str:
-    lines: list[str] = []
     total = len(passed) + len(needs_eye) + len(borderline)
     if not total:
         return ""
 
+    def _snippet(text: str) -> str:
+        return '"' + text[:80].rstrip() + ("…" if len(text) > 80 else "") + '"'
+
+    def _your_call(notes: str) -> str | None:
+        for line in notes.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("Your call:"):
+                return stripped[len("Your call:"):].strip()
+        return None
+
+    # Status header — quick scan of what needs attention
+    parts: list[str] = []
     if passed:
-        n = len(passed)
-        lines.append(f"{n} of {total} {'looks' if n == 1 else 'look'} like a clear pass.")
+        parts.append(f"{len(passed)} ready to approve")
     if needs_eye:
-        lines.append(f"\n{len(needs_eye)} need{'s' if len(needs_eye) == 1 else ''} your eye:")
-        for c, notes in needs_eye:
-            snippet = c.text[:80].rstrip() + ("…" if len(c.text) > 80 else "")
-            headline = notes.split("\n")[0].strip()
-            lines.append(f"  • \"{snippet}\" — {headline}")
+        parts.append(f"{len(needs_eye)} need{'s' if len(needs_eye) == 1 else ''} your eye")
     if borderline:
-        lines.append(f"\n{len(borderline)} borderline:")
-        for c, notes in borderline:
-            snippet = c.text[:80].rstrip() + ("…" if len(c.text) > 80 else "")
+        parts.append(f"{len(borderline)} borderline")
+    lines: list[str] = ["  ·  ".join(parts)]
+
+    if needs_eye:
+        lines.append("\nNeeds your eye:")
+        for i, (c, notes) in enumerate(needs_eye):
+            if i > 0:
+                lines.append("")
             headline = notes.split("\n")[0].strip()
-            lines.append(f"  • \"{snippet}\" — {headline}")
+            your_call = _your_call(notes)
+            lines.append(f"  {_snippet(c.text)}")
+            lines.append(f"    {headline}")
+            if your_call:
+                lines.append(f"    → {your_call}")
+
+    if borderline:
+        lines.append("\nBorderline:")
+        for i, (c, notes) in enumerate(borderline):
+            if i > 0:
+                lines.append("")
+            headline = notes.split("\n")[0].strip()
+            your_call = _your_call(notes)
+            lines.append(f"  {_snippet(c.text)}")
+            lines.append(f"    {headline}")
+            if your_call:
+                lines.append(f"    → {your_call}")
+
     return "\n".join(lines)
 
 
