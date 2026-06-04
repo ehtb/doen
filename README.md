@@ -78,6 +78,22 @@ changes need a rebuild (`docker compose up --build`). The dev overlay swaps in t
 mounts your source, so saves are picked up live. (Prefer running on your host instead?
 `make dev` does the same hot-reload without containers.)
 
+## Prompt evaluation
+
+Verification prompts are regression-tested with [Promptfoo](https://promptfoo.dev). The
+harness lives in [`eval/`](eval/):
+
+- `eval/promptfooconfig.yaml` — test suite with ground-truth cases from BD-15
+- `eval/prompts/verification-synthesis.yaml` — the verification synthesis prompt under test
+  (mirrors `VERIFICATION_SYNTHESIS_SYSTEM_PROMPT` in `backend/app/services/review.py`)
+
+```bash
+# from the repo root
+ANTHROPIC_API_KEY=... npx promptfoo eval --config eval/promptfooconfig.yaml
+```
+
+Add a test case here whenever you change a verification prompt.
+
 ## License
 
 Business Source License 1.1 — see [LICENSE](LICENSE).

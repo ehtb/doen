@@ -132,7 +132,7 @@ function CriterionVerificationCard({ criterion }: { criterion: AcceptanceCriteri
             )}
           </div>
           {criterion.advisor_preliminary_notes && (
-            <p className="mt-1 font-mono text-[11.5px] leading-relaxed text-muted-foreground">
+            <p className="mt-1 whitespace-pre-wrap font-mono text-[11.5px] leading-relaxed text-muted-foreground">
               {criterion.advisor_preliminary_notes}
             </p>
           )}
