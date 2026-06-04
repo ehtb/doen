@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   ArrowUp,
   Check,
@@ -13,7 +20,13 @@ import {
   ClipboardList,
   X,
 } from "lucide-react";
-import type { AcceptanceCriterion, AdvisorReply, Message, Proposal, Spec } from "@/lib/types";
+import type {
+  AcceptanceCriterion,
+  AdvisorReply,
+  Message,
+  Proposal,
+  Spec,
+} from "@/lib/types";
 import {
   appendMessage,
   clearConversation,
@@ -92,9 +105,8 @@ export default function ConversationRail({
   const threadEnd = useRef<HTMLDivElement>(null);
 
   // The confirmed criteria available for evidence submission (initiative rail only).
-  const confirmedCriteria: AcceptanceCriterion[] = specCtx?.spec.acceptance.filter(
-    (c) => c.status === "confirmed"
-  ) ?? [];
+  const confirmedCriteria: AcceptanceCriterion[] =
+    specCtx?.spec.acceptance.filter((c) => c.status === "confirmed") ?? [];
 
   const load = useCallback(async () => {
     try {
@@ -173,7 +185,8 @@ export default function ConversationRail({
       });
       if (!res.ok) {
         let msg = `the Advisor couldn't respond (${res.status})`;
-        if (res.status === 502) msg = "the Advisor is unreachable — check the LLM key, then retry.";
+        if (res.status === 502)
+          msg = "the Advisor is unreachable — check the LLM key, then retry.";
         setError(msg);
         // nothing was generated — roll the human turn back so it isn't left dangling
         await deleteMessage(human.id);
@@ -238,8 +251,11 @@ export default function ConversationRail({
     setError(null);
     try {
       // read the live version so the optimistic-lock write is fresh
-      const specRes = await fetch(`/api/specs/${specId}`, { cache: "no-store" });
-      if (!specRes.ok) throw new Error(`couldn't read the spec (${specRes.status})`);
+      const specRes = await fetch(`/api/specs/${specId}`, {
+        cache: "no-store",
+      });
+      if (!specRes.ok)
+        throw new Error(`couldn't read the spec (${specRes.status})`);
       const spec: Spec = await specRes.json();
       const body: Record<string, unknown> = {
         section: p.section,
@@ -303,14 +319,18 @@ export default function ConversationRail({
     <aside className="animate-rise flex flex-col overflow-hidden rounded-2xl border border-rail-border bg-rail text-rail-foreground shadow-sm">
       <div className="border-b border-rail-border px-5 py-4">
         <div className="flex items-baseline justify-between">
-          <span className="font-serif text-[15px] font-semibold">Conversation</span>
+          <span className="font-serif text-[15px] font-semibold">
+            Conversation
+          </span>
           <span className="flex items-center gap-1.5 font-mono text-[10px] tracking-wide text-rail-muted uppercase">
             <Sparkles className="size-3 text-primary" />
             advisor · {mode}
           </span>
         </div>
         <div className="mt-0.5 flex items-baseline justify-between gap-3">
-          <p className="font-mono text-[10.5px] tracking-wide text-rail-muted">{subtitle}</p>
+          <p className="font-mono text-[10.5px] tracking-wide text-rail-muted">
+            {subtitle}
+          </p>
           {hasHistory && !confirmingReset && (
             <button
               type="button"
@@ -329,10 +349,11 @@ export default function ConversationRail({
             <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[9.5px] tracking-[0.1em] text-rail-muted uppercase">
               <RotateCcw className="size-3" /> reset conversation
             </div>
-            <p className="text-[12.5px] leading-snug text-rail-foreground">
-              This clears the message history for this {isProject ? "project" : "initiative"} on this
-              device only. Your spec, decisions, work units, and memory are unaffected — the Advisor
-              simply starts fresh.
+            <p className="text-[13px] leading-snug text-rail-foreground">
+              This clears the message history for this{" "}
+              {isProject ? "project" : "initiative"} on this device only. Your
+              spec, decisions, work units, and memory are unaffected — the
+              Advisor simply starts fresh.
             </p>
             <div className="mt-3 flex items-center justify-end gap-2">
               <Button
@@ -344,8 +365,18 @@ export default function ConversationRail({
               >
                 Cancel
               </Button>
-              <Button size="sm" disabled={resetting} onClick={reset} className="h-7 px-2.5 text-xs">
-                {resetting ? <Loader2 className="animate-spin" /> : <RotateCcw />} Reset conversation
+              <Button
+                size="sm"
+                disabled={resetting}
+                onClick={reset}
+                className="h-7 px-2.5 text-xs"
+              >
+                {resetting ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <RotateCcw />
+                )}{" "}
+                Reset conversation
               </Button>
             </div>
           </div>
@@ -358,7 +389,8 @@ export default function ConversationRail({
             {intro}
             {hintPrompt && (
               <>
-                {" "}Try{" "}
+                {" "}
+                Try{" "}
                 <code className="rounded bg-rail-card px-1 py-0.5 font-mono text-[11px] text-rail-foreground">
                   {hintPrompt}
                 </code>
@@ -378,7 +410,9 @@ export default function ConversationRail({
             onAccept={accept}
             onDismiss={dismiss}
             synthesis={synthesis[m.id]}
-            onCreateInitiative={() => stashInitiativeDraft(scopeId, synthesis[m.id])}
+            onCreateInitiative={() =>
+              stashInitiativeDraft(scopeId, synthesis[m.id])
+            }
             // BD-15: evidence submission from the rail
             criteria={confirmedCriteria}
             evidenceOpen={evidenceOpen === m.id}
@@ -392,7 +426,8 @@ export default function ConversationRail({
 
         {sending && (
           <div className="flex items-center gap-2 font-mono text-[11px] text-rail-muted">
-            <Loader2 className="size-3 animate-spin text-primary" /> the Advisor is thinking…
+            <Loader2 className="size-3 animate-spin text-primary" /> the Advisor
+            is thinking…
           </div>
         )}
         <div ref={threadEnd} />
@@ -414,8 +449,14 @@ export default function ConversationRail({
           className="resize-none border-rail-border bg-rail-card text-rail-foreground placeholder:text-rail-muted"
         />
         <div className="mt-2 flex items-center justify-between">
-          <span className="font-mono text-[10px] tracking-wide text-rail-muted">⌘↵ to send</span>
-          <Button size="sm" disabled={sending || !input.trim()} onClick={() => send()}>
+          <span className="font-mono text-[10px] tracking-wide text-rail-muted">
+            ⌘↵ to send
+          </span>
+          <Button
+            size="sm"
+            disabled={sending || !input.trim()}
+            onClick={() => send()}
+          >
             {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />} Send
           </Button>
         </div>
@@ -473,7 +514,11 @@ function MessageRow({
           isHuman ? "text-rail-muted" : "text-primary",
         )}
       >
-        {isHuman ? <User className="size-3" /> : <Sparkles className="size-3" />}
+        {isHuman ? (
+          <User className="size-3" />
+        ) : (
+          <Sparkles className="size-3" />
+        )}
         {isHuman ? "you" : "advisor"}
         {/* BD-15: submit-as-evidence toggle on Advisor messages */}
         {canSubmitEvidence && (
@@ -482,7 +527,9 @@ function MessageRow({
             onClick={onToggleEvidence}
             className={cn(
               "ml-auto flex items-center gap-1 font-mono text-[9px] tracking-wide uppercase transition-colors",
-              evidenceOpen ? "text-primary" : "text-rail-muted hover:text-rail-foreground",
+              evidenceOpen
+                ? "text-primary"
+                : "text-rail-muted hover:text-rail-foreground",
             )}
             title="Submit as evidence"
           >
@@ -537,11 +584,7 @@ function MessageRow({
             className="h-7 w-full px-2.5 text-xs"
           >
             {/* Show spinner whenever any submission is in-flight, not just this criterion. */}
-            {evidenceBusy ? (
-              <Loader2 className="animate-spin" />
-            ) : (
-              <Check />
-            )}{" "}
+            {evidenceBusy ? <Loader2 className="animate-spin" /> : <Check />}{" "}
             Submit finding
           </Button>
         </div>
@@ -569,10 +612,18 @@ function MessageRow({
           <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[9.5px] tracking-[0.1em] text-primary uppercase">
             <Sparkles className="size-3" /> proposed initiative
           </div>
-          <p className="text-[12.5px] leading-snug text-rail-foreground">{synthesis}</p>
+          <p className="text-[13px] leading-snug text-rail-foreground">
+            {synthesis}
+          </p>
           <div className="mt-3 flex items-center justify-between gap-2">
-            <span className="font-mono text-[10px] text-rail-muted">start from this?</span>
-            <Button size="sm" onClick={onCreateInitiative} className="h-7 px-2.5 text-xs">
+            <span className="font-mono text-[10px] text-rail-muted">
+              start from this?
+            </span>
+            <Button
+              size="sm"
+              onClick={onCreateInitiative}
+              className="h-7 px-2.5 text-xs"
+            >
               <FilePlus2 /> Create initiative from this
             </Button>
           </div>
@@ -608,9 +659,12 @@ function ProposalCard({
   return (
     <div className="rounded-xl border border-primary/40 bg-rail-card p-3.5">
       <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[9.5px] tracking-[0.1em] text-primary uppercase">
-        <Sparkles className="size-3" /> proposed {SECTION_NOTE[proposal.section]}
+        <Sparkles className="size-3" /> proposed{" "}
+        {SECTION_NOTE[proposal.section]}
       </div>
-      <p className="text-[12.5px] leading-snug text-rail-foreground">{proposal.text}</p>
+      <p className="text-[13px] leading-snug text-rail-foreground">
+        {proposal.text}
+      </p>
       {proposal.section === "acceptance" && proposal.verify && (
         <p className="mt-1.5 font-mono text-[10px] text-rail-muted">
           verify: {proposal.verify.kind}
@@ -618,7 +672,9 @@ function ProposalCard({
         </p>
       )}
       <div className="mt-3 flex items-center justify-between gap-2">
-        <span className="font-mono text-[10px] text-rail-muted">add to the spec?</span>
+        <span className="font-mono text-[10px] text-rail-muted">
+          add to the spec?
+        </span>
         <div className="flex gap-2">
           <Button
             size="sm"
@@ -629,7 +685,12 @@ function ProposalCard({
           >
             Dismiss
           </Button>
-          <Button size="sm" disabled={busy} onClick={onAccept} className="h-7 px-2.5 text-xs">
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={onAccept}
+            className="h-7 px-2.5 text-xs"
+          >
             {busy ? <Loader2 className="animate-spin" /> : <Check />} Accept
           </Button>
         </div>

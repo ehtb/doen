@@ -38,12 +38,23 @@ type Section = "constraints" | "discretion" | "acceptance";
 // which render below this component). Intent leads, always open; these two governing sections
 // disclose progressively and auto-advance. Discretion is NOT here — it lives under "Agent
 // latitude" (a3), de-emphasised and outside the auto-expand chain.
-const GOVERNING_BASE: { key: Section; title: string; researchTitle?: string; note: string; icon: LucideIcon }[] = [
-  { key: "constraints", title: "Constraints", note: "locked — I won't cross these", icon: Lock },
+const GOVERNING_BASE: {
+  key: Section;
+  title: string;
+  researchTitle?: string;
+  note: string;
+  icon: LucideIcon;
+}[] = [
+  {
+    key: "constraints",
+    title: "Constraints",
+    note: "locked — I won't cross these",
+    icon: Lock,
+  },
   {
     key: "acceptance",
     title: "Acceptance criteria",
-    researchTitle: "Success criteria",  // BD-15: research initiatives use this label
+    researchTitle: "Success criteria", // BD-15: research initiatives use this label
     note: "how the work gets judged",
     icon: CircleCheck,
   },
@@ -59,7 +70,8 @@ const PROV_LABEL: Record<string, string> = {
 function itemClasses(status: string): string {
   return cn(
     "group relative rounded-md border border-l-[3px] px-3.5 py-3 transition-colors",
-    status === "confirmed" && "border-l-confirmed bg-confirmed/[0.06] hover:bg-confirmed/[0.09]",
+    status === "confirmed" &&
+      "border-l-confirmed bg-confirmed/[0.06] hover:bg-confirmed/[0.09]",
     status === "proposed" &&
       "border-dashed [border-left-style:solid] border-l-proposed bg-card/60 hover:bg-card",
     status === "retired" && "opacity-55",
@@ -132,9 +144,14 @@ function Cue({
         <span className={cn("size-1.5 rounded-full", s.dot)} />
         <span className={s.text}>{status}</span>
       </span>
-      <span className="text-ink-faint">· {PROV_LABEL[provenance] ?? provenance}</span>
+      <span className="text-ink-faint">
+        · {PROV_LABEL[provenance] ?? provenance}
+      </span>
       {status === "proposed" && classification && (
-        <ClassificationBadge classification={classification} reason={classificationReason} />
+        <ClassificationBadge
+          classification={classification}
+          reason={classificationReason}
+        />
       )}
     </div>
   );
@@ -161,7 +178,11 @@ export default function SpecDocument() {
   const iid = spec.initiative_id;
 
   // BD-14: batch approve confident items
-  const confidentProposed = [...spec.constraints, ...spec.discretion, ...spec.acceptance].filter(
+  const confidentProposed = [
+    ...spec.constraints,
+    ...spec.discretion,
+    ...spec.acceptance,
+  ].filter(
     (i) => i.status === "proposed" && i.advisor_classification === "confident",
   );
   const hasSynthesis =
@@ -171,7 +192,9 @@ export default function SpecDocument() {
     );
 
   async function batchApproveConfident() {
-    await mutate(`/api/specs/${iid}/batch-approve-confident`, "POST", { version: spec.version });
+    await mutate(`/api/specs/${iid}/batch-approve-confident`, "POST", {
+      version: spec.version,
+    });
   }
 
   // Progressive disclosure (a1/a2): governing sections collapse by default; the guided flow keeps
@@ -185,12 +208,18 @@ export default function SpecDocument() {
   // u2 (a4): live review progress across every spec item — confirmed vs. total reviewable.
   // Rejected items are deleted (they leave the total); retired items are history (excluded). The
   // count is driven by `spec` state, so accepting or rejecting updates it immediately.
-  const reviewItems = [...spec.constraints, ...spec.discretion, ...spec.acceptance].filter(
-    (i) => i.status !== "retired",
-  );
+  const reviewItems = [
+    ...spec.constraints,
+    ...spec.discretion,
+    ...spec.acceptance,
+  ].filter((i) => i.status !== "retired");
   const reviewTotal = reviewItems.length;
-  const reviewConfirmed = reviewItems.filter((i) => i.status === "confirmed").length;
-  const reviewPct = reviewTotal ? Math.round((reviewConfirmed / reviewTotal) * 100) : 0;
+  const reviewConfirmed = reviewItems.filter(
+    (i) => i.status === "confirmed",
+  ).length;
+  const reviewPct = reviewTotal
+    ? Math.round((reviewConfirmed / reviewTotal) * 100)
+    : 0;
   const reviewDone = reviewTotal > 0 && reviewConfirmed === reviewTotal;
 
   // a9: while a fresh spec still has items awaiting review, the rail leads with the guided
@@ -235,7 +264,9 @@ export default function SpecDocument() {
 
   async function saveEdit(it: SpecItem) {
     if (!draft.trim()) return;
-    if (await mutate(`/api/specs/${iid}/items/${it.id}`, "PATCH", { text: draft })) {
+    if (
+      await mutate(`/api/specs/${iid}/items/${it.id}`, "PATCH", { text: draft })
+    ) {
       setEditingId(null);
       setDraft("");
     }
@@ -245,7 +276,10 @@ export default function SpecDocument() {
     if (!addText.trim()) return;
     const body: Record<string, unknown> = { section, text: addText };
     if (section === "acceptance")
-      body.verify = { kind: verifyKind, detail: verifyDetail.trim() || addText };
+      body.verify = {
+        kind: verifyKind,
+        detail: verifyDetail.trim() || addText,
+      };
     if (await mutate(`/api/specs/${iid}/items`, "POST", body)) {
       setAdding(null);
       setAddText("");
@@ -416,7 +450,12 @@ export default function SpecDocument() {
           <Button size="sm" disabled={busy} onClick={() => submitAdd(section)}>
             Add
           </Button>
-          <Button size="sm" variant="ghost" disabled={busy} onClick={() => setAdding(null)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => setAdding(null)}
+          >
             Cancel
           </Button>
         </div>
@@ -438,9 +477,13 @@ export default function SpecDocument() {
               )}
             >
               {reviewDone && <Check className="size-3.5" />}
-              {reviewDone ? "Review complete" : `${reviewConfirmed} of ${reviewTotal} confirmed`}
+              {reviewDone
+                ? "Review complete"
+                : `${reviewConfirmed} of ${reviewTotal} confirmed`}
             </span>
-            <span className="font-mono text-[10px] tabular-nums text-ink-faint">{reviewPct}%</span>
+            <span className="font-mono text-[10px] tabular-nums text-ink-faint">
+              {reviewPct}%
+            </span>
           </div>
           <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-border/70">
             <div
@@ -458,7 +501,7 @@ export default function SpecDocument() {
             <Sparkles className="size-3" />
             Advisor review
           </div>
-          <pre className="whitespace-pre-wrap font-mono text-[12px] leading-relaxed text-foreground">
+          <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed text-foreground">
             {spec.shaping_review_synthesis}
           </pre>
           {confidentProposed.length > 0 && (
@@ -469,7 +512,8 @@ export default function SpecDocument() {
                 onClick={batchApproveConfident}
                 className="h-7 bg-confirmed px-3 text-[11px] text-white shadow-sm hover:bg-confirmed/90"
               >
-                <Check /> Approve {confidentProposed.length} confident item{confidentProposed.length !== 1 ? "s" : ""}
+                <Check /> Approve {confidentProposed.length} confident item
+                {confidentProposed.length !== 1 ? "s" : ""}
               </Button>
               <span className="font-mono text-[10px] text-ink-faint">
                 flagged and uncertain items stay open
@@ -495,7 +539,8 @@ export default function SpecDocument() {
 
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <p className="font-mono text-[11px] tracking-wide text-ink-faint">
-          the living spec · v{spec.version} — only confirmed items bind executors
+          the living spec · v{spec.version} — only confirmed items bind
+          executors
         </p>
         <button
           type="button"
@@ -533,7 +578,11 @@ export default function SpecDocument() {
               className="flex w-full items-center justify-between gap-3 rounded-md py-1.5 text-left transition-colors hover:text-accent-deep"
             >
               <h2 className="flex items-center gap-2 font-mono text-[11.5px] font-semibold tracking-[0.13em] text-ink-soft uppercase">
-                {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+                {open ? (
+                  <ChevronDown className="size-3.5" />
+                ) : (
+                  <ChevronRight className="size-3.5" />
+                )}
                 <Icon className="size-3.5" /> {title}
                 <span className="font-normal tracking-normal text-ink-faint normal-case">
                   · {note}
@@ -576,7 +625,11 @@ export default function SpecDocument() {
               className="flex w-full items-center justify-between gap-3 text-left transition-colors hover:text-accent-deep"
             >
               <h2 className="flex items-center gap-2 font-mono text-[10.5px] font-medium tracking-[0.13em] text-ink-faint uppercase">
-                {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+                {open ? (
+                  <ChevronDown className="size-3.5" />
+                ) : (
+                  <ChevronRight className="size-3.5" />
+                )}
                 <Compass className="size-3.5" /> Agent latitude
                 <span className="font-normal tracking-normal normal-case">
                   · discretion — the executor's calls, not yours

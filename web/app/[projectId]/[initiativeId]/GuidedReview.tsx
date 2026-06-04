@@ -25,14 +25,17 @@ export default function GuidedReview() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
 
-  const queue: { section: ReviewSection; it: SpecItem }[] = ORDER.flatMap((section) =>
-    (spec[section] as SpecItem[])
-      .filter((i) => i.status === "proposed")
-      .map((it) => ({ section, it })),
+  const queue: { section: ReviewSection; it: SpecItem }[] = ORDER.flatMap(
+    (section) =>
+      (spec[section] as SpecItem[])
+        .filter((i) => i.status === "proposed")
+        .map((it) => ({ section, it })),
   );
-  const reviewable = [...spec.constraints, ...spec.acceptance, ...spec.discretion].filter(
-    (i) => i.status !== "retired",
-  );
+  const reviewable = [
+    ...spec.constraints,
+    ...spec.acceptance,
+    ...spec.discretion,
+  ].filter((i) => i.status !== "retired");
   const confirmed = reviewable.filter((i) => i.status === "confirmed").length;
 
   // Nothing to walk: a spec with no items at all shows nothing; once items exist and all are
@@ -44,9 +47,9 @@ export default function GuidedReview() {
         <div className="flex items-center gap-1.5 font-mono text-[10px] tracking-[0.13em] text-confirmed uppercase">
           <Check className="size-3" /> review complete
         </div>
-        <p className="mt-1.5 text-[12.5px] leading-snug text-rail-foreground">
-          That&apos;s the spec — every item reviewed. It&apos;s yours now; ask me anything or start
-          shaping the work.
+        <p className="mt-1.5 text-[13px] leading-snug text-rail-foreground">
+          That&apos;s the spec — every item reviewed. It&apos;s yours now; ask
+          me anything or start shaping the work.
         </p>
       </div>
     );
@@ -54,15 +57,20 @@ export default function GuidedReview() {
 
   const { section, it } = queue[0];
   const iid = spec.initiative_id;
-  const verify = section === "acceptance" ? (it as AcceptanceCriterion).verify : null;
+  const verify =
+    section === "acceptance" ? (it as AcceptanceCriterion).verify : null;
 
-  const confirm = () => mutate(`/api/specs/${iid}/items/${it.id}/confirm`, "POST", {});
-  const reject = () => mutate(`/api/specs/${iid}/items/${it.id}/reject`, "POST", {});
+  const confirm = () =>
+    mutate(`/api/specs/${iid}/items/${it.id}/confirm`, "POST", {});
+  const reject = () =>
+    mutate(`/api/specs/${iid}/items/${it.id}/reject`, "POST", {});
   const confirmLatitude = () =>
     mutate(`/api/specs/${iid}/confirm-all`, "POST", { section: "discretion" });
   async function saveEdit() {
     if (!draft.trim()) return;
-    if (await mutate(`/api/specs/${iid}/items/${it.id}`, "PATCH", { text: draft })) {
+    if (
+      await mutate(`/api/specs/${iid}/items/${it.id}`, "PATCH", { text: draft })
+    ) {
       setEditing(false);
       setDraft("");
     }
@@ -78,9 +86,10 @@ export default function GuidedReview() {
           {confirmed} confirmed · {queue.length} to go
         </span>
       </div>
-      <p className="mt-1.5 text-[12px] leading-snug text-rail-muted">
-        Let&apos;s go through the spec together — accept what&apos;s right, reject what isn&apos;t,
-        or edit the wording. This is the {LABEL[section]} I&apos;d look at next.
+      <p className="mt-1.5 text-[13px] leading-snug text-rail-muted">
+        Let&apos;s go through the spec together — accept what&apos;s right,
+        reject what isn&apos;t, or edit the wording. This is the{" "}
+        {LABEL[section]} I&apos;d look at next.
       </p>
 
       <div className="mt-2.5 rounded-lg border border-rail-border bg-rail p-3">
@@ -94,11 +103,17 @@ export default function GuidedReview() {
               rows={3}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              className="resize-none border-rail-border bg-rail-card text-[12.5px] text-rail-foreground"
+              className="resize-none border-rail-border bg-rail-card text-[13px] text-rail-foreground"
             />
             <div className="flex gap-2">
-              <Button size="sm" disabled={busy} onClick={saveEdit} className="h-7 px-2.5 text-xs">
-                {busy ? <Loader2 className="animate-spin" /> : <Check />} Save wording
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={saveEdit}
+                className="h-7 px-2.5 text-xs"
+              >
+                {busy ? <Loader2 className="animate-spin" /> : <Check />} Save
+                wording
               </Button>
               <Button
                 size="sm"
@@ -115,7 +130,9 @@ export default function GuidedReview() {
             </div>
           </div>
         ) : (
-          <p className="text-[12.5px] leading-snug text-rail-foreground">{it.text}</p>
+          <p className="text-[13px] leading-snug text-rail-foreground">
+            {it.text}
+          </p>
         )}
         {verify && !editing && (
           <p className="mt-1.5 font-mono text-[10px] text-rail-muted">
