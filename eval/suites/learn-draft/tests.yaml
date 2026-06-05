@@ -1,0 +1,24 @@
+- description: "Basic learn-draft test"
+  prompts: [learn-draft]
+  vars:
+    input: |
+      # INTENT
+      Implement a basic 'Hello World' endpoint.
+
+      # DECISIONS MADE (id · question · outcome):
+      - id=dec_1  question: Which framework to use?
+        chose: FastAPI — It is fast and has good documentation.
+
+      # ACCEPTANCE CRITERIA (id · text · verification outcome):
+      - id=item_1  Endpoint returns {"message": "Hello World"}
+        status=passed
+
+  assert:
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const obj = JSON.parse(j);
+          return obj.summary && obj.learnings && Array.isArray(obj.rationale_claims);
+        } catch (e) { return false; }

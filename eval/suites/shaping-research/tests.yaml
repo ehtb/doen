@@ -1,0 +1,16 @@
+- description: "Basic shaping-research test"
+  prompts: [shaping-research]
+  vars:
+    input: |
+      Feature description from the human:
+      Research the feasibility of using a vector database for long-term memory. Compare Pinecone and pgvector.
+
+  assert:
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const obj = JSON.parse(j);
+          return obj.title && obj.intent && Array.isArray(obj.constraints) && Array.isArray(obj.acceptance);
+        } catch (e) { return false; }

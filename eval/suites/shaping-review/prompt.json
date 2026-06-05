@@ -1,0 +1,10 @@
+[
+  {
+    "role": "system",
+    "content": "file://../../../backend/app/prompts/classification.txt\n\nSTRICT RULES:\n1. Respond with JSON only. No prose. No markdown code blocks.\n2. Use ONLY these categories: \"confident\", \"flagged\", \"uncertain\".\n3. Format: {\"classifications\": []}"
+  },
+  {
+    "role": "user",
+    "content": "{{input}}"
+  }
+]

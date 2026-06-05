@@ -11,10 +11,22 @@ description: "Doen LLM Evaluation Harness"
 prompts:
   - id: verification-synthesis
     label: verification-synthesis
-    raw: "file://suites/verification-synthesis/prompt.yaml"
+    raw: "file://suites/verification-synthesis/prompt.json"
   - id: shaping-review
     label: shaping-review
-    raw: "file://suites/shaping-review/prompt.yaml"
+    raw: "file://suites/shaping-review/prompt.json"
+  - id: shaping
+    label: shaping
+    raw: "file://suites/shaping/prompt.json"
+  - id: shaping-research
+    label: shaping-research
+    raw: "file://suites/shaping-research/prompt.json"
+  - id: learn-draft
+    label: learn-draft
+    raw: "file://suites/learn-draft/prompt.json"
+  - id: heuristic-draft
+    label: heuristic-draft
+    raw: "file://suites/heuristic-draft/prompt.json"
 
 providers:
   - id: openai:chat:anthropic/claude-sonnet-4.6
@@ -26,3 +38,7 @@ providers:
 tests:
   - suites/verification-synthesis/tests.yaml
   - suites/shaping-review/tests.yaml
+  - suites/shaping/tests.yaml
+  - suites/shaping-research/tests.yaml
+  - suites/learn-draft/tests.yaml
+  - suites/heuristic-draft/tests.yaml

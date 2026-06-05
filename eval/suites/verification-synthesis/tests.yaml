@@ -13,9 +13,9 @@
             3. The endpoint calls store.submit_evidence() with a single-item list — identical code path to the MCP submit_evidence tool. The spec version is bumped by save_spec, _recompute_state() transitions draft→building on first evidence. Both paths produce identical spec state shape.
   assert:
     - type: contains
+      value: "PASS"
+    - type: not-contains
       value: "Your call"
-    - type: contains
-      value: "•"
 
 - description: "BD-15 borderline — lifecycle implementation confirmed but not fully tested end-to-end"
   prompts: [verification-synthesis]

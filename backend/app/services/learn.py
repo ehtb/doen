@@ -18,27 +18,10 @@ from app.providers.llm import StructuredLLM, get_advisor_llm
 from app.schemas import ConfirmHeuristics, HeuristicDraftResult, HeuristicProposal, LearnReview, OutcomeDraft, RationaleClaim
 from app.store import SpecStore
 
-LEARN_DRAFT_SYSTEM_PROMPT = """You are the Doen Advisor drafting the closing outcome for an \
-initiative — for the human to correct and confirm before it is saved to memory. From the \
-initiative's history (its intent, the decisions made and why, and the acceptance criteria \
-and their verification outcomes), write an honest outcome the next initiative can learn from.
+from pathlib import Path
 
-Return via the outcome tool:
-- summary: a few sentences — what this initiative set out to do and what actually happened against \
-its intent and acceptance criteria. Plain, honest prose. Note what shipped, what didn't, what \
-changed along the way.
-- learnings: the durable lessons worth carrying forward — what worked, what to do differently. A \
-few crisp lines. This is what gets retrieved when shaping future initiatives, so make it \
-transferable, not initiative-specific trivia.
-- rationale_claims: a list of specific cause-effect claims traceable to the record. Each claim \
-MUST cite a real source_id from the decisions or criteria listed below (a decision id like \
-dec_abc123, or a criterion id like item_abc123). NEVER fabricate an id or reference something \
-not in the record. If you have nothing traceable, return an empty list. Each claim is:
-  - claim: one sentence stating a concrete cause and its effect
-  - source_id: the exact id from the record it traces to
-  - source_type: "decision" or "criterion"
-
-Don't inflate. If units were left unverified or a decision proved wrong, say so plainly."""
+_PROMPTS = Path(__file__).resolve().parent.parent / "prompts"
+LEARN_DRAFT_SYSTEM_PROMPT = (_PROMPTS / "learn-draft.txt").read_text().strip()
 
 LEARN_DRAFT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -183,23 +166,7 @@ async def submit_learn(
 
 # --- BD-17: heuristic extraction from the Learn stage --------------------------------
 
-HEURISTIC_DRAFT_SYSTEM_PROMPT = """You are the Doen Advisor extracting actionable heuristics \
-from a completed initiative. A heuristic is a transferable cause-effect rule — something the \
-next executor can apply WITHOUT reading the full history of this initiative.
-
-Rules for each heuristic:
-- Actionable: starts with a verb or a conditional ("When X, do Y", "Prefer X over Y", "Avoid X because Y").
-- Traceable: grounded in what actually happened, not generic best practices.
-- Distinct: each heuristic captures one insight, not a bundle.
-
-Return 0-5 heuristics. Return 0 if the initiative produced no transferable rules. Never pad.
-
-For each heuristic:
-- rule: the actionable statement (one or two sentences max).
-- tags: 1-3 short tags that make it retrievable (e.g. ["api", "error-handling"]).
-- supersedes: the rule text of any prior heuristic this one contradicts or replaces — leave null if new.
-
-Return via the heuristics tool."""
+HEURISTIC_DRAFT_SYSTEM_PROMPT = (_PROMPTS / "heuristic-draft.txt").read_text().strip()
 
 HEURISTIC_DRAFT_SCHEMA: dict[str, Any] = {
     "type": "object",

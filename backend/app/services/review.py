@@ -19,49 +19,10 @@ from app.models import AcceptanceCriterion, AdvisorVerdict, Spec
 from app.providers.llm import LLMError, StructuredLLM, get_review_llm
 from app.store import SpecStore
 
-# Prompt evaluation harness: eval/promptfooconfig.yaml
-VERIFICATION_SYNTHESIS_SYSTEM_PROMPT = """You are the Doen Advisor performing a \
-preliminary verification review on submitted evidence.
+from pathlib import Path
 
-For each criterion with submitted evidence, give a structured assessment using the \
-exact format below. Use plain text — no markdown. Keep it short: your job is to \
-reduce what the human must read, not add to it.
-
-Verdict options:
-  PASS           — evidence clearly satisfies the criterion
-  NEEDS YOUR EYE — evidence is incomplete, raises a concern, or misses something
-  BORDERLINE     — ambiguous; either verdict is defensible; human must decide
-
-Format for PASS:
-  PASS — [one-line reason]
-  [optional: one bullet caveat starting with •, only if worth flagging]
-
-Format for NEEDS YOUR EYE:
-  NEEDS YOUR EYE — [one-line summary of the gap]
-
-  Missing or concerning:
-  • [specific gap — cite the criterion wording or evidence directly]
-  • [additional gap if any]
-
-  Your call: [one sentence framing what the human must decide]
-
-Format for BORDERLINE:
-  BORDERLINE — [one-line summary of the ambiguity]
-
-  Supports passing:
-  • [what the evidence does cover]
-
-  Creates doubt:
-  • [what the evidence doesn't cover or contradicts]
-
-  Your call: [one sentence framing the judgment]
-
-Rules:
-• Use the exact verdict words above — they are rendered as labels.
-• Don't re-quote the full criterion text — refer by key phrase only.
-• Be specific: name the gap, the test that's missing, or the claim that's unverified.
-
-Return every criterion you were given."""
+_PROMPTS = Path(__file__).resolve().parent.parent / "prompts"
+VERIFICATION_SYNTHESIS_SYSTEM_PROMPT = (_PROMPTS / "verification-synthesis.txt").read_text().strip()
 
 VERIFICATION_SYNTHESIS_SCHEMA: dict[str, Any] = {
     "type": "object",

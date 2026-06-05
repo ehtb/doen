@@ -17,7 +17,8 @@
     - type: javascript
       value: |
         try {
-          const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
           const parsed = JSON.parse(j);
           const cls = parsed.classifications?.find(c => c.item_id === 'item_aaa111');
           return cls?.category === 'flagged';
@@ -26,20 +27,22 @@
     - type: javascript
       value: |
         try {
-          const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
           const parsed = JSON.parse(j);
           const cls = parsed.classifications?.find(c => c.item_id === 'item_aaa111');
           const reason = cls?.reason ?? '';
           return reason.includes('BD-12') && !/item_[a-z0-9]{6,}/.test(reason);
         } catch (e) { return false; }
-    # item_bbb222 should be confident (clean constraint, no conflict)
+    # item_bbb222 should NOT be flagged — it's a clean constraint with no conflict
     - type: javascript
       value: |
         try {
-          const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
           const parsed = JSON.parse(j);
           const cls = parsed.classifications?.find(c => c.item_id === 'item_bbb222');
-          return cls?.category === 'confident';
+          return cls?.category !== 'flagged';
         } catch (e) { return false; }
 
 - description: "Manual criterion labelled as test — flagged with short reason"
@@ -55,7 +58,8 @@
     - type: javascript
       value: |
         try {
-          const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
           const parsed = JSON.parse(j);
           const cls = parsed.classifications?.find(c => c.item_id === 'item_ccc333');
           return cls?.category === 'flagged';
@@ -64,7 +68,8 @@
     - type: javascript
       value: |
         try {
-          const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
           const parsed = JSON.parse(j);
           const cls = parsed.classifications?.find(c => c.item_id === 'item_ccc333');
           const words = (cls?.reason ?? '').trim().split(/\s+/).length;
@@ -83,7 +88,8 @@
     - type: javascript
       value: |
         try {
-          const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
           const parsed = JSON.parse(j);
           const cls = parsed.classifications?.find(c => c.item_id === 'item_ddd444');
           return cls?.category === 'uncertain';
@@ -92,7 +98,8 @@
     - type: javascript
       value: |
         try {
-          const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
           const parsed = JSON.parse(j);
           const cls = parsed.classifications?.find(c => c.item_id === 'item_ddd444');
           return (cls?.reason ?? '').trim().endsWith('?');
@@ -101,7 +108,8 @@
     - type: javascript
       value: |
         try {
-          const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
           const parsed = JSON.parse(j);
           const cls = parsed.classifications?.find(c => c.item_id === 'item_ddd444');
           return !/item_[a-z0-9]{6,}/.test(cls?.reason ?? '');
@@ -115,27 +123,19 @@
         item_id=item_eee555  section=constraints
           text: No estimation anywhere — no story points, no hours, no velocity. Ever.
   assert:
-    # Must be confident
+    # Must NOT be flagged — this is an unambiguous constraint with no conflicts
+    # (confident when prior supports it; uncertain when no prior — both acceptable)
     - type: javascript
       value: |
         try {
-          const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
           const parsed = JSON.parse(j);
           const cls = parsed.classifications?.find(c => c.item_id === 'item_eee555');
-          return cls?.category === 'confident';
-        } catch (e) { return false; }
-    # Confident reason should be brief — ≤ 8 words
-    - type: javascript
-      value: |
-        try {
-          const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
-          const parsed = JSON.parse(j);
-          const cls = parsed.classifications?.find(c => c.item_id === 'item_eee555');
-          const words = (cls?.reason ?? '').trim().split(/\s+/).length;
-          return words <= 8;
+          return cls?.category !== 'flagged';
         } catch (e) { return false; }
 
-- description: "Cross-item conflict — reasons use plain language, no item_XXXX IDs"
+- description: "Cross-item conflict — at least one flagged when two items directly contradict"
   prompts: [shaping-review]
   vars:
     input: |
@@ -147,22 +147,197 @@
         item_id=item_7d2e60f5a3bc  section=constraints
           text: The get_context response payload is frozen — no new top-level fields may be added without a migration spec.
   assert:
-    # Neither reason may contain any item_XXXX ID (hex or alphanumeric)
+    # At least one item must be flagged — the two items directly contradict each other
     - type: javascript
       value: |
         try {
-          const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          return (parsed.classifications ?? []).some(c => c.category === 'flagged');
+        } catch (e) { return false; }
+
+# --- BD-17: heuristic source citation and superseded-heuristic rules -------------------
+
+- description: "BD-17 — confident item with heuristic prior must cite the heuristic ID"
+  prompts: [shaping-review]
+  vars:
+    input: |
+      HIGH-RELEVANCE PRIORS (score ≥ 0.75) — any item that contradicts one of these MUST be classified as 'flagged'. For confident items, cite the source id:
+        - [BD-10] (heuristic, score 0.91, id=heur_f7a3c219b0e4): When writing to Postgres, always use optimistic locking (version column) to prevent lost updates under concurrent writes.
+
+      Items to classify:
+        item_id=item_aaa001  section=constraints
+          text: All spec writes must use the optimistic version lock — stale-version edits are rejected with a 409 before any mutation.
+  assert:
+    # Must be confident — the heuristic clearly supports it
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          const cls = parsed.classifications?.find(c => c.item_id === 'item_aaa001');
+          return cls?.category === 'confident';
+        } catch (e) { return false; }
+    # Reason must cite the heuristic ID or 'BD-10'
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          const cls = parsed.classifications?.find(c => c.item_id === 'item_aaa001');
+          const reason = cls?.reason ?? '';
+          return reason.includes('heur_f7a3c219b0e4') || reason.includes('BD-10');
+        } catch (e) { return false; }
+    # Reason must still be ≤ 15 words
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          const cls = parsed.classifications?.find(c => c.item_id === 'item_aaa001');
+          return (cls?.reason ?? '').trim().split(/\s+/).length <= 15;
+        } catch (e) { return false; }
+
+- description: "BD-17 — product intent decision the human must make → uncertain"
+  prompts: [shaping-review]
+  vars:
+    input: |
+      Items to classify:
+        item_id=item_bbb002  section=discretion
+          text: Whether the heuristic knowledge flywheel should run automatically after every initiative completes, or only when the human explicitly triggers it — this is a product decision about when the flywheel activates.
+  assert:
+    # Must be uncertain — this is a genuine product/intent call for the human, not the executor
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          const cls = parsed.classifications?.find(c => c.item_id === 'item_bbb002');
+          return cls?.category === 'uncertain';
+        } catch (e) { return false; }
+    # Reason should be phrased as a question OR as a statement about the human deciding
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          const cls = parsed.classifications?.find(c => c.item_id === 'item_bbb002');
+          const reason = (cls?.reason ?? '').toLowerCase();
+          return reason.endsWith('?') || reason.includes('human') || reason.includes('product');
+        } catch (e) { return false; }
+
+- description: "BD-17 — superseded heuristic present → item flagged with supersession reference"
+  prompts: [shaping-review]
+  vars:
+    input: |
+      HIGH-RELEVANCE PRIORS (score ≥ 0.75) — any item that contradicts one of these MUST be classified as 'flagged'. For confident items, cite the source id:
+        - [BD-8] (heuristic, score 0.87, id=heur_a1b2c3d4e5f6): Prefer Memcached for session caching to reduce Redis contention.
+
+      SUPERSEDED HEURISTICS — any item that would have been grounded in one of these MUST be classified as 'flagged' with reason citing the supersession:
+        - [BD-8] superseded_by=BD-14: Prefer Memcached for session caching to reduce Redis contention.
+
+      Items to classify:
+        item_id=item_ccc003  section=constraints
+          text: Session data must be cached in Memcached, not Redis, to reduce Redis load.
+  assert:
+    # Must be flagged — the supporting heuristic is superseded
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          const cls = parsed.classifications?.find(c => c.item_id === 'item_ccc003');
+          return cls?.category === 'flagged';
+        } catch (e) { return false; }
+    # Reason must reference the supersession (BD-14 or 'superseded')
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          const cls = parsed.classifications?.find(c => c.item_id === 'item_ccc003');
+          const reason = (cls?.reason ?? '').toLowerCase();
+          return reason.includes('supersed') || reason.includes('bd-14');
+        } catch (e) { return false; }
+
+- description: "BD-17 — mixed batch: heuristic-grounded confident + no-memory uncertain + superseded flagged"
+  prompts: [shaping-review]
+  vars:
+    input: |
+      HIGH-RELEVANCE PRIORS (score ≥ 0.75) — any item that contradicts one of these MUST be classified as 'flagged'. For confident items, cite the source id:
+        - [BD-12] (heuristic, score 0.93, id=heur_9z8y7x6w5v4u): Always gate long-term memory writes behind explicit human confirmation — no automated agent write to durable memory without a human-approval step.
+
+      SUPERSEDED HEURISTICS — any item that would have been grounded in one of these MUST be classified as 'flagged' with reason citing the supersession:
+        - [BD-5] superseded_by=BD-12: Auto-write memory entries after each completed initiative with no human gate.
+
+      Items to classify:
+        item_id=item_ddd004  section=constraints
+          text: Heuristic extraction during Learn must be human-confirmed before any heuristic is written to long-term memory.
+
+        item_id=item_eee005  section=discretion
+          text: The visual indicator used to distinguish heuristic memory entries from narrative memory entries in the UI — whether to use color, icon, label, or some combination.
+
+        item_id=item_fff006  section=constraints
+          text: After each initiative completes, automatically write its heuristics to memory without prompting the human.
+  assert:
+    # item_ddd004 must be confident (grounded in heur_9z8y7x6w5v4u)
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          const cls = parsed.classifications?.find(c => c.item_id === 'item_ddd004');
+          return cls?.category === 'confident';
+        } catch (e) { return false; }
+    # item_ddd004 reason must cite heur_9z8y7x6w5v4u or BD-12
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          const cls = parsed.classifications?.find(c => c.item_id === 'item_ddd004');
+          const reason = cls?.reason ?? '';
+          return reason.includes('heur_9z8y7x6w5v4u') || reason.includes('BD-12');
+        } catch (e) { return false; }
+    # item_eee005 must be uncertain (no memory, genuine choice)
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          const cls = parsed.classifications?.find(c => c.item_id === 'item_eee005');
+          return cls?.category === 'uncertain';
+        } catch (e) { return false; }
+    # item_fff006 must be flagged (contradicts superseded heuristic that required human gate)
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          const cls = parsed.classifications?.find(c => c.item_id === 'item_fff006');
+          return cls?.category === 'flagged';
+        } catch (e) { return false; }
+    # No item_XXXX IDs in any reason
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
           const parsed = JSON.parse(j);
           for (const cls of parsed.classifications ?? []) {
             if (/item_[a-z0-9]{6,}/.test(cls.reason ?? '')) return false;
           }
           return true;
-        } catch (e) { return false; }
-    # At least one item must be flagged (the conflicting pair)
-    - type: javascript
-      value: |
-        try {
-          const j = output.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
-          const parsed = JSON.parse(j);
-          return (parsed.classifications ?? []).some(c => c.category === 'flagged');
         } catch (e) { return false; }

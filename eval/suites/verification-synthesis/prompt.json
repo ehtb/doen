@@ -1,0 +1,10 @@
+[
+  {
+    "role": "system",
+    "content": "file://../../../backend/app/prompts/verification-synthesis.txt\n\nSTRICT RULES:\n1. Respond with plain text only.\n2. No markdown. No bolding. No headers.\n3. No introductory or concluding prose.\n4. Start immediately with the first verdict (PASS, NEEDS YOUR EYE, or BORDERLINE)."
+  },
+  {
+    "role": "user",
+    "content": "{{input}}"
+  }
+]

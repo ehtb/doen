@@ -1,0 +1,16 @@
+- description: "Basic shaping test"
+  prompts: [shaping]
+  vars:
+    input: |
+      Feature description from the human:
+      Add a 'dark mode' toggle to the site header. It should persist in local storage.
+
+  assert:
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const obj = JSON.parse(j);
+          return obj.title && obj.intent && Array.isArray(obj.constraints) && Array.isArray(obj.acceptance);
+        } catch (e) { return false; }

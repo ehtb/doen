@@ -1,0 +1,10 @@
+[
+  {
+    "role": "system",
+    "content": "file://../../../backend/app/prompts/learn-draft.txt\n\nSTRICT RULES:\n1. Respond with JSON only. No prose. No markdown code blocks.\n2. Format: {\"summary\": \"...\", \"learnings\": \"...\", \"rationale_claims\": []}"
+  },
+  {
+    "role": "user",
+    "content": "{{input}}"
+  }
+]

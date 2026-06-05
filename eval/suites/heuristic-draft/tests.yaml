@@ -1,0 +1,231 @@
+# Heuristic-draft eval suite (BD-17)
+#
+# Tests that the HEURISTIC_DRAFT_SYSTEM_PROMPT:
+# - Extracts actionable, transferable rules from real initiative history
+# - Produces rules that start with a verb or conditional
+# - Returns 0 heuristics when the history has nothing transferable
+# - Respects the 1–3 tag limit
+# - Uses 'supersedes' when a prior rule is contradicted
+
+- description: "Rich history — extracts 1-5 actionable heuristics with tags"
+  prompts: [heuristic-draft]
+  vars:
+    input: |
+      # INTENT
+      Implement a vector similarity search over decisions and memory entries to power the get_context MCP tool — ranked results, project-scoped, with fallback to global corpus.
+
+      # DECISIONS MADE (id · question · outcome):
+      - id=dec_a1b2  question: Should we use pgvector or a dedicated vector DB?
+        chose: pgvector — Chosen: pgvector inside Postgres
+        rationale: Keeps the stack minimal; pgvector satisfies the performance envelope at our scale without an extra service dependency. Separate DB was rejected explicitly.
+      - id=dec_c3d4  question: How should we handle rows without an embedding?
+        chose: Skip them silently — embedding is async and best-effort; missing rows are excluded from results, not errors.
+
+      # ACCEPTANCE CRITERIA (id · text · verification outcome):
+      - id=item_e5f6  Similarity search returns project-scoped hits before global fallback
+        status=verified | feedback: confirmed — UNION query with initiative JOIN works correctly
+      - id=item_g7h8  Rows without embeddings are silently excluded, not causing errors
+        status=verified
+  assert:
+    # Must return at least 1 heuristic
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          return Array.isArray(parsed.heuristics) && parsed.heuristics.length >= 1;
+        } catch (e) { return false; }
+    # Every heuristic must have a non-empty rule
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          return parsed.heuristics.every(h => typeof h.rule === 'string' && h.rule.trim().length > 0);
+        } catch (e) { return false; }
+    # Every heuristic must have 1–3 tags
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          return parsed.heuristics.every(h => Array.isArray(h.tags) && h.tags.length >= 1 && h.tags.length <= 3);
+        } catch (e) { return false; }
+    # At least one rule starts with a verb or 'Prefer'/'Avoid'/'When'/'Use'
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          const actionableStart = /^(Prefer|Avoid|When|Use|Always|Never|Keep|Validate|Treat|Ensure|Don't|Do\s)/i;
+          return parsed.heuristics.some(h => actionableStart.test(h.rule.trim()));
+        } catch (e) { return false; }
+    # No more than 5 heuristics returned
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          return parsed.heuristics.length <= 5;
+        } catch (e) { return false; }
+
+- description: "Trivial mechanical change — no more than 1 heuristic (no padding)"
+  prompts: [heuristic-draft]
+  vars:
+    input: |
+      # INTENT
+      Bump the copyright year in the LICENSE file from 2024 to 2025. This is a purely mechanical annual housekeeping task — no design decisions, no architecture changes, no process patterns introduced.
+
+      # DECISIONS MADE (id · question · outcome):
+      (none — no decisions required)
+
+      # ACCEPTANCE CRITERIA (id · text · verification outcome):
+      - id=item_aa11  LICENSE file reads 'Copyright 2025'
+        status=verified | feedback: one-line text replacement, confirmed
+  assert:
+    # Must return 0 or 1 heuristics — a mechanical text-update should not produce 3-5 padded rules
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          return Array.isArray(parsed.heuristics) && parsed.heuristics.length <= 1;
+        } catch (e) { return false; }
+
+- description: "Superseding heuristic — sets supersedes field to prior rule text"
+  prompts: [heuristic-draft]
+  vars:
+    input: |
+      # PRIOR HEURISTICS ACTIVE FOR THIS PROJECT (may be superseded by this initiative):
+      - "Prefer Memcached for embedding caches to reduce Redis memory pressure."
+
+      # INTENT
+      Replace the memory embedding pipeline's Memcached-based cache with a Redis implementation after load tests showed Memcached caused thundering-herd failures under high concurrency.
+
+      # DECISIONS MADE (id · question · outcome):
+      - id=dec_bb22  question: Should we replace Memcached with Redis for the embedding cache?
+        chose: Yes — Chosen: Replace Memcached with Redis
+        rationale: Load tests showed Memcached caused thundering-herd failures under concurrency; Redis's atomic operations prevent this. This directly contradicts the prior heuristic recommending Memcached for embedding caches.
+
+      # ACCEPTANCE CRITERIA (id · text · verification outcome):
+      - id=item_cc33  Embedding cache uses Redis; no Memcached dependency remains
+        status=verified
+  assert:
+    # Must return at least 1 heuristic
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          return parsed.heuristics.length >= 1;
+        } catch (e) { return false; }
+    # At least one heuristic must have a non-null supersedes field (prior Memcached rule)
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          return parsed.heuristics.some(h => h.supersedes != null && h.supersedes.trim().length > 0);
+        } catch (e) { return false; }
+    # The supersedes text must mention 'Memcached' or 'memcached'
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          return parsed.heuristics.some(h => (h.supersedes ?? '').toLowerCase().includes('memcached'));
+        } catch (e) { return false; }
+
+- description: "Tags are short — each tag ≤ 20 chars and lowercase"
+  prompts: [heuristic-draft]
+  vars:
+    input: |
+      # INTENT
+      Implement rate-limiting on the shaping endpoint to prevent runaway LLM costs from automation scripts hitting the API in tight loops.
+
+      # DECISIONS MADE (id · question · outcome):
+      - id=dec_dd44  question: Should rate-limiting be per-user or per-IP?
+        chose: Per-user — Chosen: Per-user rate limit using the authenticated user ID
+        rationale: Per-IP fails behind proxies; per-user is more accurate and ties to billing.
+
+      # ACCEPTANCE CRITERIA (id · text · verification outcome):
+      - id=item_ee55  Shaping endpoint returns 429 after exceeding the per-user limit within a window
+        status=verified
+  assert:
+    # Every tag must be ≤ 20 chars
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          for (const h of parsed.heuristics) {
+            for (const tag of h.tags ?? []) {
+              if (tag.length > 20) return false;
+            }
+          }
+          return true;
+        } catch (e) { return false; }
+    # Tags must be lowercase (no CamelCase or ALL_CAPS)
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          for (const h of parsed.heuristics) {
+            for (const tag of h.tags ?? []) {
+              if (tag !== tag.toLowerCase()) return false;
+            }
+          }
+          return true;
+        } catch (e) { return false; }
+
+- description: "Heuristics don't duplicate the outcome summary — distinct, transferable insight"
+  prompts: [heuristic-draft]
+  vars:
+    input: |
+      # INTENT
+      Migrate the initiative state machine from a set of explicit state columns to a single derived state computed by _recompute_state() from criteria verification and learn records.
+
+      # DECISIONS MADE (id · question · outcome):
+      - id=dec_ff66  question: Should state be stored or derived?
+        chose: Derived — Chosen: State is derived by _recompute_state() and cached in the row
+        rationale: Stored state required manual transitions in many code paths and diverged; derived state is always consistent with actual data.
+
+      # ACCEPTANCE CRITERIA (id · text · verification outcome):
+      - id=item_gg77  _recompute_state() computes the same state as the old manual transitions for all existing data
+        status=verified
+      - id=item_hh88  No code path sets state directly; all transitions go through _recompute_state()
+        status=verified
+  assert:
+    # Must return at least 1 heuristic
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          return parsed.heuristics.length >= 1;
+        } catch (e) { return false; }
+    # The rule text must not just re-state "we derived state" verbatim — must be transferable
+    - type: javascript
+      value: |
+        try {
+          const match = output.match(/\{[\s\S]*\}/);
+          const j = match ? match[0] : output;
+          const parsed = JSON.parse(j);
+          // Heuristic must generalise beyond this initiative's specifics (_recompute_state)
+          const rules = parsed.heuristics.map(h => h.rule.toLowerCase());
+          // A transferable rule should apply beyond "doen" or "_recompute_state" specifically
+          return rules.some(r => !r.includes('_recompute_state') && r.length > 20);
+        } catch (e) { return false; }

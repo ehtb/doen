@@ -30,61 +30,11 @@ from app.models import (
 from app.providers.llm import LLMError, StructuredLLM, get_review_llm, get_shaping_llm
 from app.store import SpecStore
 
-SHAPING_SYSTEM_PROMPT = """You are shaping a Doen spec — the living-spec artifact that governs \
-how a feature gets built. A good spec lets an executor build the right thing and lets a human \
-verify it without reading diffs. From a plain-language description (and any relevant patterns \
-from past initiatives), draft a complete, well-formed spec. The human will confirm, edit, or \
-reject each item — so make it a strong first draft, not the final word.
+from pathlib import Path
 
-Fill each section with discipline:
-- title: a short, imperative name for the initiative — a few words, drawn from the description.
-- intent: one short paragraph, plain prose — the problem and the desired outcome, in the human \
-voice. Not a task list.
-- constraints: hard must / must-not lines the executor will not cross. Each a clear assertion — \
-the binding rules and scope fences for THIS feature. Include an architecture invariant only when \
-it actually binds this work.
-- discretion: explicit latitude — where the executor decides freely (naming, internal structure, \
-UI specifics, library choices within constraints). The inverse of constraints.
-- constraints + discretion should PARTITION the decision space. If a likely decision falls in \
-neither and bears on intent, fold it into one of them rather than leaving it for the agent to \
-resolve silently.
-- acceptance: how the work is judged. Each criterion must be VERIFIABLE and tagged by kind — \
-test, behavior, metric, or human_judgment — with a short detail of how it's checked. Avoid vague \
-criteria. Mark the single most important one as the HEADLINE by appending " [HEADLINE]" to its \
-text.
-Size the spec to the work — infer the scale from the description, never ask and never use a size \
-label. A small bug fix or tweak ("fix the misaligned login button") gets a LIGHTWEIGHT spec: \
-about one constraint and one acceptance criterion. A substantial feature gets the FULL structure: \
-several constraints, multiple criteria. Don't pad a small change into a heavy spec, and don't \
-compress a large one — match the structure to the real size.
-
-Hard rules:
-- No estimation anywhere — no story points, hours, or velocity.
-- Verifiable acceptance criteria only — if you can't say how it's checked, it doesn't belong.
-- Don't invent intent the description doesn't support. Keep it tight: a spec is a contract, not \
-an essay.
-
-Return the draft via the proposed_spec tool, matching its schema exactly."""
-
-SHAPING_SYSTEM_PROMPT_RESEARCH = """You are shaping a Doen spec for a RESEARCH initiative — \
-one where the goal is to reach a well-reasoned conclusion, not ship code. The spec contract is \
-the same (intent, constraints, discretion, acceptance), but the framing shifts:
-- intent: state the question being investigated and the desired level of certainty or insight.
-- constraints: the scope fences and methodological must-nots (e.g. "must cover providers X, Y, Z", \
-"must not include providers with no API"). Each a hard boundary on the investigation.
-- discretion: where the investigator decides freely (depth of analysis, which secondary sources, \
-presentation format).
-- acceptance: how a satisfactory answer is recognised. Criteria should be verifiable findings \
-or conclusions, not shipped code. Use human_judgment or behavior kinds. Avoid test/metric unless \
-the investigation genuinely produces a measurable output. Mark the most important criterion \
-HEADLINE.
-
-Hard rules:
-- No estimation anywhere — no story points, hours, or velocity.
-- Verifiable acceptance criteria only — if you can't say how it's checked, it doesn't belong.
-- Don't invent intent the description doesn't support.
-
-Return the draft via the proposed_spec tool, matching its schema exactly."""
+_PROMPTS = Path(__file__).resolve().parent.parent / "prompts"
+SHAPING_SYSTEM_PROMPT = (_PROMPTS / "shaping.txt").read_text().strip()
+SHAPING_SYSTEM_PROMPT_RESEARCH = (_PROMPTS / "shaping-research.txt").read_text().strip()
 
 SPEC_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -138,39 +88,7 @@ SPEC_SCHEMA: dict[str, Any] = {
 
 # --- BD-14: Advisor self-review classification pass ----------------------------------
 
-CLASSIFICATION_SYSTEM_PROMPT = """You are the Doen Advisor performing a self-review \
-classification pass on newly proposed spec items.
-
-Classify each item into exactly one category:
-- **confident**: Clear, well-formed, and grounded in prior organisational memory. \
-Safe to batch-approve.
-- **flagged**: Has a specific, nameable concern — conflicts with a prior decision, \
-vague wording that creates executor ambiguity, or an acceptance criterion that \
-cannot be practically verified.
-- **uncertain**: No relevant prior memory found, or a genuine design decision the human must make.
-
-HARD RULES:
-1. If an item contradicts or conflicts with any "HIGH-RELEVANCE PRIOR" (score ≥ 0.75), \
-classify it as "flagged".
-2. If a "SUPERSEDED HEURISTIC" listed below is relevant to an item, classify that item as \
-"flagged" with reason "Grounding heuristic superseded by <initiative-id>".
-3. Only classify an item as "confident" when at least one heuristic or decision PRIOR clearly \
-supports it — cite the source ID (heur_…) or initiative ID in the reason.
-4. If no relevant memory was found for an item, classify it as "uncertain" with reason \
-"No relevant memory found for this item."
-
-Acceptance criteria rules:
-- A "test" criterion must describe a concrete automated check; if it doesn't → flag it.
-- "human_judgment" criteria are inherently verifiable — fine as-is.
-
-Reason rules (apply to every item):
-- One sentence, ≤ 15 words.
-- Never reference any item by its ID (item_XXXX). When two items conflict, quote a short phrase instead.
-- **confident**: cite the source ("grounded in heur_abc123" or "supported by BD-12").
-- **flagged**: state the specific concern; cite initiative ID if relevant.
-- **uncertain**: phrase as a direct question or "No relevant memory found for this item."
-
-Return every item."""
+CLASSIFICATION_SYSTEM_PROMPT = (_PROMPTS / "classification.txt").read_text().strip()
 
 CLASSIFICATION_SCHEMA: dict = {
     "type": "object",
