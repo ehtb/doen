@@ -39,6 +39,7 @@ from app.models import (
     Decision,
     DriftReport,
     DriftReportStatus,
+    Heuristic,
     Initiative,
     InitiativeAttention,
     InitiativeType,
@@ -144,6 +145,19 @@ def _drift_report_from_row(row: asyncpg.Record) -> DriftReport:
         quality=json.loads(quality_raw) if quality_raw else None,
         created_at=row["created_at"].isoformat(),
         resolved_at=ra.isoformat() if ra is not None else None,
+    )
+
+
+def _heuristic_from_row(row: asyncpg.Record) -> Heuristic:
+    return Heuristic(
+        id=row["id"],
+        initiative_id=row["initiative_id"],
+        project_id=row["project_id"],
+        rule=row["rule"],
+        tags=list(row["tags"] or []),
+        superseded_by=row["superseded_by"],
+        replaces=row["replaces"],
+        created_at=row["created_at"].isoformat(),
     )
 
 
@@ -1032,6 +1046,95 @@ class SpecStore:
         )
         return _drift_report_from_row(updated)
 
+    # --- BD-17: heuristics — first-class memory type, append-only with supersession ------
+
+    async def create_heuristic(
+        self,
+        initiative_id: str,
+        rule: str,
+        *,
+        project_id: str | None = None,
+        tags: list[str] | None = None,
+        replaces: str | None = None,
+    ) -> Heuristic:
+        """Write a new heuristic row and embed it async. Append-only — every call is a new
+        row. If `replaces` is given, the old heuristic is marked superseded by initiative_id
+        (constraint item_580f56224a2b) and the back-reference is stored here (item_47ba758192ea)."""
+        heur = Heuristic(
+            initiative_id=initiative_id,
+            project_id=project_id,
+            rule=rule,
+            tags=tags or [],
+            replaces=replaces,
+        )
+        await self.pg.execute(
+            """INSERT INTO heuristics
+                   (id, initiative_id, project_id, rule, tags, replaces, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, now())""",
+            heur.id, initiative_id, project_id, rule, tags or [], replaces,
+        )
+        if replaces:
+            await self.supersede_heuristic(replaces, initiative_id)
+        self._spawn(lambda hid=heur.id: self.embed_heuristic(hid))
+        return heur
+
+    async def supersede_heuristic(self, heuristic_id: str, superseding_initiative_id: str) -> None:
+        """Mark a heuristic as superseded. The row stays readable (item_580f56224a2b) but
+        is excluded from active retrieval (constraint item_74a52b7067a3)."""
+        await self.pg.execute(
+            "UPDATE heuristics SET superseded_by = $2 WHERE id = $1 AND superseded_by IS NULL",
+            heuristic_id, superseding_initiative_id,
+        )
+
+    async def embed_heuristic(self, heuristic_id: str) -> bool:
+        row = await self.pg.fetchrow("SELECT rule FROM heuristics WHERE id = $1", heuristic_id)
+        if row is None:
+            return False
+        [vec] = await self._get_embedder().embed([row["rule"]])
+        await self.pg.execute(
+            "UPDATE heuristics SET embedding = $2::vector WHERE id = $1",
+            heuristic_id, _vector_literal(vec),
+        )
+        return True
+
+    async def get_heuristic(self, heuristic_id: str) -> Heuristic | None:
+        row = await self.pg.fetchrow(
+            "SELECT id, initiative_id, project_id, rule, tags, superseded_by, replaces, created_at "
+            "FROM heuristics WHERE id = $1",
+            heuristic_id,
+        )
+        return _heuristic_from_row(row) if row else None
+
+    async def list_heuristics(
+        self,
+        *,
+        project_id: str | None = None,
+        initiative_id: str | None = None,
+        active_only: bool = True,
+    ) -> list[Heuristic]:
+        """List heuristics. `active_only=True` (default) excludes superseded entries.
+        Pass `active_only=False` to include superseded entries for history/audit."""
+        wheres = []
+        params: list = []
+        p = 1
+        if project_id is not None:
+            wheres.append(f"project_id = ${p}")
+            params.append(project_id)
+            p += 1
+        if initiative_id is not None:
+            wheres.append(f"initiative_id = ${p}")
+            params.append(initiative_id)
+            p += 1
+        if active_only:
+            wheres.append("superseded_by IS NULL")
+        where_clause = ("WHERE " + " AND ".join(wheres)) if wheres else ""
+        rows = await self.pg.fetch(
+            f"SELECT id, initiative_id, project_id, rule, tags, superseded_by, replaces, created_at "
+            f"FROM heuristics {where_clause} ORDER BY created_at DESC",
+            *params,
+        )
+        return [_heuristic_from_row(r) for r in rows]
+
     async def list_memory_for_audit(
         self, project_id: str, staleness_days: int = 30
     ) -> list[Memory]:
@@ -1052,7 +1155,12 @@ class SpecStore:
         return [_memory_from_row(r) for r in rows]
 
     async def get_context(
-        self, query: str, limit: int = 8, *, project_id: str
+        self,
+        query: str,
+        limit: int = 8,
+        *,
+        project_id: str,
+        include_superseded_heuristics: bool = False,
     ) -> list[ContextHit]:
         """Similarity search over the memory corpus — resolved decisions + completed-
         initiative memory (D2 scope) — so an executor shaping or building the next feature
@@ -1061,18 +1169,27 @@ class SpecStore:
 
         0010 constraint 4: search WITHIN the project first; only if those are insufficient to
         fill `limit` does it fall back to the rest of the corpus (outside the project). Each
-        hit is tagged with its scope (project / global) and its source initiative."""
+        hit is tagged with its scope (project / global) and its source initiative.
+
+        BD-17: `include_superseded_heuristics=True` includes superseded heuristic entries with
+        `superseded_by` set so the shaping classifier can detect and flag them. The MCP tool
+        always passes the default (False) — superseded entries must not surface as active guidance
+        (constraint item_74a52b7067a3)."""
         if not query.strip():
             return []
         [qvec] = await self._get_embedder().embed([query])
-        project_hits = await self._context_search(qvec, limit, project_id=project_id)
+        project_hits = await self._context_search(
+            qvec, limit, project_id=project_id,
+            include_superseded_heuristics=include_superseded_heuristics,
+        )
         for h in project_hits:
             h.scope = "project"
         if len(project_hits) >= limit:
             return project_hits
         # project results are insufficient — fill the rest from OUTSIDE the project (a4)
         fallback = await self._context_search(
-            qvec, limit - len(project_hits), exclude_project=project_id
+            qvec, limit - len(project_hits), exclude_project=project_id,
+            include_superseded_heuristics=include_superseded_heuristics,
         )
         for h in fallback:
             h.scope = "global"
@@ -1085,17 +1202,24 @@ class SpecStore:
         *,
         project_id: str | None = None,
         exclude_project: str | None = None,
+        include_superseded_heuristics: bool = False,
     ) -> list[ContextHit]:
         """One ranked pass over the corpus. `project_id` restricts to a project's initiatives;
         `exclude_project` restricts to everything outside one (the global fallback). The join
         to initiatives never drops rows — decisions/memory cascade-delete with their
         initiative, so every embedded row has a live parent.
 
-        BD-12: `mem_id` is exposed for memory hits so we can batch-lookup pending drift reports
-        and set `has_pending_drift` on affected hits without an N+1 query."""
+        BD-12: `mem_id` is exposed for memory hits so we can batch-lookup pending drift reports.
+        BD-17: heuristics are included in the UNION. Active heuristics (superseded_by IS NULL)
+        are always included. Superseded heuristics are included only when
+        `include_superseded_heuristics=True` (used by the shaping classifier to detect and flag
+        items grounded in stale heuristics — constraint item_9311fd139032)."""
+        # The heuristic sub-query varies based on include_superseded_heuristics.
+        heur_filter = "" if include_superseded_heuristics else "AND superseded_by IS NULL"
         rows = await self.pg.fetch(
-            """
-            SELECT q.type, q.initiative_id, q.txt, q.dist, q.mem_id, q.init_type FROM (
+            f"""
+            SELECT q.type, q.initiative_id, q.txt, q.dist, q.mem_id, q.init_type,
+                   q.heur_id, q.heur_superseded_by FROM (
                 SELECT 'decision' AS type, initiative_id,
                        concat_ws(' — ', payload->>'question',
                            NULLIF('Chosen: ' || coalesce(payload->>'chosen', ''), 'Chosen: '),
@@ -1103,7 +1227,9 @@ class SpecStore:
                        ) AS txt,
                        embedding <=> $1::vector AS dist,
                        NULL::text AS mem_id,
-                       NULL::text AS init_type
+                       NULL::text AS init_type,
+                       NULL::text AS heur_id,
+                       NULL::text AS heur_superseded_by
                   FROM decisions WHERE embedding IS NOT NULL
                 UNION ALL
                 SELECT 'memory' AS type, initiative_id,
@@ -1112,11 +1238,23 @@ class SpecStore:
                        ) AS txt,
                        embedding <=> $1::vector AS dist,
                        id AS mem_id,
-                       initiative_type AS init_type
+                       initiative_type AS init_type,
+                       NULL::text AS heur_id,
+                       NULL::text AS heur_superseded_by
                   FROM memory WHERE embedding IS NOT NULL
+                UNION ALL
+                SELECT 'heuristic' AS type, initiative_id,
+                       rule AS txt,
+                       embedding <=> $1::vector AS dist,
+                       NULL::text AS mem_id,
+                       NULL::text AS init_type,
+                       id AS heur_id,
+                       superseded_by AS heur_superseded_by
+                  FROM heuristics WHERE embedding IS NOT NULL {heur_filter}
             ) q
             JOIN initiatives i ON i.id = q.initiative_id
-            WHERE i.state = 'complete'
+            WHERE (q.type IN ('decision', 'memory') AND i.state = 'complete'
+                   OR q.type = 'heuristic')
               AND ($2::text IS NULL OR i.project_id = $2)
               AND ($3::text IS NULL OR i.project_id IS DISTINCT FROM $3)
             ORDER BY q.dist
@@ -1141,7 +1279,9 @@ class SpecStore:
                 text=r["txt"],
                 score=round(1.0 - float(r["dist"]), 4),
                 has_pending_drift=r["mem_id"] in pending_drift if r["mem_id"] else False,
-                initiative_type=r["init_type"],  # BD-15: None for decision hits
+                initiative_type=r["init_type"],  # BD-15: None for decision/heuristic hits
+                heuristic_id=r["heur_id"],        # BD-17: set for heuristic hits
+                superseded_by=r["heur_superseded_by"],  # BD-17: set for superseded heuristics
             )
             for r in rows
         ]

@@ -255,15 +255,38 @@ class ContextHit(BaseModel):
     the executor that another agent has already flagged this memory entry as potentially wrong —
     treat it with extra scepticism and verify before acting on it. `initiative_type` (BD-15)
     is present for memory hits so the executor knows whether the learning came from a research
-    or engineering initiative; None for decision hits."""
+    or engineering initiative; None for decision hits. `heuristic_id` (BD-17) is set for
+    heuristic-type hits — the stable ID to cite in a confident classification. `superseded_by`
+    (BD-17) is set when the heuristic has been superseded — its presence disqualifies 'confident'
+    classification per constraint item_226144412674."""
 
     initiative_id: str
-    type: Literal["decision", "memory"]
+    type: Literal["decision", "memory", "heuristic"]
     text: str
     score: float
     scope: Literal["project", "global"] | None = None
     has_pending_drift: bool = False  # BD-12: a pending drift report exists for this memory entry
     initiative_type: str | None = None  # BD-15: "engineering" or "research" for memory hits
+    # BD-17: heuristic-specific fields — None for decision/memory hits
+    heuristic_id: str | None = None     # the heuristic's own id; cite this in confident reasons
+    superseded_by: str | None = None    # initiative_id that superseded this heuristic
+
+
+# ----------------------------------------------------------------------------- heuristics (BD-17)
+class Heuristic(BaseModel):
+    """An append-only actionable rule extracted from a completed initiative (BD-17). Stored as a
+    distinct memory type (constraint item_5358c84c18fc) — never folded into Memory records.
+    Supersession is recorded by setting superseded_by; the old row stays readable (item_580f56224a2b).
+    `replaces` holds the heuristic_id this entry supersedes — bi-directional chain (item_47ba758192ea)."""
+
+    id: str = Field(default_factory=lambda: _id("heur"))
+    initiative_id: str
+    project_id: str | None = None
+    rule: str
+    tags: list[str] = Field(default_factory=list)
+    superseded_by: str | None = None   # initiative_id that superseded this entry
+    replaces: str | None = None        # heuristic_id this entry replaces
+    created_at: str = Field(default_factory=_now)
 
 
 # ----------------------------------------------------------------------------- conversation (0009)

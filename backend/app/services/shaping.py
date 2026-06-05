@@ -142,15 +142,22 @@ CLASSIFICATION_SYSTEM_PROMPT = """You are the Doen Advisor performing a self-rev
 classification pass on newly proposed spec items.
 
 Classify each item into exactly one category:
-- **confident**: Clear, well-formed, and consistent with prior organisational memory. \
+- **confident**: Clear, well-formed, and grounded in prior organisational memory. \
 Safe to batch-approve.
 - **flagged**: Has a specific, nameable concern — conflicts with a prior decision, \
 vague wording that creates executor ambiguity, or an acceptance criterion that \
 cannot be practically verified.
-- **uncertain**: A genuine design or intent decision the human must make.
+- **uncertain**: No relevant prior memory found, or a genuine design decision the human must make.
 
-HARD RULE: If an item's text contradicts or conflicts with any "HIGH-RELEVANCE PRIOR" \
-listed below (score ≥ 0.75), you MUST classify it as "flagged".
+HARD RULES:
+1. If an item contradicts or conflicts with any "HIGH-RELEVANCE PRIOR" (score ≥ 0.75), \
+classify it as "flagged".
+2. If a "SUPERSEDED HEURISTIC" listed below is relevant to an item, classify that item as \
+"flagged" with reason "Grounding heuristic superseded by <initiative-id>".
+3. Only classify an item as "confident" when at least one heuristic or decision PRIOR clearly \
+supports it — cite the source ID (heur_…) or initiative ID in the reason.
+4. If no relevant memory was found for an item, classify it as "uncertain" with reason \
+"No relevant memory found for this item."
 
 Acceptance criteria rules:
 - A "test" criterion must describe a concrete automated check; if it doesn't → flag it.
@@ -158,11 +165,10 @@ Acceptance criteria rules:
 
 Reason rules (apply to every item):
 - One sentence, ≤ 15 words.
-- Never reference any item by its ID (item_XXXX), whether from this batch or elsewhere. When two items in the same batch conflict, quote a short phrase from the other item's text instead of citing its ID.
-- **confident**: one short phrase ("looks good", "clear and verifiable").
-- **flagged**: state the specific concern. If a prior initiative is relevant, \
-cite it by initiative ID (e.g., BD-12), not by item ID.
-- **uncertain**: phrase as a direct question (e.g., "Reuse BD-12 or add a new tool?").
+- Never reference any item by its ID (item_XXXX). When two items conflict, quote a short phrase instead.
+- **confident**: cite the source ("grounded in heur_abc123" or "supported by BD-12").
+- **flagged**: state the specific concern; cite initiative ID if relevant.
+- **uncertain**: phrase as a direct question or "No relevant memory found for this item."
 
 Return every item."""
 
@@ -200,16 +206,31 @@ CLASSIFICATION_SCHEMA: dict = {
 def _build_classification_user_message(
     proposed: list[tuple[str, SpecItem]],
     high_score_hits: list[ContextHit],
+    superseded_hits: list[ContextHit] | None = None,
 ) -> str:
     parts: list[str] = []
     if high_score_hits:
         priors = "\n".join(
-            f"  - [{h.initiative_id}] ({h.type}, score {h.score:.2f}): {h.text}"
+            # BD-17: include heuristic_id so the LLM can cite it in confident reasons.
+            f"  - [{h.initiative_id}] ({h.type}, score {h.score:.2f}"
+            + (f", id={h.heuristic_id}" if h.heuristic_id else "")
+            + f"): {h.text}"
             for h in high_score_hits
         )
         parts.append(
             "HIGH-RELEVANCE PRIORS (score ≥ 0.75) — any item that contradicts one of "
-            "these MUST be classified as 'flagged':\n" + priors
+            "these MUST be classified as 'flagged'. For confident items, cite the source id:\n"
+            + priors
+        )
+    # BD-17: superseded heuristics — items grounded in these must be flagged (item_9311fd139032).
+    if superseded_hits:
+        sup_lines = "\n".join(
+            f"  - [{h.initiative_id}] superseded_by={h.superseded_by}: {h.text}"
+            for h in superseded_hits
+        )
+        parts.append(
+            "SUPERSEDED HEURISTICS — any item that would have been grounded in one of these "
+            "MUST be classified as 'flagged' with reason citing the supersession:\n" + sup_lines
         )
     item_lines: list[str] = []
     for section, item in proposed:
@@ -259,13 +280,18 @@ async def _classify_and_annotate(
     spec: Spec,
     context_used: list[ContextHit],
     *,
+    superseded_hits: list[ContextHit] | None = None,
     llm: StructuredLLM | None = None,
 ) -> None:
-    """BD-14: run the Advisor's self-review classification pass on all proposed items.
+    """BD-14/BD-17: run the Advisor's self-review classification pass on all proposed items.
 
     Mutates each proposed item's advisor_classification / advisor_classification_reason
     in-place and sets spec.shaping_review_synthesis. Failures are non-fatal — items are
-    saved without classification data rather than blocking shaping."""
+    saved without classification data rather than blocking shaping.
+
+    BD-17: `superseded_hits` are heuristics that have been superseded. Items that would have
+    been classified as 'confident' based on superseded heuristics are downgraded to 'flagged'
+    (constraint item_9311fd139032 / item_226144412674)."""
     proposed: list[tuple[str, SpecItem]] = []
     for section in ("constraints", "discretion", "acceptance"):
         for item in getattr(spec, section):
@@ -276,11 +302,13 @@ async def _classify_and_annotate(
 
     llm = llm or get_review_llm()
     high_score_hits = [h for h in context_used if h.score >= MEMORY_VERIFICATION_THRESHOLD]
+    # BD-17: superseded heuristics that match at high relevance — must not ground confident items.
+    high_superseded = [h for h in (superseded_hits or []) if h.score >= MEMORY_VERIFICATION_THRESHOLD]
 
     try:
         raw = await llm.complete_structured(
             system=CLASSIFICATION_SYSTEM_PROMPT,
-            user=_build_classification_user_message(proposed, high_score_hits),
+            user=_build_classification_user_message(proposed, high_score_hits, high_superseded),
             schema=CLASSIFICATION_SCHEMA,
             schema_name="classify_items",
         )
@@ -289,6 +317,12 @@ async def _classify_and_annotate(
 
     cls_map: dict[str, dict] = {
         c["item_id"]: c for c in raw.get("classifications", [])
+    }
+
+    # BD-17: build a set of superseded heuristic IDs so we can enforce the constraint
+    # post-classification — the LLM might still output 'confident' for those.
+    superseded_heuristic_ids: set[str] = {
+        h.heuristic_id for h in (superseded_hits or []) if h.heuristic_id
     }
 
     confident: list[SpecItem] = []
@@ -305,6 +339,13 @@ async def _classify_and_annotate(
             continue
         category: AdvisorClassification = cls.get("category", "uncertain")
         reason: str = cls.get("reason", "")
+
+        # BD-17 hard constraint: if the reason cites a superseded heuristic ID, downgrade.
+        if category == "confident" and superseded_heuristic_ids:
+            if any(hid in reason for hid in superseded_heuristic_ids):
+                category = "flagged"
+                reason = f"Grounding heuristic superseded; {reason}"
+
         item.advisor_classification = category
         item.advisor_classification_reason = reason
         if category == "confident":
@@ -448,7 +489,8 @@ async def shape_spec(
     """Draft a proposed spec from a description. get_context runs first (constraint 6 / a4);
     when the initiative belongs to a project the search is project-scoped (0010 constraint 4),
     so sibling patterns surface first. An empty corpus returns nothing and shaping proceeds
-    without priors. BD-15: `initiative_type` selects the research vs. engineering framing."""
+    without priors. BD-15: `initiative_type` selects the research vs. engineering framing.
+    Only active (non-superseded) heuristics surface as priors — constraint item_74a52b7067a3."""
     llm = llm or get_shaping_llm()
     system_prompt = (
         SHAPING_SYSTEM_PROMPT_RESEARCH if initiative_type == "research" else SHAPING_SYSTEM_PROMPT
@@ -475,7 +517,8 @@ async def shape_and_persist(
     call raises LLMError before the save, so the spec is left untouched (constraint 7).
 
     BD-14: runs the Advisor's self-review classification pass automatically after shaping.
-    Classification failure is non-fatal — items are saved without classification data."""
+    BD-17: also fetches superseded heuristics so the classifier can flag items that would
+    have been grounded in stale heuristics (constraint item_9311fd139032)."""
     if not description.strip():
         raise ValidationError("a description is required to shape a spec")
     spec = await store.get_spec(initiative_id)
@@ -492,8 +535,16 @@ async def shape_and_persist(
     spec.acceptance = [i for i in spec.acceptance if i.status != "proposed"] + result.acceptance
     if not spec.intent.strip() and result.intent:
         spec.intent = result.intent
-    # BD-14: classify proposed items; non-fatal if the LLM call fails
-    await _classify_and_annotate(spec, result.context_used, llm=classification_llm)
+    # BD-17: fetch superseded heuristics to inform the classifier.
+    all_hits = await store.get_context(
+        description, limit=8, project_id=init.project_id,
+        include_superseded_heuristics=True,
+    )
+    superseded_hits = [h for h in all_hits if h.type == "heuristic" and h.superseded_by]
+    # BD-14: classify proposed items; non-fatal if the LLM call fails.
+    await _classify_and_annotate(
+        spec, result.context_used, superseded_hits=superseded_hits, llm=classification_llm,
+    )
     return await store.save_spec(spec)
 
 
@@ -538,7 +589,15 @@ async def create_from_description(
     spec.constraints = result.constraints
     spec.discretion = result.discretion
     spec.acceptance = result.acceptance
-    # BD-14: classify proposed items; non-fatal if the LLM call fails
-    await _classify_and_annotate(spec, result.context_used, llm=classification_llm)
+    # BD-17: fetch superseded heuristics for the classifier.
+    all_hits = await store.get_context(
+        description, limit=8, project_id=project_id,
+        include_superseded_heuristics=True,
+    )
+    superseded_hits = [h for h in all_hits if h.type == "heuristic" and h.superseded_by]
+    # BD-14: classify proposed items; non-fatal if the LLM call fails.
+    await _classify_and_annotate(
+        spec, result.context_used, superseded_hits=superseded_hits, llm=classification_llm,
+    )
     await store.save_spec(spec)
     return init

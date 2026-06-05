@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { BookOpen, Bot, Check, GitBranch, Loader2, Sparkles, Trash2, User } from "lucide-react";
+import { BookOpen, Bot, Brain, Check, GitBranch, Loader2, Sparkles, Tag, Trash2, User, X } from "lucide-react";
 
-import type { AcceptanceCriterion, Decision, LearnReview, OutcomeDraft, RationaleClaim } from "@/lib/types";
+import type { AcceptanceCriterion, Decision, Heuristic, HeuristicDraftResult, HeuristicProposal, LearnReview, OutcomeDraft, RationaleClaim } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -117,6 +117,195 @@ function DecisionRow({ d }: { d: Decision }) {
   );
 }
 
+// BD-17: heuristic confirmation panel — shown after the outcome is captured so the human
+// reviews proposed heuristics before they enter long-term memory.
+function HeuristicConfirmation({
+  initiativeId,
+  onDone,
+}: {
+  initiativeId: string;
+  onDone: (written: Heuristic[]) => void;
+}) {
+  const [phase, setPhase] = useState<"idle" | "drafting" | "reviewing" | "confirming" | "done">("idle");
+  const [proposals, setProposals] = useState<HeuristicProposal[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmed, setConfirmed] = useState<Heuristic[]>([]);
+
+  async function draft() {
+    setPhase("drafting");
+    setError(null);
+    try {
+      const res = await fetch(`/api/initiatives/${initiativeId}/learn/heuristics/draft`, {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error(`couldn't draft heuristics (${res.status})`);
+      const data: HeuristicDraftResult = await res.json();
+      if (data.proposals.length === 0) {
+        onDone([]);
+        return;
+      }
+      setProposals(data.proposals);
+      setPhase("reviewing");
+    } catch (e) {
+      setError((e as Error).message);
+      setPhase("idle");
+    }
+  }
+
+  function removeProposal(i: number) {
+    setProposals((prev) => prev.filter((_, j) => j !== i));
+  }
+
+  async function confirmAll() {
+    if (!proposals.length) {
+      onDone([]);
+      return;
+    }
+    setPhase("confirming");
+    setError(null);
+    try {
+      const res = await fetch(`/api/initiatives/${initiativeId}/learn/heuristics/confirm`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ proposals }),
+      });
+      if (!res.ok) throw new Error(`couldn't save heuristics (${res.status})`);
+      const written: Heuristic[] = await res.json();
+      setConfirmed(written);
+      onDone(written);
+    } catch (e) {
+      setError((e as Error).message);
+      setPhase("reviewing");
+    }
+  }
+
+  if (phase === "idle") {
+    return (
+      <div className="mt-4 flex items-center gap-3 rounded-lg border border-dashed border-border px-4 py-3">
+        <Brain className="size-4 shrink-0 text-ink-faint" />
+        <p className="text-[12.5px] text-ink-soft flex-1">
+          Extract transferable heuristics from this initiative for the knowledge flywheel.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={draft}
+          className="h-7 px-2.5 font-mono text-[11px] tracking-wide shrink-0"
+        >
+          <Sparkles className="size-3" /> Draft heuristics
+        </Button>
+      </div>
+    );
+  }
+
+  if (phase === "drafting") {
+    return (
+      <div className="mt-4 flex items-center gap-2 rounded-lg border border-border px-4 py-3 text-ink-faint">
+        <Loader2 className="size-3.5 animate-spin" />
+        <span className="text-[12.5px]">Extracting heuristics…</span>
+      </div>
+    );
+  }
+
+  if (phase === "reviewing" && proposals.length > 0) {
+    return (
+      <div className="mt-4 rounded-lg border border-border bg-card/50 p-4">
+        <p className="flex items-center gap-1.5 font-mono text-[10px] tracking-widest text-ink-faint uppercase">
+          <Brain className="size-3" /> Proposed heuristics
+          <span className="ml-1.5 normal-case font-normal tracking-normal text-ink-faint">
+            · remove any you disagree with before confirming
+          </span>
+        </p>
+        {error && (
+          <p className="mt-2 text-[11.5px] text-red-500">{error}</p>
+        )}
+        <ul className="mt-3 space-y-2.5">
+          {proposals.map((p, i) => (
+            <li key={i} className="flex items-start gap-2 rounded-md border border-border bg-background/60 px-3 py-2.5">
+              <div className="min-w-0 flex-1">
+                <p className="text-[12.5px] leading-snug text-foreground">{p.rule}</p>
+                {p.tags.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {p.tags.map((t) => (
+                      <span key={t} className="inline-flex items-center gap-0.5 rounded bg-muted px-1.5 py-0.5 font-mono text-[9.5px] text-ink-faint">
+                        <Tag className="size-2.5" />{t}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {p.replaces && (
+                  <p className="mt-1 font-mono text-[9.5px] text-amber-600">
+                    supersedes {p.replaces}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                title="Remove this heuristic"
+                onClick={() => removeProposal(i)}
+                className="mt-0.5 shrink-0 rounded p-0.5 text-ink-faint hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors"
+              >
+                <X className="size-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div className="mt-3 flex items-center gap-2">
+          <Button
+            size="sm"
+            disabled={["confirming", "done"].includes(phase)}
+            onClick={confirmAll}
+            className="bg-confirmed text-white shadow-sm hover:bg-confirmed/90 h-7 px-3 font-mono text-[11px]"
+          >
+            <Check className="size-3" /> Confirm {proposals.length} heuristic{proposals.length !== 1 ? "s" : ""}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onDone([])}
+            className="h-7 px-2.5 font-mono text-[11px] text-ink-faint"
+          >
+            Skip
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+
+// BD-17: display a confirmed heuristic entry — visually distinct from narrative memory (item_b04eb0385be9).
+function HeuristicEntry({ h }: { h: Heuristic }) {
+  return (
+    <div className="rounded-md border border-l-[3px] border-l-violet-400 bg-violet-50/50 dark:bg-violet-950/20 px-4 py-3">
+      <p className="flex items-center gap-1.5 font-mono text-[10px] tracking-widest text-violet-600 dark:text-violet-400 uppercase">
+        <Brain className="size-3" /> heuristic
+        {h.tags.length > 0 && (
+          <span className="ml-1 flex gap-1">
+            {h.tags.map((t) => (
+              <span key={t} className="rounded bg-violet-100 dark:bg-violet-900/40 px-1 py-0.5 font-mono text-[9px] text-violet-600 dark:text-violet-400">
+                {t}
+              </span>
+            ))}
+          </span>
+        )}
+        {h.superseded_by && (
+          <span className="ml-1 text-amber-600 normal-case tracking-normal font-normal">
+            [superseded by {h.superseded_by}]
+          </span>
+        )}
+      </p>
+      <p className="mt-1.5 text-[13px] leading-relaxed">{h.rule}</p>
+      {h.replaces && (
+        <p className="mt-1 font-mono text-[9.5px] text-ink-faint">replaces {h.replaces}</p>
+      )}
+    </div>
+  );
+}
+
+
 export default function LearnStage({
   initiativeId,
   intent,
@@ -132,6 +321,9 @@ export default function LearnStage({
   const [drafting, setDrafting] = useState(false);
   // BD-13: rationale claims from the AI draft — human must confirm/remove before submit.
   const [rationaleClaims, setRationaleClaims] = useState<RationaleClaim[]>([]);
+  // BD-17: heuristics written for this session (post-confirm).
+  const [sessionHeuristics, setSessionHeuristics] = useState<Heuristic[]>([]);
+  const [showHeuristicPanel, setShowHeuristicPanel] = useState(false);
   // The outcome form is the active surface only when a reflection is being written. After it's
   // captured the form closes; an explicit "Add another reflection" reopens it with blank fields
   // so a stray re-click can't duplicate the memory.
@@ -194,6 +386,8 @@ export default function LearnStage({
       setSummary("");
       setRationaleClaims([]);
       setShowForm(false);
+      // BD-17: after the outcome is captured, offer heuristic extraction.
+      setShowHeuristicPanel(true);
       router.refresh(); // capturing learn may complete the initiative — reflect the inferred state
     } catch (e) {
       setError((e as Error).message);
@@ -364,6 +558,26 @@ export default function LearnStage({
           </Button>
         </div>
       ) : null}
+
+      {/* BD-17: heuristic extraction panel — shown after outcome is captured. */}
+      {showHeuristicPanel && !showForm && memory.length > 0 && (
+        <HeuristicConfirmation
+          initiativeId={initiativeId}
+          onDone={(written) => {
+            setSessionHeuristics(written);
+            setShowHeuristicPanel(false);
+          }}
+        />
+      )}
+
+      {/* BD-17: show confirmed heuristics (visually distinct from narrative memory). */}
+      {sessionHeuristics.length > 0 && (
+        <div className="mt-4 space-y-2">
+          {sessionHeuristics.map((h) => (
+            <HeuristicEntry key={h.id} h={h} />
+          ))}
+        </div>
+      )}
 
       {/* Escape hatch: complete without learnings. Friction by design — not the primary CTA.
           The warning text is required by spec constraint: "Skipping reflection — nothing will

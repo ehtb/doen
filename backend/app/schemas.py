@@ -214,3 +214,33 @@ class OutcomeDraft(BaseModel):
     summary: str
     learnings: str
     rationale_claims: list[RationaleClaim] = []
+
+
+# --- BD-17: heuristic extraction (Learn stage) ---------------------------------------
+
+class HeuristicProposal(BaseModel):
+    """One proposed heuristic extracted from a completed initiative (BD-17). The Advisor
+    drafts these; the human confirms/removes before any heuristic enters long-term memory
+    (constraint item_a743fde4bc87)."""
+
+    rule: str           # the actionable heuristic text
+    tags: list[str] = []
+    # When this heuristic supersedes an existing one: the ID of the heuristic it replaces.
+    replaces: str | None = None
+
+
+class HeuristicDraftResult(BaseModel):
+    """BD-17: the Advisor's proposed heuristics for the human to review before memory write."""
+
+    initiative_id: str
+    proposals: list[HeuristicProposal]
+
+
+class ConfirmHeuristics(BaseModel):
+    """BD-17: the human's confirmed heuristics to write to long-term memory. `proposals`
+    contains only the heuristics the human accepted (may be a subset of the draft). Each
+    confirmed heuristic with `replaces` set will supersede the referenced prior entry.
+    `agents_md_path` is the optional path to agents.md for the append/supersede update."""
+
+    proposals: list[HeuristicProposal]
+    agents_md_path: str | None = None  # absolute path to agents.md for append/supersede write

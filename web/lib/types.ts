@@ -126,6 +126,31 @@ export interface Memory {
   created_at: string;
 }
 
+// BD-17: an actionable heuristic extracted from a completed initiative (backend Heuristic).
+export interface Heuristic {
+  id: string;
+  initiative_id: string;
+  project_id?: string | null;
+  rule: string;
+  tags: string[];
+  superseded_by?: string | null;  // initiative_id that superseded this entry
+  replaces?: string | null;       // heuristic_id this entry replaces
+  created_at: string;
+}
+
+// BD-17: one proposed heuristic from the Advisor's draft (backend HeuristicProposal).
+export interface HeuristicProposal {
+  rule: string;
+  tags: string[];
+  replaces?: string | null;
+}
+
+// BD-17: the Advisor's heuristic draft for human review (backend HeuristicDraftResult).
+export interface HeuristicDraftResult {
+  initiative_id: string;
+  proposals: HeuristicProposal[];
+}
+
 // The Learn-stage review: outcome vs. intent (backend LearnReview, routes.py).
 export interface LearnReview {
   initiative: Initiative;
