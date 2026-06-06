@@ -81,12 +81,19 @@ export default function ConversationRail({
   const specCtx = useSpecOptional();
   // The parent passes a fresh scope object each render; pin it to a stable identity keyed by the
   // owning id so the load effect doesn't re-fire every render.
-  const isProject = "projectId" in scope;
-  const scopeId = "projectId" in scope ? scope.projectId : scope.initiativeId;
+  const isProject = !("initiativeId" in scope);
+  const scopeId =
+    "initiativeId" in scope
+      ? scope.initiativeId
+      : "projectId" in scope
+      ? scope.projectId
+      : scope.discoveryProjectId;
 
   // BD-20: discovery mode is a separate conversation thread (distinct IndexedDB scope) with a
   // different system prompt. Only enabled on the project rail when `discoverable` is true.
-  const [railMode, setRailMode] = useState<"general" | "discovery">("general");
+  const [railMode, setRailMode] = useState<"general" | "discovery">(
+    "discoveryProjectId" in scope ? "discovery" : "general"
+  );
 
   const convo = useMemo<ConversationScope>(() => {
     if (!isProject) return { initiativeId: scopeId };

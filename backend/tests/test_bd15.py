@@ -72,6 +72,14 @@ def test_evidence_submission_via_router(client: TestClient, make_initiative: Any
     # Submit evidence
     res = client.post(f"/specs/{iid}/criteria/c1/evidence", json={"evidence": "Found it!"})
     assert res.status_code == 200, res.text
+    
+    # Wait for the background task to complete (store._drain() is the intended mechanism)
+    from app.store import SpecStore
+    # SpecStore is instantiated per-request from shared pg/redis in app.state
+    store = SpecStore(client.app.state.pg, client.app.state.redis)
+    import asyncio
+    asyncio.run(store._drain())
+    
     assert synthesis_called
     
     updated_spec = res.json()
