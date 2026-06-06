@@ -51,7 +51,9 @@ describe("initiative draft hand-off (BD-1 u3)", () => {
 
   it("consume returns the stashed draft once, then clears it (one-shot)", () => {
     stashInitiativeDraft("proj_1", "ship a replay tool for dead-lettered webhooks");
-    expect(consumeInitiativeDraft("proj_1")).toBe("ship a replay tool for dead-lettered webhooks");
+    expect(consumeInitiativeDraft("proj_1")).toEqual({
+      description: "ship a replay tool for dead-lettered webhooks",
+    });
     // consumed — a second read finds nothing, so the form can't re-fill later.
     expect(consumeInitiativeDraft("proj_1")).toBeNull();
   });
@@ -59,7 +61,24 @@ describe("initiative draft hand-off (BD-1 u3)", () => {
   it("keeps drafts isolated per project", () => {
     stashInitiativeDraft("proj_1", "one");
     stashInitiativeDraft("proj_2", "two");
-    expect(consumeInitiativeDraft("proj_2")).toBe("two");
-    expect(consumeInitiativeDraft("proj_1")).toBe("one");
+    expect(consumeInitiativeDraft("proj_2")).toEqual({ description: "two" });
+    expect(consumeInitiativeDraft("proj_1")).toEqual({ description: "one" });
+  });
+
+  it("stash with initiative type includes it in event and draft", () => {
+    let detail: unknown = null;
+    window.addEventListener(PREFILL_EVENT, (e) => {
+      detail = (e as CustomEvent).detail;
+    });
+    stashInitiativeDraft("proj_1", "understand why users drop off", "research");
+    expect(detail).toEqual({
+      projectId: "proj_1",
+      description: "understand why users drop off",
+      initiative_type: "research",
+    });
+    expect(consumeInitiativeDraft("proj_1")).toEqual({
+      description: "understand why users drop off",
+      initiative_type: "research",
+    });
   });
 });

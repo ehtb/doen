@@ -8,30 +8,59 @@
 // Two carriers, on purpose: sessionStorage survives a route transition / reload (the form reads it
 // on mount), and a window event covers the common same-page case where the form is already mounted
 // alongside the rail. The draft is consumed once — read-then-clear — so it can't re-fill later.
+//
+// BD-20: the draft now carries an optional `initiative_type` so a discovery conversation that
+// identified research vs. engineering framing can pre-select the type in the creation form.
+
+import type { InitiativeType } from "./types";
 
 export const PREFILL_EVENT = "doen:prefill-initiative";
 
+export interface InitiativeDraft {
+  description: string;
+  initiative_type?: InitiativeType;
+}
+
 const keyFor = (projectId: string) => `doen:initiative-draft:${projectId}`;
 
-/** Stash a synthesised description for `projectId`'s creation form and signal it to pre-fill. */
-export function stashInitiativeDraft(projectId: string, description: string): void {
+/** Stash a synthesised description (and optional type) for `projectId`'s creation form and signal it to pre-fill. */
+export function stashInitiativeDraft(
+  projectId: string,
+  description: string,
+  initiative_type?: InitiativeType,
+): void {
+  const draft: InitiativeDraft = { description, ...(initiative_type ? { initiative_type } : {}) };
   try {
-    sessionStorage.setItem(keyFor(projectId), description);
+    sessionStorage.setItem(keyFor(projectId), JSON.stringify(draft));
   } catch {
     // sessionStorage can be unavailable (private mode, quota) — the event still drives the
     // same-page case, and the payload travels in the event detail as a fallback below.
   }
   window.dispatchEvent(
-    new CustomEvent(PREFILL_EVENT, { detail: { projectId, description } }),
+    new CustomEvent(PREFILL_EVENT, {
+      detail: {
+        projectId,
+        description,
+        ...(initiative_type ? { initiative_type } : {}),
+      },
+    }),
   );
 }
 
 /** Read and clear the stashed draft for `projectId` (one-shot). Null when there's nothing pending. */
-export function consumeInitiativeDraft(projectId: string): string | null {
+export function consumeInitiativeDraft(projectId: string): InitiativeDraft | null {
   try {
     const v = sessionStorage.getItem(keyFor(projectId));
-    if (v !== null) sessionStorage.removeItem(keyFor(projectId));
-    return v;
+    if (v !== null) {
+      sessionStorage.removeItem(keyFor(projectId));
+      try {
+        return JSON.parse(v) as InitiativeDraft;
+      } catch {
+        // Old format (plain string from before BD-20) — treat as description-only.
+        return { description: v };
+      }
+    }
+    return null;
   } catch {
     return null;
   }

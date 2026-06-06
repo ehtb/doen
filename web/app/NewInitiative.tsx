@@ -6,7 +6,7 @@ import { Loader2, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { consumeInitiativeDraft, PREFILL_EVENT } from "@/lib/initiativeDraft";
+import { consumeInitiativeDraft, PREFILL_EVENT, type InitiativeDraft } from "@/lib/initiativeDraft";
 import type { InitiativeType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -23,12 +23,13 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
   const formRef = useRef<HTMLFormElement>(null);
   const fieldId = `new-initiative-${projectId}`;
 
-  // BD-1 u3: the project rail's "Create initiative from this" hands a synthesised description here
-  // (description only — every other part of the spec is still drafted from it). Pre-fill it, bring
-  // the form into view, and focus, so the deliberate act stays the human's but the typing is saved.
+  // BD-1 u3: the project rail's "Create initiative from this" hands a synthesised description here.
+  // Pre-fill it, bring the form into view, and focus — the deliberate act stays the human's.
+  // BD-20: also accepts an optional initiative type from the discovery conversation.
   const prefill = useCallback(
-    (text: string) => {
-      setDescription(text);
+    (draft: InitiativeDraft) => {
+      setDescription(draft.description);
+      if (draft.initiative_type) setInitiativeType(draft.initiative_type);
       requestAnimationFrame(() => {
         formRef.current?.scrollIntoView({
           behavior: "smooth",
@@ -58,11 +59,18 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
     // same-page hand-off: the rail dispatches this when the form is already mounted beside it.
     const onPrefill = (e: Event) => {
       const detail = (
-        e as CustomEvent<{ projectId: string; description?: string }>
+        e as CustomEvent<{ projectId: string; description?: string; initiative_type?: string }>
       ).detail;
       if (detail?.projectId !== projectId) return;
+      // consumeInitiativeDraft first (includes type from sessionStorage); fall back to event detail.
       const draft =
-        consumeInitiativeDraft(projectId) ?? detail.description ?? null;
+        consumeInitiativeDraft(projectId) ??
+        (detail.description
+          ? {
+              description: detail.description,
+              initiative_type: detail.initiative_type as InitiativeDraft["initiative_type"],
+            }
+          : null);
       if (draft) prefill(draft);
     };
     window.addEventListener(PREFILL_EVENT, onPrefill);

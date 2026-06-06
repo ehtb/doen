@@ -150,10 +150,14 @@ class MessageInput(BaseModel):
 class AdvisorRequest(BaseModel):
     """A rail turn (spec uvama): the human's new message plus the windowed slice of recent history
     the browser holds in IndexedDB. The backend assembles the prompt from `history` + `content` +
-    spec/memory, generates a reply, and persists nothing."""
+    spec/memory, generates a reply, and persists nothing.
+
+    BD-20: `mode` selects general strategic conversation (default) or guided discovery (sequential
+    questions from observation to shaped initiative)."""
 
     content: str
     history: list[MessageInput] = []
+    mode: Literal["general", "discovery"] = "general"
 
 
 class Proposal(BaseModel):
@@ -174,10 +178,35 @@ class AdvisorReply(BaseModel):
     BD-1 u3: on a PROJECT turn the Advisor may also synthesise the discussion into a *proposed*
     initiative description — `proposed_initiative` carries it (null otherwise). It rides here as a
     sibling of the message, deliberately NOT inside message.metadata, so it stays transient UI
-    state the frontend renders a 'Create initiative from this' action for and never persists."""
+    state the frontend renders a 'Create initiative from this' action for and never persists.
+
+    BD-20: `proposed_initiative_type` is set alongside `proposed_initiative` in discovery mode
+    when the Advisor can infer whether the initiative is engineering or research."""
 
     message: Message
     proposed_initiative: str | None = None
+    proposed_initiative_type: Literal["engineering", "research"] | None = None
+
+
+# --- BD-20: project synthesis -----------------------------------------------------------
+
+class WhatWeKnow(BaseModel):
+    """BD-20: cross-initiative synthesis with three required categories — present only when
+    ≥5 completed initiatives exist in the project."""
+
+    patterns: str       # recurring themes across initiatives, citing IDs
+    assumptions: str    # validated and invalidated assumptions with specifics
+    intent_alignment: str  # how completed work relates to the project's stated intent
+
+
+class ProjectSynthesisResponse(BaseModel):
+    """BD-20: proactive advisor observations and cross-initiative 'what we know' synthesis.
+    `advisor_observations` is null when no completed initiatives exist in the project.
+    `what_we_know` is null when fewer than 5 completed initiatives exist."""
+
+    advisor_observations: str | None
+    what_we_know: WhatWeKnow | None
+    completed_count: int
 
 
 # --- learn stage ---------------------------------------------------------------------

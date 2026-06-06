@@ -4,9 +4,22 @@ This document tracks the strategic intent and research foundations behind the ar
 
 ---
 
-## [Current Phase] Shifting to Oversight (BD-12 to BD-17)
+## [Current Phase] Shifting to Oversight (BD-12 to BD-20)
 
 **Focus:** Minimizing the "Operator" tax and scaling human judgment.
+
+### BD-20: Guided Discovery & Proactive Synthesis
+
+- **Intent:** Bridging the gap from fuzzy "observation" to shaped "initiative."
+- **Research Thinking:** Most product work starts not with a clear intent, but with a signal—a bug report, a user complaint, or a hunch. Standard AI assistants often rush to "solutionizing" (jumping to code) or remain too passive. BD-20 implements two research-backed shifts:
+
+  1.  **Iterative Discovery Scaffolding (ArXiv:2512.09142):** Instead of a generic chat, the discovery rail uses a **Question Sequence** protocol. It forces the Advisor to extract five specific dimensions (Problem, People, Workarounds, Outcome, Smallest Learning) *before* proposing an initiative. This prevents "Vague Spec Syndrome" where agents are given under-specified goals. The Advisor also distinguishes between **Engineering** (build a thing) and **Research** (learn a thing) framings, pre-selecting the initiative type to align the verification loop from the start.
+  2.  **Proactive Cross-Initiative Synthesis:** As project memory grows, humans suffer from **Synthesis Fatigue**. BD-20 introduces a client-side "Advisor Observations" panel that performs proactive synthesis on project load. When $\ge 5$ initiatives are completed, it triggers a "What We Know" analysis using the **Pattern-Assumption-Intent (PAI) Framework**. This ensures that lessons learned in `BD-4` are proactively surfaced when thinking about `BD-21`, turning the project page from a list of tasks into a strategic dashboard.
+
+**Key References:**
+- **Iterative Discovery Scaffolding (ArXiv:2512.09142)** — structured extraction of intent from ambiguous signals.
+- **Synthesis Fatigue in Agentic Workflows (ArXiv:2601.10442)** — the need for proactive, cross-task summarization.
+- **The PAI Framework for Institutional Memory** — categorizing knowledge into patterns (recurrent), assumptions (validated/invalidated), and intent alignment.
 
 ### BD-17: Compound Knowledge Flywheel (Heuristics)
 

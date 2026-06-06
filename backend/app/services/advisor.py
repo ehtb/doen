@@ -33,7 +33,7 @@ from app.models import (
     short_id,
 )
 from app.providers.llm import LLMError, StructuredLLM, get_advisor_llm
-from app.schemas import Proposal
+from app.schemas import ProjectSynthesisResponse, Proposal, WhatWeKnow
 from app.services.conversation import assemble_context
 from app.services.shaping import ShapingResult, shape_spec
 from app.store import MESSAGE_WINDOW, SpecStore
@@ -255,6 +255,114 @@ PROJECT_ADVISOR_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["reply"],
+}
+
+# --- BD-20: guided discovery mode -------------------------------------------------------
+DISCOVERY_SCOPE_GUIDANCE = """You are in GUIDED DISCOVERY MODE on the project page — not the \
+general strategic rail. The human does not yet have a formed initiative; they have an observation, \
+hunch, or fuzzy direction. Your job is to guide them from that starting point to a shaped idea \
+through conversation, one question at a time.
+
+QUESTION SEQUENCE — draw out these five areas in roughly this order:
+1. The observed problem or signal they are sensing
+2. Who experiences it — the people or system affected
+3. How the problem is handled today — current workarounds and why they fall short
+4. What a good outcome would look like — what changes if this is solved
+5. The smallest thing to build or learn that would confirm or challenge this direction
+
+You do NOT present this list. You ask EXACTLY ONE question per turn and wait for the answer before \
+proceeding. When an answer already covers a later area, acknowledge it and move to the next gap. \
+If the human opens with an observation, begin immediately with the first natural follow-up question.
+
+CROSS-PERSPECTIVE BRIDGING: As the conversation unfolds, draw on the project memory you are given \
+to bridge perspectives without being asked.
+- When the human describes a user-facing problem, surface a relevant technical constraint or learning \
+from memory — name the source initiative.
+- When the human raises a technical concern, connect it to product impact via the project intent.
+Cite specific initiatives you see in the context. Never fabricate patterns."""
+
+DISCOVERY_OUTPUT_CONTRACT = """Respond via the discovery_reply tool.
+- `reply`: your next guided question, bridging observation, or acknowledgement — concise, one thing. \
+Never list multiple questions or dump a summary of what's been collected.
+- `proposed_initiative`: set ONLY when the five areas are sufficiently covered AND the thinking is \
+clear enough to be shaped. Distil it into one short paragraph in the human's voice — problem + desired \
+outcome. Signal in your reply that the thinking is ready ("I think we have enough — want to create \
+an initiative from this?"). Null in every other turn.
+- `proposed_initiative_type`: "research" or "engineering" — set only when `proposed_initiative` is \
+set. "research" when the conversation points to investigating and validating before building; \
+"engineering" when it points to building directly."""
+
+DISCOVERY_ADVISOR_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "reply": {
+            "type": "string",
+            "description": "Next guided question or bridging observation — one thing, concise.",
+        },
+        "proposed_initiative": {
+            "type": ["string", "null"],
+            "description": "Set only when thinking is ready to crystallise. One paragraph: problem + desired outcome.",
+        },
+        "proposed_initiative_type": {
+            "type": ["string", "null"],
+            "enum": ["engineering", "research"],
+            "description": "Set only when proposed_initiative is set.",
+        },
+    },
+    "required": ["reply"],
+}
+
+# --- BD-20: project synthesis (proactive observations + what we know) -------------------
+SYNTHESIS_PROMPT = """You are the Doen Advisor generating a project-level synthesis from completed \
+initiative memory. Produce two outputs from the context below:
+
+ADVISOR OBSERVATIONS — a short, pointed set of observations the team should know as they plan next \
+work. What patterns, risks, or themes emerge from what has already been built? Cite specific \
+initiative IDs (e.g. BD-3, BD-7). Two to four sentences. If no meaningful patterns can be drawn \
+from the provided memory, return null.
+
+WHAT WE KNOW (only when ≥5 completed initiatives are present) — a structured cross-initiative \
+synthesis in three parts:
+  patterns: recurring themes, shared constraints, or repeated approaches across initiatives (cite IDs)
+  assumptions: what was validated (it worked) and what was invalidated (it didn't), with specifics
+  intent_alignment: how the body of completed work relates to the project's stated intent — are we \
+making progress toward it, where has scope drifted?
+
+RULES:
+- Synthesise ONLY from the provided context — do not fabricate patterns, invent initiative IDs, or \
+cite learnings not present in the memory below.
+- Be specific: "BD-3 and BD-7 both hit the same Redis eviction issue" beats "reliability is a theme."
+- If the memory is sparse, be brief and honest rather than padding with generic observations.
+- If fewer than 5 completed initiatives are in the context, return what_we_know as null."""
+
+SYNTHESIS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "advisor_observations": {
+            "type": ["string", "null"],
+            "description": "Specific, non-generic observations from completed work. Cite initiative IDs. Null if memory is too thin.",
+        },
+        "what_we_know": {
+            "type": ["object", "null"],
+            "description": "Cross-initiative synthesis. Null when fewer than 5 completed initiatives.",
+            "properties": {
+                "patterns": {
+                    "type": "string",
+                    "description": "Recurring themes across initiatives, citing IDs.",
+                },
+                "assumptions": {
+                    "type": "string",
+                    "description": "What was validated or invalidated. Be specific.",
+                },
+                "intent_alignment": {
+                    "type": "string",
+                    "description": "How completed work relates to the project intent.",
+                },
+            },
+            "required": ["patterns", "assumptions", "intent_alignment"],
+        },
+    },
+    "required": ["advisor_observations"],
 }
 
 _SHAPE_COMMAND = re.compile(r"^\s*shape\s+this(?:\s+initiative)?\s*:\s*(?P<desc>.+)", re.IGNORECASE | re.DOTALL)
@@ -640,3 +748,121 @@ async def advise_project(
     reply, proposed_initiative = await _converse_project(project, memory, window, llm)
 
     return Message(project_id=project_id, role="advisor", content=reply), proposed_initiative
+
+
+# --- BD-20: guided discovery mode + project synthesis -----------------------------------
+
+async def advise_project_discovery(
+    store: SpecStore,
+    project_id: str,
+    content: str,
+    history: list[Message] | None = None,
+    *,
+    llm: StructuredLLM | None = None,
+) -> tuple[Message, str | None, InitiativeType | None]:
+    """One turn on the DISCOVERY rail (BD-20): guide the human through structured questions one at
+    a time, bridge perspectives via project memory, and return a proposed initiative description +
+    type when thinking crystallises. Nothing persisted; the frontend writes the reply into IndexedDB.
+
+    Returns: (reply_message, proposed_initiative_or_none, proposed_type_or_none)
+    where proposed_type is "engineering" | "research" | None."""
+    project = await store.get_project_context(project_id)
+    if project is None:
+        raise NotFoundError(f"no project {project_id}")
+    if not content.strip():
+        raise ValidationError("a message needs content")
+    llm = llm or get_advisor_llm()
+
+    window = _window_with_pending(history, project_id=project_id, content=content)
+    memory = await store.get_context(content.strip(), limit=5, project_id=project_id)
+    system = "\n\n".join([ADVISOR_BASE_PROMPT, DISCOVERY_SCOPE_GUIDANCE, DISCOVERY_OUTPUT_CONTRACT])
+    raw = await llm.complete_structured(
+        system=system,
+        user=build_project_user_message(project, memory, window),
+        schema=DISCOVERY_ADVISOR_SCHEMA,
+        schema_name="discovery_reply",
+    )
+    try:
+        reply_text = str(raw["reply"]).strip()
+    except (KeyError, TypeError) as e:
+        raise LLMError(f"discovery reply did not match expected shape: {e}") from e
+
+    pi = raw.get("proposed_initiative")
+    proposed = pi.strip() if isinstance(pi, str) and pi.strip() else None
+    pt = raw.get("proposed_initiative_type")
+    initiative_type: InitiativeType | None = pt if pt in ("engineering", "research") else None  # type: ignore[assignment]
+
+    return Message(project_id=project_id, role="advisor", content=reply_text), proposed, initiative_type
+
+
+def _render_synthesis_user_message(
+    project: "ProjectContext", memory: "list[ContextHit]", completed_count: int
+) -> str:
+    """Context for the synthesis LLM call: project context, memory, and the synthesis task."""
+    parts = [
+        _render_project_block(
+            project,
+            header="PROJECT",
+            lead=f"Initiatives ({completed_count} complete — synthesise from completed ones):",
+        ),
+        _render_memory_hits(memory),
+        f"# SYNTHESIS TASK\nGenerate advisor_observations (always when memory exists) and "
+        f"what_we_know ({'include — ≥5 completed' if completed_count >= 5 else 'omit — fewer than 5 completed'}).",
+    ]
+    return "\n\n".join(p for p in parts if p)
+
+
+async def synthesize_project(
+    store: SpecStore,
+    project_id: str,
+    *,
+    llm: StructuredLLM | None = None,
+) -> ProjectSynthesisResponse:
+    """Generate proactive advisor observations and 'what we know' synthesis from project memory
+    (BD-20). Observations require ≥1 completed initiative; 'what we know' requires ≥5."""
+    all_initiatives = await store.list_project_initiatives(project_id)
+    completed_count = sum(1 for i in all_initiatives if i.state == "complete")
+
+    if completed_count == 0:
+        return ProjectSynthesisResponse(
+            advisor_observations=None,
+            what_we_know=None,
+            completed_count=0,
+        )
+
+    project = await store.get_project_context(project_id, sibling_limit=50)
+    if project is None:
+        raise NotFoundError(f"no project {project_id}")
+
+    llm = llm or get_advisor_llm()
+    query = project.intent.strip() or "patterns learnings assumptions"
+    memory = await store.get_context(query, limit=12, project_id=project_id)
+
+    raw = await llm.complete_structured(
+        system=SYNTHESIS_PROMPT,
+        user=_render_synthesis_user_message(project, memory, completed_count),
+        schema=SYNTHESIS_SCHEMA,
+        schema_name="project_synthesis",
+    )
+
+    obs_raw = raw.get("advisor_observations")
+    observations = obs_raw.strip() if isinstance(obs_raw, str) and obs_raw.strip() else None
+
+    what_we_know = None
+    if completed_count >= 5:
+        wk_raw = raw.get("what_we_know")
+        if isinstance(wk_raw, dict):
+            try:
+                what_we_know = WhatWeKnow(
+                    patterns=str(wk_raw.get("patterns", "")).strip(),
+                    assumptions=str(wk_raw.get("assumptions", "")).strip(),
+                    intent_alignment=str(wk_raw.get("intent_alignment", "")).strip(),
+                )
+            except Exception:
+                what_we_know = None
+
+    return ProjectSynthesisResponse(
+        advisor_observations=observations,
+        what_we_know=what_we_know,
+        completed_count=completed_count,
+    )

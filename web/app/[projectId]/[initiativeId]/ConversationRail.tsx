@@ -54,6 +54,7 @@ type CardVerdict = "accepted" | "dismissed";
 // `scope` is the IndexedDB conversation it reads/writes (browser-local now — spec uvama);
 // `advisorUrl` is the stateless Advisor endpoint it POSTs a windowed slice to; `specId`
 // (initiative scope only) enables the proposal-card accept flow. The project rail omits specId.
+// BD-20: `discoverable` enables the guided discovery mode toggle (project rail only).
 export default function ConversationRail({
   scope,
   advisorUrl,
@@ -63,6 +64,7 @@ export default function ConversationRail({
   hintPrompt,
   specId,
   review,
+  discoverable = false,
 }: {
   scope: ConversationScope;
   advisorUrl: string;
@@ -73,16 +75,25 @@ export default function ConversationRail({
   specId?: string;
   // 0012 u3: an optional guided-review panel pinned at the top of the thread (initiative rail only).
   review?: ReactNode;
+  // BD-20: enables the discovery mode toggle (project rail only).
+  discoverable?: boolean;
 }) {
   const specCtx = useSpecOptional();
   // The parent passes a fresh scope object each render; pin it to a stable identity keyed by the
   // owning id so the load effect doesn't re-fire every render.
   const isProject = "projectId" in scope;
   const scopeId = "projectId" in scope ? scope.projectId : scope.initiativeId;
-  const convo = useMemo<ConversationScope>(
-    () => (isProject ? { projectId: scopeId } : { initiativeId: scopeId }),
-    [isProject, scopeId],
-  );
+
+  // BD-20: discovery mode is a separate conversation thread (distinct IndexedDB scope) with a
+  // different system prompt. Only enabled on the project rail when `discoverable` is true.
+  const [railMode, setRailMode] = useState<"general" | "discovery">("general");
+
+  const convo = useMemo<ConversationScope>(() => {
+    if (!isProject) return { initiativeId: scopeId };
+    if (railMode === "discovery") return { discoveryProjectId: scopeId };
+    return { projectId: scopeId };
+  }, [isProject, scopeId, railMode]);
+
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -98,11 +109,23 @@ export default function ConversationRail({
   // id. Transient session state — never written to IndexedDB — so the 'Create initiative from this'
   // action shows only for a real synthesis and is gone on reload or reset.
   const [synthesis, setSynthesis] = useState<Record<string, string>>({});
+  // BD-20: initiative type hint from discovery mode, keyed by message id alongside synthesis.
+  const [synthesisTypes, setSynthesisTypes] = useState<
+    Record<string, "engineering" | "research">
+  >({});
   // BD-15: evidence submission from the rail. `evidenceOpen` tracks which message's panel is open;
   // `evidenceBusy` is the criterion id currently being submitted (only one at a time).
   const [evidenceOpen, setEvidenceOpen] = useState<string | null>(null);
   const [evidenceBusy, setEvidenceBusy] = useState<string | null>(null);
   const threadEnd = useRef<HTMLDivElement>(null);
+
+  // BD-20: when switching modes, clear transient synthesis/reset state — the new mode's conversation
+  // loads fresh and prior-mode synthesis isn't relevant.
+  useEffect(() => {
+    setConfirmingReset(false);
+    setSynthesis({});
+    setSynthesisTypes({});
+  }, [railMode]);
 
   // The confirmed criteria available for evidence submission (initiative rail only).
   const confirmedCriteria: AcceptanceCriterion[] =
@@ -181,7 +204,8 @@ export default function ConversationRail({
       const res = await fetch(advisorUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content, history }),
+        // BD-20: include railMode so the backend uses the discovery system prompt when appropriate.
+        body: JSON.stringify({ content, history, mode: isProject ? railMode : "general" }),
       });
       if (!res.ok) {
         let msg = `the Advisor couldn't respond (${res.status})`;
@@ -207,6 +231,13 @@ export default function ConversationRail({
       if (isProject && reply.proposed_initiative?.trim()) {
         const description = reply.proposed_initiative.trim();
         setSynthesis((s) => ({ ...s, [advisor.id]: description }));
+        // BD-20: also stash the initiative type hint when provided (discovery mode).
+        if (reply.proposed_initiative_type) {
+          setSynthesisTypes((s) => ({
+            ...s,
+            [advisor.id]: reply.proposed_initiative_type!,
+          }));
+        }
       }
     } catch (e) {
       setError((e as Error).message);
@@ -304,6 +335,7 @@ export default function ConversationRail({
       setMessages([]);
       setCards({});
       setSynthesis({});
+      setSynthesisTypes({});
       setConfirmingReset(false);
     } catch (e) {
       setError((e as Error).message);
@@ -314,6 +346,16 @@ export default function ConversationRail({
 
   const empty = messages !== null && messages.length === 0;
   const hasHistory = (messages?.length ?? 0) > 0;
+
+  // BD-20: discovery mode presents different copy throughout the rail.
+  const effectiveSubtitle =
+    isProject && railMode === "discovery"
+      ? "guided discovery — from observation to initiative"
+      : subtitle;
+  const effectiveIntro =
+    isProject && railMode === "discovery"
+      ? "Start with what you're noticing — a problem, a gap, or something that's bugging you. I'll guide you from there to a shaped initiative, one question at a time."
+      : intro;
 
   return (
     <aside className="animate-rise flex flex-col overflow-hidden rounded-2xl border border-rail-border bg-rail text-rail-foreground shadow-sm">
@@ -329,7 +371,7 @@ export default function ConversationRail({
         </div>
         <div className="mt-0.5 flex items-baseline justify-between gap-3">
           <p className="font-mono text-[10.5px] tracking-wide text-rail-muted">
-            {subtitle}
+            {effectiveSubtitle}
           </p>
           {hasHistory && !confirmingReset && (
             <button
@@ -341,6 +383,35 @@ export default function ConversationRail({
             </button>
           )}
         </div>
+        {/* BD-20: discovery mode toggle — only on the project rail */}
+        {discoverable && (
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              onClick={() => setRailMode("general")}
+              className={cn(
+                "flex-1 rounded-md border px-3 py-1.5 font-mono text-[10px] tracking-wide transition-colors",
+                railMode === "general"
+                  ? "border-primary/40 bg-primary/10 text-accent-deep"
+                  : "border-rail-border text-rail-muted hover:border-rail-border/80 hover:text-rail-foreground",
+              )}
+            >
+              General
+            </button>
+            <button
+              type="button"
+              onClick={() => setRailMode("discovery")}
+              className={cn(
+                "flex-[2] rounded-md border px-3 py-1.5 font-mono text-[10px] tracking-wide transition-colors",
+                railMode === "discovery"
+                  ? "border-primary/40 bg-primary/10 text-accent-deep"
+                  : "border-rail-border text-rail-muted hover:border-rail-border/80 hover:text-rail-foreground",
+              )}
+            >
+              Discover what to build
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="max-h-[460px] flex-1 space-y-4 overflow-y-auto px-5 py-4">
@@ -386,8 +457,8 @@ export default function ConversationRail({
 
         {empty && !error && (
           <div className="pt-2 text-sm leading-relaxed text-rail-muted">
-            {intro}
-            {hintPrompt && (
+            {effectiveIntro}
+            {hintPrompt && railMode !== "discovery" && (
               <>
                 {" "}
                 Try{" "}
@@ -411,7 +482,7 @@ export default function ConversationRail({
             onDismiss={dismiss}
             synthesis={synthesis[m.id]}
             onCreateInitiative={() =>
-              stashInitiativeDraft(scopeId, synthesis[m.id])
+              stashInitiativeDraft(scopeId, synthesis[m.id], synthesisTypes[m.id])
             }
             // BD-15: evidence submission from the rail
             criteria={confirmedCriteria}

@@ -26,9 +26,11 @@ export const CONVERSATION_CAP = 100;
 // defeat the stateless contract and balloon token cost as the conversation grows.
 export const ADVISOR_WINDOW = 30;
 
-// A conversation is owned by exactly one of an initiative or a project (mirrors the old Message
-// owner rule). The scope key is the secondary index we query and prune by.
-export type ConversationScope = { initiativeId: string } | { projectId: string };
+// A conversation is owned by exactly one of an initiative, a project (general rail), or a project
+// discovery session (BD-20). The scope key is the secondary index we query and prune by.
+// `discoveryProjectId` produces a distinct "disc:{id}" key so discovery history is separate from
+// the general project conversation ("proj:{id}") — switching modes preserves each thread.
+export type ConversationScope = { initiativeId: string } | { projectId: string } | { discoveryProjectId: string };
 
 type MessageMetadata = { proposals?: Proposal[] } & Record<string, unknown>;
 
@@ -56,7 +58,9 @@ interface ConversationDB extends DBSchema {
 }
 
 function scopeKey(scope: ConversationScope): string {
-  return "initiativeId" in scope ? `init:${scope.initiativeId}` : `proj:${scope.projectId}`;
+  if ("initiativeId" in scope) return `init:${scope.initiativeId}`;
+  if ("discoveryProjectId" in scope) return `disc:${scope.discoveryProjectId}`;
+  return `proj:${scope.projectId}`;
 }
 
 function newId(): string {
@@ -121,7 +125,12 @@ export async function appendMessage(
     id: newId(),
     scopeKey: key,
     initiativeId: "initiativeId" in scope ? scope.initiativeId : undefined,
-    projectId: "projectId" in scope ? scope.projectId : undefined,
+    projectId:
+      "projectId" in scope
+        ? scope.projectId
+        : "discoveryProjectId" in scope
+          ? scope.discoveryProjectId
+          : undefined,
     role: input.role,
     content: input.content,
     metadata: input.metadata ?? {},

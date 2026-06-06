@@ -7,6 +7,7 @@ import NewInitiative from "../NewInitiative";
 import CopySyncDocsPrompt from "./CopySyncDocsPrompt";
 import OnboardingHint from "./OnboardingHint";
 import ProjectIntent from "./ProjectIntent";
+import ProjectSynthesis from "./ProjectSynthesis";
 import ConversationRail from "@/app/[projectId]/[initiativeId]/ConversationRail";
 import { DashboardContent } from "./DashboardContent";
 import ProjectActions from "./ProjectActions";
@@ -31,9 +32,7 @@ export default async function ProjectDashboardPage({
   const activeCount = initiatives.filter((i) =>
     ACTIVE_STATES.has(i.state),
   ).length;
-  const completedCount = initiatives.filter(
-    (i) => i.state === "complete",
-  ).length;
+  const completedCount = initiatives.filter((i) => i.state === "complete").length;
   const hasActiveInitiatives = activeCount > 0;
 
   return (
@@ -107,6 +106,13 @@ export default async function ProjectDashboardPage({
             initialDismissed={project.onboarding_dismissed}
           />
 
+          {/* BD-20: proactive advisor observations + 'what we know' synthesis. Non-intrusive
+              and dismissible; loaded client-side so the page renders without waiting on the LLM. */}
+          <ProjectSynthesis
+            projectId={project.id}
+            completedCount={completedCount}
+          />
+
           <h2 className="flex items-center gap-2 font-mono text-[11.5px] font-semibold tracking-[0.13em] text-ink-soft uppercase">
             Initiatives
             <span className="font-normal tracking-normal text-ink-faint normal-case">
@@ -139,6 +145,7 @@ export default async function ProjectDashboardPage({
             mode="reasoning across the project"
             subtitle="the whole project — your strategic thinking partner"
             intro="Ask the Advisor about the project as a whole — how it's going, what to build next, or whether anything contradicts across initiatives."
+            discoverable
           />
         </div>
       </div>

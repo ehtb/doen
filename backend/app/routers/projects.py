@@ -22,6 +22,7 @@ from app.schemas import (
     CreateProject,
     OnboardingStatus,
     ProjectDashboard,
+    ProjectSynthesisResponse,
     ShapeWithAI,
     UpdateProject,
 )
@@ -202,13 +203,32 @@ async def reset_onboarding(project_id: str, store: _Store) -> OnboardingStatus:
 # --- the project-level conversation rail (0010 u5; spec uvama): Advisor scoped to the project ---
 @router.post("/projects/{project_id}/advisor", status_code=201)
 async def project_advisor(project_id: str, body: AdvisorRequest, store: _Store) -> AdvisorReply:
-    """One turn on the project rail (a9/a10): the same Advisor, scoped to the whole project,
-    reasoning across its initiatives. The browser sends the windowed history; nothing is
-    persisted (spec uvama). An LLMError -> 502; a missing project -> 404."""
+    """One turn on the project rail (a9/a10): general strategic mode or guided discovery mode
+    (BD-20). The browser sends the windowed history; nothing is persisted (spec uvama).
+    An LLMError -> 502; a missing project -> 404."""
     history = [
         Message(project_id=project_id, role=m.role, content=m.content) for m in body.history
     ]
+    if body.mode == "discovery":
+        reply, proposed_initiative, proposed_type = await advisor_service.advise_project_discovery(
+            store, project_id, body.content, history
+        )
+        return AdvisorReply(
+            message=reply,
+            proposed_initiative=proposed_initiative,
+            proposed_initiative_type=proposed_type,
+        )
     reply, proposed_initiative = await advisor_service.advise_project(
         store, project_id, body.content, history
     )
     return AdvisorReply(message=reply, proposed_initiative=proposed_initiative)
+
+
+@router.get("/projects/{project_id}/synthesis")
+async def project_synthesis(project_id: str, store: _Store) -> ProjectSynthesisResponse:
+    """Project-level synthesis: proactive advisor observations and 'what we know' from completed
+    initiative memory (BD-20). Observations require ≥1 completed initiative; 'what we know'
+    requires ≥5. An LLMError -> 502; a missing project -> 404."""
+    if await store.get_project(project_id) is None:
+        raise NotFoundError(f"no project {project_id}")
+    return await advisor_service.synthesize_project(store, project_id)

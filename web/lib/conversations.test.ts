@@ -42,6 +42,14 @@ describe("conversation store (IndexedDB)", () => {
     expect((await loadConversation({ projectId: "build-doen" })).map((m) => m.content)).toEqual([
       "project turn",
     ]);
+    expect(
+      (await loadConversation({ discoveryProjectId: "build-doen" })).map((m) => m.content),
+    ).toEqual([]);
+
+    await appendMessage({ discoveryProjectId: "build-doen" }, { role: "human", content: "discovery" });
+    expect(
+      (await loadConversation({ discoveryProjectId: "build-doen" })).map((m) => m.content),
+    ).toEqual(["discovery"]);
   });
 
   // AC item_4fc6d5df5211: conversations are capped; on write the oldest are pruned automatically,

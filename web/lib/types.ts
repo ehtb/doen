@@ -190,9 +190,29 @@ export interface Message {
 // BD-1 u3: on a PROJECT turn the Advisor may synthesise the discussion into a *proposed* initiative
 // description — it rides here, deliberately NOT in message.metadata, so the rail can surface a
 // 'Create initiative from this' action without ever persisting the synthesis. Null otherwise.
+//
+// BD-20: `proposed_initiative_type` is set in discovery mode alongside `proposed_initiative`
+// when the Advisor can infer engineering vs. research framing from the conversation.
 export interface AdvisorReply {
   message: Message;
   proposed_initiative?: string | null;
+  proposed_initiative_type?: "engineering" | "research" | null;
+}
+
+// BD-20: cross-initiative synthesis with three required categories.
+export interface WhatWeKnow {
+  patterns: string;
+  assumptions: string;
+  intent_alignment: string;
+}
+
+// BD-20: proactive advisor observations + 'what we know' synthesis for the project page.
+// advisor_observations is null when no completed initiatives exist.
+// what_we_know is null when fewer than 5 completed initiatives exist.
+export interface ProjectSynthesisResponse {
+  advisor_observations: string | null;
+  what_we_know: WhatWeKnow | null;
+  completed_count: number;
 }
 
 // An escalation on the steering rail. Mirrors backend Decision (store.py).
