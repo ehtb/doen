@@ -58,6 +58,9 @@ in @docs/design-principles.md.
 - **Ground in the why, not just the what.** Pair `get_spec` with `get_conversation_summary`
   — the former tells you what to build, the latter tells you the resolved decisions, rejected
   alternatives, and stated priorities behind it. Don't re-decide what's settled.
+- **Specialized Agents.** Use the specialized agents in `.claude/agents/` to maintain quality and consistency:
+  - **`implementer`**: Invoke for all feature work, module scaffolding, and spec translation. It enforces the layered architecture and async patterns.
+  - **`reviewer`**: Invoke after implementation but before handoff. It validates against the spec and project invariants.
 - **Governing principle:** act within the constraints, decide freely within the discretion,
   **escalate everything else that is a product or intent call.** Do not guess on intent.
 - **Surfacing a decision:** when you hit a call outside constraints + discretion, call
