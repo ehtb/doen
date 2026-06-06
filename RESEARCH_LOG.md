@@ -4,9 +4,24 @@ This document tracks the strategic intent and research foundations behind the ar
 
 ---
 
-## [Current Phase] Shifting to Oversight (BD-12 to BD-16)
+## [Current Phase] Shifting to Oversight (BD-12 to BD-17)
 
 **Focus:** Minimizing the "Operator" tax and scaling human judgment.
+
+### BD-17: Compound Knowledge Flywheel (Heuristics)
+
+- **Intent:** Transforming ephemeral project outcomes into durable, actionable guidance.
+- **Research Thinking:** Standard "Lessons Learned" often fail because they lack actionability and discoverability. While Doen's memory stores narratives and decisions ("we decided X in BD-4"), research on **Experiential Reflective Learning (ERL, ArXiv:2603.24639)** shows that agents improve dramatically when experience is distilled into heuristics—concrete, actionable rules that transfer across tasks. A heuristic tells the agent what to do differently ("always verify migration compatibility before adding a new table"), whereas a narrative only tells it what was done. BD-17 implements three shifts to ensure Doen's knowledge flywheel compounds as actionable intelligence:
+
+  1.  **Heuristic Extraction in Learn:** During the Learning stage, the Advisor extracts explicit cause-effect rules and failure patterns (e.g., "Always use asyncpg's connection pool with min_size=2..."). These are stored as a distinct memory type, tagged and retrievable, ensuring that `get_context` returns actionable rules alongside historical facts. Reference: ERL's "reflect on trajectories to generate transferable heuristics" pattern.
+  2.  **Uncertainty-Aware Proposals:** Proposals are now classified by confidence. Items grounded in strong memory (heuristics/decisions) are marked `confident`, while those inferred from thin descriptions are `uncertain`. This allows the human to focus scrutiny where it matters most. Reference: **ARIA framework (ArXiv:2507.17131)**, where agents assess uncertainty and proactively flag knowledge gaps.
+  3.  **Incremental Knowledge Evolution:** To avoid "context collapse"—where monolithic rewriting of `agents.md` degrades context over time—BD-17 adopts the **Agentic Context Engineering (ACE, ArXiv:2510.04618)** approach. Knowledge grows incrementally; heuristics are appended and contradicted entries are marked "superseded," never deleted. This preserves the evolution of decisions and ensures the "Living Handbook" accumulates rather than collapses.
+
+**Key References:**
+- **Experiential Reflective Learning (ArXiv:2603.24639)** — heuristic extraction from task trajectories.
+- **ARIA framework (ArXiv:2507.17131)** — uncertainty-aware agents with knowledge gap identification.
+- **Agentic Context Engineering / ACE (ArXiv:2510.04618)** — evolving playbooks, context collapse prevention.
+- **Knowledge Activation (ArXiv:2603.14805)** — institutional knowledge as reusable primitives for agents.
 
 ### BD-16: Systematic Verification & Eval Harness
 
