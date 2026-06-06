@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Loader2, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Check, HelpCircle, Loader2, Sparkles, X } from "lucide-react";
 import type { AcceptanceCriterion, SpecItem } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 import { useSpec } from "./spec-context";
 
 // 0012 u3 (a5/a6/a8): the Advisor walks the human through the proposed spec one item at a time,
@@ -138,6 +139,34 @@ export default function GuidedReview() {
           <p className="mt-1.5 font-mono text-[10px] text-rail-muted">
             verify: {verify.kind} — {verify.detail}
           </p>
+        )}
+        {/* BD-14: classification reason — same callout style as the spec document so the guided
+            review and the document show identical context for each item. */}
+        {!editing && it.advisor_classification && it.advisor_classification !== "confident" && it.advisor_classification_reason && (
+          <div
+            className={cn(
+              "mt-2 flex items-start gap-1.5 rounded px-2 py-1.5",
+              it.advisor_classification === "flagged"
+                ? "border border-amber-200/50 bg-amber-50 dark:border-amber-800/30 dark:bg-amber-950/30"
+                : "border border-rail-border bg-rail",
+            )}
+          >
+            {it.advisor_classification === "flagged" ? (
+              <AlertTriangle className="mt-0.5 size-3 shrink-0 text-amber-600" />
+            ) : (
+              <HelpCircle className="mt-0.5 size-3 shrink-0 text-rail-muted" />
+            )}
+            <p
+              className={cn(
+                "font-mono text-[10.5px] leading-snug",
+                it.advisor_classification === "flagged"
+                  ? "text-amber-700 dark:text-amber-400"
+                  : "text-rail-muted",
+              )}
+            >
+              {it.advisor_classification_reason}
+            </p>
+          </div>
         )}
       </div>
 

@@ -13,7 +13,6 @@ import {
   Loader2,
   Lock,
   Plus,
-  Sparkles,
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -188,11 +187,17 @@ export default function SpecDocument() {
   ].filter(
     (i) => i.status === "proposed" && i.advisor_classification === "confident",
   );
-  const hasSynthesis =
-    !!spec.shaping_review_synthesis &&
-    [...spec.constraints, ...spec.discretion, ...spec.acceptance].some(
-      (i) => i.status === "proposed",
-    );
+
+  // Batch-offer state: dismissed by the user (Yes → approves + hides; No → just hides).
+  // Reset whenever a fresh shaping run completes so the new confident set re-presents.
+  const [batchOfferDismissed, setBatchOfferDismissed] = useState(false);
+  const prevShapingStatus = useRef(spec.shaping_status);
+  useEffect(() => {
+    if (prevShapingStatus.current === "pending" && spec.shaping_status !== "pending") {
+      setBatchOfferDismissed(false);
+    }
+    prevShapingStatus.current = spec.shaping_status;
+  }, [spec.shaping_status]);
 
   async function batchApproveConfident() {
     await mutate(`/api/specs/${iid}/batch-approve-confident`, "POST", {
@@ -340,6 +345,36 @@ export default function SpecDocument() {
                 </span>
               )}
             </p>
+            {/* BD-14: classification reason callout for flagged/uncertain proposed items */}
+            {it.status === "proposed" &&
+              it.advisor_classification &&
+              it.advisor_classification !== "confident" &&
+              it.advisor_classification_reason && (
+                <div
+                  className={cn(
+                    "mt-2 flex items-start gap-1.5 rounded px-2 py-1.5",
+                    it.advisor_classification === "flagged"
+                      ? "border border-amber-200/50 bg-amber-50 dark:border-amber-800/30 dark:bg-amber-950/30"
+                      : "border border-border/50 bg-muted/40",
+                  )}
+                >
+                  {it.advisor_classification === "flagged" ? (
+                    <AlertTriangle className="mt-0.5 size-3 shrink-0 text-amber-600" />
+                  ) : (
+                    <HelpCircle className="mt-0.5 size-3 shrink-0 text-ink-faint" />
+                  )}
+                  <p
+                    className={cn(
+                      "font-mono text-[11px] leading-snug",
+                      it.advisor_classification === "flagged"
+                        ? "text-amber-700 dark:text-amber-400"
+                        : "text-ink-soft",
+                    )}
+                  >
+                    {it.advisor_classification_reason}
+                  </p>
+                </div>
+              )}
             {it.status === "proposed" && isDraft && (
               // a6: Accept / Reject are prominent on every proposed item — not buried in a menu.
               // Confirming makes it governing; rejecting removes it (and logs to the rail).
@@ -500,46 +535,60 @@ export default function SpecDocument() {
         </div>
       )}
 
-      {/* BD-14: shaping review synthesis — Advisor's classification summary + batch approve */}
-      {hasSynthesis && (
-        <div className="mb-5 rounded-md border border-border bg-muted/40 px-4 py-3.5">
-          <div className="mb-2 flex items-center gap-1.5 font-mono text-[10px] font-semibold tracking-widest text-ink-soft uppercase">
-            <Sparkles className="size-3" />
-            Advisor review
+      {/* BD-14: batch-approve offer — only the yes/no question; reasons live on each item. */}
+      {confidentProposed.length > 0 && !batchOfferDismissed && (
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-md border border-confirmed/30 bg-confirmed/[0.05] px-4 py-3">
+          <p className="font-mono text-[12px] text-foreground">
+            {confidentProposed.length}{" "}
+            {confidentProposed.length === 1 ? "item looks" : "items look"} solid — approve as a batch?
+          </p>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={async () => {
+                setBatchOfferDismissed(true);
+                await batchApproveConfident();
+              }}
+              className="h-7 bg-confirmed px-2.5 text-xs text-white shadow-sm hover:bg-confirmed/90"
+            >
+              <Check /> Yes
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => setBatchOfferDismissed(true)}
+              className="h-7 px-2.5 text-xs text-ink-soft"
+            >
+              <X /> No
+            </Button>
           </div>
-          <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed text-foreground">
-            {spec.shaping_review_synthesis}
-          </pre>
-          {confidentProposed.length > 0 && (
-            <div className="mt-3 flex items-center gap-3">
-              <Button
-                size="sm"
-                disabled={busy}
-                onClick={batchApproveConfident}
-                className="h-7 bg-confirmed px-3 text-[11px] text-white shadow-sm hover:bg-confirmed/90"
-              >
-                <Check /> Approve {confidentProposed.length} confident item
-                {confidentProposed.length !== 1 ? "s" : ""}
-              </Button>
-              <span className="font-mono text-[10px] text-ink-faint">
-                flagged and uncertain items stay open
-              </span>
-            </div>
-          )}
         </div>
       )}
 
       {/* the return-path surface (0011 C4/a5): what needs you, once you're driving the document.
-          Hidden while the rail leads a fresh review (a9 — no wall of undifferentiated content). */}
+          Hidden while the rail leads a fresh review (a9 — no wall of undifferentiated content).
+          Replaced by a drafting message while background shaping is in progress. */}
       {!reviewMode && (
         <div className="mb-6">
-          <AttentionSurface
-            spec={spec}
-            initiativeId={iid}
-            onConfirmItem={confirmItem}
-            onRejectItem={rejectItem}
-            busy={busy}
-          />
+          {isShapingPending ? (
+            <section className="rounded-xl border border-border/40 bg-muted/30 px-5 py-4">
+              <p className="flex items-center gap-2 font-mono text-[11.5px] tracking-wide text-ink-soft">
+                <Loader2 className="size-3.5 animate-spin" />
+                The Advisor is drafting the spec — constraints, acceptance criteria, and agent
+                latitude will appear here shortly.
+              </p>
+            </section>
+          ) : (
+            <AttentionSurface
+              spec={spec}
+              initiativeId={iid}
+              onConfirmItem={confirmItem}
+              onRejectItem={rejectItem}
+              busy={busy}
+            />
+          )}
         </div>
       )}
 
