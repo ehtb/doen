@@ -10,6 +10,7 @@ import {
   CircleDot,
   Compass,
   HelpCircle,
+  Loader2,
   Lock,
   Plus,
   Sparkles,
@@ -163,6 +164,8 @@ export default function SpecDocument() {
   const { spec, busy, error, mutate } = useSpec();
   const isDraft = spec.state === "draft";
   const isResearch = spec.initiative_type === "research";
+  const isShapingPending = spec.shaping_status === "pending";
+  const isShapingError = spec.shaping_status === "error";
   // BD-15: adapt acceptance-criteria section title for research initiatives.
   const GOVERNING = GOVERNING_BASE.map((g) => ({
     ...g,
@@ -228,7 +231,10 @@ export default function SpecDocument() {
   const reviewMode = reviewConfirmed < reviewTotal;
 
   const [viewAll, setViewAll] = useState(false);
-  const [openKey, setOpenKey] = useState<Section | null>(guidedActive);
+  // Open constraints by default when shaping is pending so the spinner is visible.
+  const [openKey, setOpenKey] = useState<Section | null>(
+    isShapingPending ? "constraints" : guidedActive,
+  );
   const [latitudeOpen, setLatitudeOpen] = useState(spec.state === "draft");
 
   // When a section is fully reviewed the guided step advances; follow it (a2) without clobbering a
@@ -592,6 +598,10 @@ export default function SpecDocument() {
                 <span className="rounded-full bg-proposed/15 px-2 py-0.5 font-mono text-[10px] font-semibold tracking-wide text-proposed-foreground tabular-nums">
                   {pending} to review
                 </span>
+              ) : isShapingPending ? (
+                <span className="flex items-center gap-1 font-mono text-[10px] tracking-wide text-ink-faint">
+                  <Loader2 className="size-3 animate-spin" /> drafting
+                </span>
               ) : (
                 <span className="flex items-center gap-1 font-mono text-[10px] tracking-wide text-confirmed-foreground">
                   <Check className="size-3" /> reviewed
@@ -603,6 +613,17 @@ export default function SpecDocument() {
                 <ul className="space-y-2">
                   {items.map((it) => renderItem(it, key === "acceptance"))}
                 </ul>
+                {isShapingPending && (
+                  <div className="mt-3 flex items-center gap-2 font-mono text-[11px] text-ink-faint">
+                    <Loader2 className="size-3.5 animate-spin" />
+                    Advisor is drafting…
+                  </div>
+                )}
+                {isShapingError && items.length === 0 && (
+                  <p className="mt-3 font-mono text-[11px] text-proposed-foreground">
+                    Shaping failed — use the Actions panel to retry.
+                  </p>
+                )}
                 {renderAdd(key)}
               </div>
             )}
@@ -657,6 +678,12 @@ export default function SpecDocument() {
                 <ul className="space-y-2">
                   {items.map((it) => renderItem(it, false))}
                 </ul>
+                {isShapingPending && (
+                  <div className="mt-3 flex items-center gap-2 font-mono text-[11px] text-ink-faint">
+                    <Loader2 className="size-3.5 animate-spin" />
+                    Advisor is drafting…
+                  </div>
+                )}
                 {renderAdd("discretion")}
               </div>
             )}

@@ -68,13 +68,22 @@ export default function SpecIntent() {
     );
   }
 
+  const isShapingPending = spec.shaping_status === "pending";
+
   return (
     <div className="group mt-2.5 flex items-start gap-2">
       <p className="font-serif text-lg leading-relaxed whitespace-pre-wrap">
         {spec.intent || (
-          <span className="text-ink-faint italic">
-            No intent yet — describe why this initiative exists.
-          </span>
+          isShapingPending ? (
+            <span className="flex items-center gap-2 text-ink-faint italic">
+              <Loader2 className="size-4 shrink-0 animate-spin" />
+              Advisor is drafting…
+            </span>
+          ) : (
+            <span className="text-ink-faint italic">
+              No intent yet — describe why this initiative exists.
+            </span>
+          )
         )}
       </p>
       {editable && (

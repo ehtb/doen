@@ -9,6 +9,7 @@ import NextStepHint from "./NextStepHint";
 import SpecActions from "./SpecActions";
 import SpecDocument from "./SpecDocument";
 import { SpecProvider } from "./spec-context";
+import SpecTitle from "./SpecTitle";
 import SteeringRail from "./SteeringRail";
 import type { InitiativeType } from "@/lib/types";
 
@@ -122,39 +123,41 @@ export default async function SpecPage({
 
   return (
     <main className="relative z-10 mx-auto max-w-[1180px] px-5 py-8 md:px-8">
-      {/* Doen -> Project -> this initiative; the persistent header renders the trail */}
+      {/* Breadcrumb uses short_id which is stable from creation — no need for reactivity here */}
       <SetBreadcrumb
         crumbs={[
           { label: project?.name ?? projectId, href: `/${projectId}` },
           { label: spec.short_id ?? spec.title },
         ]}
       />
-      <header className="animate-rise">
-        <div className="flex items-baseline justify-between gap-4">
-          <span className="font-mono text-[11px] font-semibold tracking-[0.18em] text-accent-deep uppercase">
-            Initiative
-          </span>
-          <span className="flex items-center gap-2 font-mono text-[11px]">
-            <span className="size-[7px] rounded-full bg-confirmed animate-live" />
-            {spec.short_id && (
-              <span className="font-semibold tracking-wide text-accent-deep">
-                {spec.short_id}
-              </span>
-            )}
-            <span className="text-ink-faint">{spec.initiative_id}</span>
-          </span>
-        </div>
-        <h1 className="mt-2 max-w-[20ch] font-serif text-[clamp(1.9rem,3.4vw,2.6rem)] leading-[1.08] font-medium tracking-tight">
-          {spec.title}
-        </h1>
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3.5">
-          <StateStepper state={spec.state} initiativeType={itype} />
-        </div>
-      </header>
 
       {/* one shared spec for both surfaces (0012 u3): the rail's guided review and the document
-          read/write the same spec, so confirming in the rail builds up the document live. */}
+          read/write the same spec, so confirming in the rail builds up the document live.
+          Header lives inside SpecProvider so SpecTitle can read the live spec title — the
+          provisional fallback title updates without waiting for the full RSC refresh. */}
       <SpecProvider initialSpec={spec}>
+        <header className="animate-rise">
+          <div className="flex items-baseline justify-between gap-4">
+            <span className="font-mono text-[11px] font-semibold tracking-[0.18em] text-accent-deep uppercase">
+              Initiative
+            </span>
+            <span className="flex items-center gap-2 font-mono text-[11px]">
+              <span className="size-[7px] rounded-full bg-confirmed animate-live" />
+              {spec.short_id && (
+                <span className="font-semibold tracking-wide text-accent-deep">
+                  {spec.short_id}
+                </span>
+              )}
+              <span className="text-ink-faint">{spec.initiative_id}</span>
+            </span>
+          </div>
+          <h1 className="mt-2 max-w-[20ch] font-serif text-[clamp(1.9rem,3.4vw,2.6rem)] leading-[1.08] font-medium tracking-tight">
+            <SpecTitle fallback={spec.title} />
+          </h1>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3.5">
+            <StateStepper state={spec.state} initiativeType={itype} />
+          </div>
+        </header>
         <NextStepHint />
         <div className="mt-7 flex flex-wrap items-start gap-7">
           <section className="min-w-80 flex-[1_1_560px]">

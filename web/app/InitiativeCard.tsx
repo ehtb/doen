@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Check, GitBranch, ClipboardCheck, AlertTriangle, FlaskConical, Wrench } from "lucide-react";
+import { ArrowRight, Check, GitBranch, ClipboardCheck, AlertTriangle, FlaskConical, Loader2, Wrench } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { Initiative, InitiativeAttention } from "@/lib/types";
@@ -118,7 +118,11 @@ export function InitiativeCard({
 
       {attention && (
         <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-          {total === 0 ? (
+          {attention.is_shaping ? (
+            <span className="inline-flex items-center gap-1 font-mono text-[10px] tracking-wide text-ink-faint">
+              <Loader2 className="size-3 animate-spin" /> drafting spec…
+            </span>
+          ) : total === 0 ? (
             <span className="inline-flex items-center gap-1 font-mono text-[10px] tracking-wide text-ink-faint">
               <Check className="size-3" /> nothing waiting
             </span>

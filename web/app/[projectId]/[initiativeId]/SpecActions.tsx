@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Archive, Loader2, RotateCcw, Trash2 } from "lucide-react";
+import { AlertTriangle, Archive, Loader2, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useSpec } from "./spec-context";
@@ -19,12 +19,32 @@ export default function SpecActions({ projectId }: { projectId: string }) {
 
   const isDraft = spec.state === "draft";
   const isBuilding = spec.state === "building";
+  const isShapingError = spec.shaping_status === "error";
   const reason = isDraft ? "rejected" : "archived";
   const label = isDraft ? "Reject" : "Archive";
   const Icon = isDraft ? Trash2 : Archive;
   const explainer = isDraft
     ? "Rejects the draft — it disappears from the project. The spec stays on disk; you can revive it by URL."
     : "Archives this initiative — it disappears from the project. Its spec, work units, and memory are preserved.";
+
+  async function retryShaping() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/specs/${spec.initiative_id}/retry-shaping`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      if (!res.ok) throw new Error(`retry failed (${res.status})`);
+      // spec-context SWR will pick up the pending status and start showing spinners
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function archive() {
     if (busy) return;
@@ -69,6 +89,20 @@ export default function SpecActions({ projectId }: { projectId: string }) {
       <p className="font-mono text-[10px] tracking-widest text-ink-faint uppercase">
         Manage initiative
       </p>
+
+      {isShapingError && (
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <Button variant="outline" size="sm" disabled={busy} onClick={retryShaping}>
+            {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />} Retry shaping
+          </Button>
+          <span className="text-[12.5px] text-ink-faint">
+            The Advisor failed to draft this spec — retry to try again.
+          </span>
+          {error && (
+            <span className="font-mono text-xs text-proposed-foreground">{error}</span>
+          )}
+        </div>
+      )}
 
       {isBuilding && confirming !== "revert" && (
         <div className="mt-2 flex flex-wrap items-center gap-3">

@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 
 from app.database import get_store
 from app.exceptions import NotFoundError, ValidationError
@@ -143,18 +143,25 @@ async def resolve_spec(project_id: str, ref: str, store: _Store) -> dict:
 
 @router.post("/projects/{project_id}/initiatives/shape", status_code=201)
 async def create_initiative_from_description(
-    project_id: str, body: ShapeWithAI, store: _Store
+    project_id: str, body: ShapeWithAI, store: _Store, background_tasks: BackgroundTasks
 ) -> Initiative:
-    """Description-first creation (0011 C2/a3): the human describes what they want; the Advisor
-    drafts the whole spec (title, intent, constraints, discretion, acceptance, units) — all
-    proposed — and the initiative is scaffolded under it, ready to confirm item by item. A failed
-    LLM call -> 502 leaves nothing created; an unknown project -> 404.
+    """Description-first creation (0011 C2/a3): the initiative row is scaffolded immediately
+    so the user can be redirected right away; the LLM shaping (constraints, discretion,
+    acceptance, title) runs as a background task and populates the spec async. The spec starts
+    with shaping_status='pending' and the client polls via SWR until it flips to 'complete'.
+    A failed LLM call marks shaping_status='error'; an unknown project -> 404.
     BD-15: `initiative_type` in the body sets engineering vs. research framing."""
     if not body.description.strip():
         raise ValidationError("a description is required to start an initiative")
-    return await shaping_service.create_from_description(
+    init = await shaping_service.create_initiative_bare(
         store, project_id, body.description, initiative_type=body.initiative_type
     )
+    background_tasks.add_task(
+        shaping_service.fill_spec_from_description,
+        store, init.id, body.description,
+        project_id=project_id, initiative_type=body.initiative_type,
+    )
+    return init
 
 
 @router.post("/initiatives/{initiative_id}/project")

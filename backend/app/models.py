@@ -84,6 +84,7 @@ InitiativeType = Literal["engineering", "research"]
 # ----------------------------------------------------------------------------- spec models
 AdvisorClassification = Literal["confident", "flagged", "uncertain"]
 AdvisorVerdict = Literal["pass", "needs_your_eye", "borderline"]
+ShapingStatus = Literal["pending", "complete", "error"]
 
 
 class SpecItem(BaseModel):
@@ -144,6 +145,10 @@ class Spec(BaseModel):
     # BD-14: Advisor self-review outputs — set after shaping and after evidence submission.
     shaping_review_synthesis: str | None = None
     verification_synthesis: str | None = None
+    # Background shaping: "pending" while the LLM fills the spec, "complete" when done.
+    shaping_status: ShapingStatus = "complete"
+    # The description that triggered creation — retained so retry-shaping has something to work from.
+    original_description: str | None = None
 
     def confirmed_constraints(self) -> list[SpecItem]:
         """What actually governs an agent — proposed items are not yet binding."""
@@ -345,6 +350,7 @@ class InitiativeAttention(BaseModel):
     open_decisions: int = 0      # escalations awaiting a verdict
     criteria_to_verify: int = 0  # acceptance criteria with evidence_submitted awaiting verdict (BD-7)
     drift_reports: int = 0       # pending drift reports attributed to this initiative's memory (BD-12)
+    is_shaping: bool = False     # spec is being drafted in the background (shaping_status=pending)
 
     @property
     def total(self) -> int:

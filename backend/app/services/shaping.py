@@ -473,6 +473,77 @@ def _fallback_title(description: str) -> str:
     return " ".join(words[:8]) or "Untitled initiative"
 
 
+async def create_initiative_bare(
+    store: SpecStore,
+    project_id: str,
+    description: str,
+    *,
+    initiative_type: InitiativeType = "engineering",
+) -> Initiative:
+    """Fast path: validate, create the initiative row under a provisional title, mark the spec
+    as shaping_status='pending', and return immediately. The LLM work runs as a background task
+    via fill_spec_from_description so the caller can redirect the user right away."""
+    if not description.strip():
+        raise ValidationError("a description is required to start an initiative")
+    if await store.get_project(project_id) is None:
+        raise NotFoundError(f"no project {project_id}")
+    title = _fallback_title(description)
+    init = await store.create_initiative(title, project_id, initiative_type=initiative_type)
+    spec = await store.get_spec(init.id)
+    assert spec is not None
+    spec.shaping_status = "pending"
+    spec.original_description = description
+    await store.save_spec(spec)
+    return init
+
+
+async def fill_spec_from_description(
+    store: SpecStore,
+    initiative_id: str,
+    description: str,
+    *,
+    project_id: str,
+    initiative_type: InitiativeType = "engineering",
+    llm: StructuredLLM | None = None,
+    classification_llm: StructuredLLM | None = None,
+) -> None:
+    """Background task: shape the spec via the LLM, populate all sections, and mark
+    shaping_status='complete'. On any failure, marks shaping_status='error' so the UI
+    can surface a degraded state instead of an infinite spinner."""
+    try:
+        result = await shape_spec(
+            store, description, project_id=project_id, initiative_type=initiative_type, llm=llm
+        )
+        title = result.title.strip() or _fallback_title(description)
+        spec = await store.get_spec(initiative_id)
+        if spec is None:
+            return
+        spec.title = title
+        spec.intent = result.intent
+        spec.constraints = result.constraints
+        spec.discretion = result.discretion
+        spec.acceptance = result.acceptance
+        spec.shaping_status = "complete"
+        all_hits = await store.get_context(
+            description, limit=8, project_id=project_id,
+            include_superseded_heuristics=True,
+        )
+        superseded_hits = [h for h in all_hits if h.type == "heuristic" and h.superseded_by]
+        await _classify_and_annotate(
+            spec, result.context_used, superseded_hits=superseded_hits, llm=classification_llm,
+        )
+        await store.save_spec(spec)
+        await store.update_initiative_title(initiative_id, title)
+    except Exception:
+        try:
+            spec = await store.get_spec(initiative_id)
+            if spec is not None:
+                spec.shaping_status = "error"
+                await store.save_spec(spec)
+        except Exception:
+            pass
+
+
 async def create_from_description(
     store: SpecStore,
     project_id: str,

@@ -283,6 +283,13 @@ class SpecStore:
             project_id=project_id, seq=seq, org_id=org_id, owner_id=owner_id,
         )
 
+    async def update_initiative_title(self, initiative_id: str, title: str) -> None:
+        """Update the initiative row's title after background shaping resolves the LLM title."""
+        await self.pg.execute(
+            "UPDATE initiatives SET title = $1, updated_at = now() WHERE id = $2",
+            title, initiative_id,
+        )
+
     async def get_initiative(self, initiative_id: str) -> Initiative | None:
         """The initiative's lifecycle context — surfaced alongside the spec on MCP get_spec
         so an executor grounds itself in the lifecycle state before acting (D1 / 0004)."""
@@ -607,6 +614,7 @@ class SpecStore:
         # criteria_to_verify). LEFT JOIN LATERAL preserves initiatives with empty specs.
         jsonb_rows = await self.pg.fetch(
             """SELECT i.id,
+                      max(s.doc->>'shaping_status') = 'pending' AS is_shaping,
                       coalesce(sum(CASE WHEN e->>'status' = 'proposed' THEN 1 END), 0)::int
                           AS proposed_items,
                       coalesce(sum(CASE WHEN e->>'verification_status' = 'evidence_submitted' AND sec = 'acceptance' THEN 1 END), 0)::int
@@ -652,6 +660,7 @@ class SpecStore:
                 open_decisions=decisions.get(r["id"], 0),
                 criteria_to_verify=r["criteria_to_verify"],
                 drift_reports=drifts.get(r["id"], 0),
+                is_shaping=bool(r["is_shaping"]),
             )
             for r in jsonb_rows
         }

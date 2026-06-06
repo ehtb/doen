@@ -46,6 +46,8 @@ export interface Spec {
   // BD-14: Advisor self-review outputs — set after shaping and after evidence submission.
   shaping_review_synthesis?: string | null;
   verification_synthesis?: string | null;
+  // Background shaping status: "pending" while the LLM fills the spec async.
+  shaping_status?: "pending" | "complete" | "error";
 }
 
 // The parent entity listed on the dashboard (backend Initiative, store.py).
@@ -81,6 +83,7 @@ export interface InitiativeAttention {
   open_decisions: number;
   criteria_to_verify: number; // BD-7: acceptance criteria with evidence submitted awaiting verdict
   drift_reports: number;      // BD-12: pending drift reports attributed to this initiative's memory
+  is_shaping?: boolean;       // spec is being drafted in the background
 }
 
 // The project dashboard payload (backend ProjectDashboard, schemas.py).

@@ -40,6 +40,17 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
     [fieldId],
   );
 
+  // Warn if the user tries to close or navigate away while the creation call is in-flight.
+  useEffect(() => {
+    if (!busy) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [busy]);
+
   useEffect(() => {
     // survives a route transition / reload: consume any draft stashed before this mounted.
     const stashed = consumeInitiativeDraft(projectId);

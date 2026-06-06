@@ -53,10 +53,12 @@ export function SpecProvider({
   const specRef = useRef(spec);
   specRef.current = spec;
 
+  // Poll more aggressively while the background shaping task is running so items appear promptly.
+  const refreshInterval = spec.shaping_status === "pending" ? 2000 : 5000;
   const { data: freshSpec, mutate: revalidateSpec } = useSWR<Spec>(
     `/api/specs/${initialSpec.initiative_id}`,
     specFetcher,
-    { refreshInterval: 5000, fallbackData: initialSpec, revalidateOnFocus: false, dedupingInterval: 4000 },
+    { refreshInterval, fallbackData: initialSpec, revalidateOnFocus: false, dedupingInterval: 1800 },
   );
 
   // State transitions (start-building, revert-to-draft) update doc.state via jsonb_set without
@@ -76,9 +78,13 @@ export function SpecProvider({
   useEffect(() => {
     if (!freshSpec || !isNewer(freshSpec, specRef.current)) return;
     setSpec(freshSpec);
-    // Any state change needs an RSC re-render: CriteriaVerification and LearnStage render
-    // conditionally per state, and the ConversationRail receives mode/intro as server props.
-    if (freshSpec.state !== specRef.current.state) {
+    // State changes need an RSC re-render for conditional sections (CriteriaVerification, etc.)
+    // and for the ConversationRail which receives mode/intro as server props. Also refresh when
+    // background shaping completes so the server-rendered title updates.
+    const shapingDone =
+      specRef.current.shaping_status === "pending" &&
+      freshSpec.shaping_status !== "pending";
+    if (freshSpec.state !== specRef.current.state || shapingDone) {
       router.refresh();
     }
   }, [freshSpec, router]);
