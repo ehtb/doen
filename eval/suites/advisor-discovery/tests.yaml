@@ -1,0 +1,50 @@
+- description: "Discovery Advisor should ask exactly one question"
+  vars:
+    input: |
+      # PROJECT — Doen
+      Strategic intent: An intent layer for agentic executors.
+
+      # CONVERSATION (showing the most recent turns)
+      human: I'm noticing that our API latency is creeping up.
+
+  assert:
+    - type: javascript
+      value: |
+        const j = JSON.parse(output);
+        const reply = j.reply;
+        const questionCount = (reply.match(/\?/g) || []).length;
+        return questionCount === 1;
+
+- description: "Discovery Advisor should bridge to project memory"
+  vars:
+    input: |
+      # PROJECT — Doen
+      Strategic intent: An intent layer for agentic executors.
+
+      # PROJECT MEMORY
+      - [BD-1] Redis eviction caused transient latency spikes in the auth service.
+
+      # CONVERSATION (showing the most recent turns)
+      human: I'm noticing that our API latency is creeping up. It seems to happen under moderate load.
+
+  assert:
+    - type: javascript
+      value: |
+        const j = JSON.parse(output);
+        const reply = j.reply.toLowerCase();
+        return reply.includes('bd-1') || reply.includes('redis');
+
+- description: "Discovery Advisor should propose an initiative when five areas are covered"
+  vars:
+    input: |
+      # PROJECT — Doen
+      Strategic intent: An intent layer for agentic executors.
+
+      # CONVERSATION (showing the most recent turns)
+      human: [Problem] API latency is creeping up. [Affected] All web users. [Current] We just restart the pod, which is a band-aid. [Outcome] Stable sub-100ms latency. [Smallest] Profile the middleware and the DB calls for the top 3 endpoints.
+
+  assert:
+    - type: javascript
+      value: |
+        const j = JSON.parse(output);
+        return typeof j.proposed_initiative === 'string' && j.proposed_initiative.length > 0;

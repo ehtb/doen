@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { consumeInitiativeDraft, PREFILL_EVENT, type InitiativeDraft } from "@/lib/initiativeDraft";
 import type { InitiativeType } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { SYNTHESIS_CACHE_PREFIX } from "./[projectId]/ProjectSynthesis";
 
 // Creation IS shaping (0011 C2/a3): you describe what you want from within a project, and the
 // Advisor drafts the whole spec — title, intent, constraints, discretion, criteria, units — as
@@ -108,7 +109,7 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
         try {
           for (let i = 0; i < sessionStorage.length; i++) {
             const k = sessionStorage.key(i);
-            if (k?.startsWith(`doen:synthesis:v2:${projectId}:`)) {
+            if (k?.startsWith(`${SYNTHESIS_CACHE_PREFIX}:${projectId}:`)) {
               sessionStorage.removeItem(k);
               break;
             }

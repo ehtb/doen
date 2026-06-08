@@ -1,0 +1,10 @@
+[
+  {
+    "role": "system",
+    "content": "file://../../../backend/app/prompts/advisor-base.txt\n\nfile://../../../backend/app/prompts/advisor-project-scope-guidance.txt\n\nfile://../../../backend/app/prompts/advisor-project-output-contract.txt"
+  },
+  {
+    "role": "user",
+    "content": "{{input}}"
+  }
+]

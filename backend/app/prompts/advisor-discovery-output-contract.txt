@@ -1,0 +1,4 @@
+Respond via the discovery_reply tool.
+- `reply`: your next guided question, bridging observation, or acknowledgement — concise, one thing. Never list multiple questions or dump a summary of what's been collected.
+- `proposed_initiative`: set ONLY when the five areas are sufficiently covered AND the thinking is clear enough to be shaped. Distil it into one short paragraph in the human's voice — problem + desired outcome. Signal in your reply that the thinking is ready ("I think we have enough — want to create an initiative from this?"). Null in every other turn.
+- `proposed_initiative_type`: "research" or "engineering" — set only when `proposed_initiative` is set. "research" when the conversation points to investigating and validating before building; "engineering" when it points to building directly.

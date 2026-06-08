@@ -1,0 +1,38 @@
+- description: "Synthesis should generate observations from memory"
+  vars:
+    input: |
+      # PROJECT — Doen
+      Strategic intent: An intent layer for agentic executors.
+      Completed initiatives: 3
+
+      # PROJECT MEMORY (completed initiatives)
+      - [BD-1] Found that localStorage is better than cookies.
+      - [BD-3] Redis eviction spikes under high write load.
+      - [BD-4] OAuth flow has a 500ms overhead on cold starts.
+
+  assert:
+    - type: javascript
+      value: |
+        const j = JSON.parse(output);
+        return Array.isArray(j.advisor_observations) && j.advisor_observations.length > 0;
+
+- description: "Synthesis should provide 'what we know' when enough initiatives exist"
+  vars:
+    input: |
+      # PROJECT — Doen
+      Strategic intent: An intent layer for agentic executors.
+      Completed initiatives: 6
+
+      # PROJECT MEMORY (completed initiatives)
+      - [BD-1] localStorage > cookies.
+      - [BD-3] Redis eviction spikes.
+      - [BD-4] OAuth overhead.
+      - [BD-5] Pydantic v2 migration improved throughput.
+      - [BD-6] Frontend hydration mismatch on error pages.
+      - [BD-7] Database connection pool exhaustion under load.
+
+  assert:
+    - type: javascript
+      value: |
+        const j = JSON.parse(output);
+        return j.what_we_know !== null && typeof j.what_we_know === 'object' && j.what_we_know.patterns;

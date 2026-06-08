@@ -1,0 +1,10 @@
+[
+  {
+    "role": "system",
+    "content": "file://../../../backend/app/prompts/advisor-base.txt\n\nThis initiative is in the **draft** state. file://../../../backend/app/prompts/advisor-state-draft.txt\n\nfile://../../../backend/app/prompts/advisor-output-contract.txt"
+  },
+  {
+    "role": "user",
+    "content": "{{input}}"
+  }
+]

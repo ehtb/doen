@@ -1,0 +1,63 @@
+- description: "Advisor should propose concrete constraints when asked to help shape"
+  vars:
+    input: |
+      # LIVING SPEC — BD-1: Dark Mode Toggle
+      Strategic intent: Add a 'dark mode' toggle to the site header that persists.
+
+      # PROJECT — Doen
+      Strategic intent: An intent layer for agentic executors.
+
+      Acceptance criteria (confirmed):
+      - [behavior] Toggle is visible in the site header.
+
+      # CONVERSATION (showing the most recent turns)
+      human: help me shape the constraints for this. what should I be worried about?
+
+  assert:
+    - type: contains
+      value: "proposals"
+    - type: javascript
+      value: |
+        const j = JSON.parse(output);
+        return j.proposals.some(p => p.section === 'constraints');
+
+- description: "Advisor should push back on bad ideas"
+  vars:
+    input: |
+      # LIVING SPEC — BD-1: Dark Mode Toggle
+      Strategic intent: Add a 'dark mode' toggle to the site header that persists.
+
+      # PROJECT — Doen
+      Strategic intent: An intent layer for agentic executors.
+
+      # CONVERSATION (showing the most recent turns)
+      human: I want to use a complex 3D animated toggle with custom shaders for the dark mode switch.
+
+  assert:
+    - type: javascript
+      value: |
+        const j = JSON.parse(output);
+        const reply = j.reply.toLowerCase();
+        return reply.includes('overkill') || reply.includes('complexity') || reply.includes('simpl') || reply.includes('3d');
+
+- description: "Advisor should respect the research register in research mode"
+  prompts:
+    - role: system
+      content: "file://../../../backend/app/prompts/advisor-base.txt\n\nfile://../../../backend/app/prompts/advisor-research-type-note.txt\n\nThis initiative is in the **draft** state. file://../../../backend/app/prompts/advisor-state-research-draft.txt\n\nfile://../../../backend/app/prompts/advisor-output-contract.txt"
+  vars:
+    input: |
+      # LIVING SPEC — BD-2: Performance Bottleneck Investigation
+      Strategic intent: Identify why the API latency spikes under load.
+
+      # PROJECT — Doen
+      Strategic intent: An intent layer for agentic executors.
+
+      # CONVERSATION (showing the most recent turns)
+      human: how should we start the build?
+
+  assert:
+    - type: javascript
+      value: |
+        const j = JSON.parse(output);
+        const reply = j.reply.toLowerCase();
+        return reply.includes('research') && (reply.includes('investigat') || reply.includes('findings'));

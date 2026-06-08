@@ -1,0 +1,40 @@
+- description: "Project Advisor should reason across siblings"
+  vars:
+    input: |
+      # PROJECT — Doen
+      Strategic intent: An intent layer for agentic executors.
+
+      # SIBLING INITIATIVES
+      BD-1: Dark Mode Toggle (complete)
+      BD-2: API Performance (building)
+
+      # PROJECT MEMORY
+      - [BD-1] Found that localStorage persistence is more reliable than cookies for UI state.
+
+      # CONVERSATION (showing the most recent turns)
+      human: how's the project going overall?
+
+  assert:
+    - type: javascript
+      value: |
+        const j = JSON.parse(output);
+        const reply = j.reply.toLowerCase();
+        return reply.includes('bd-1') && reply.includes('bd-2');
+
+- description: "Project Advisor should propose a new initiative when a direction crystallises"
+  vars:
+    input: |
+      # PROJECT — Doen
+      Strategic intent: An intent layer for agentic executors.
+
+      # SIBLING INITIATIVES
+      BD-1: Dark Mode Toggle (complete)
+
+      # CONVERSATION (showing the most recent turns)
+      human: we really need a way to track user preferences beyond just dark mode. maybe a whole settings service?
+
+  assert:
+    - type: javascript
+      value: |
+        const j = JSON.parse(output);
+        return typeof j.proposed_initiative === 'string' && j.proposed_initiative.length > 0;

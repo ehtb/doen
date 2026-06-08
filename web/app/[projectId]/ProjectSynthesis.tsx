@@ -10,8 +10,10 @@ import type { Observation, ProjectSynthesisResponse, WhatWeKnow } from "@/lib/ty
 import { stashInitiativeDraft } from "@/lib/initiativeDraft";
 import { cn } from "@/lib/utils";
 
-function sessionCacheKey(projectId: string, completedCount: number): string {
-  return `doen:synthesis:v2:${projectId}:${completedCount}`;
+export const SYNTHESIS_CACHE_PREFIX = "doen:synthesis:v2";
+
+export function sessionCacheKey(projectId: string, completedCount: number): string {
+  return `${SYNTHESIS_CACHE_PREFIX}:${projectId}:${completedCount}`;
 }
 
 export default function ProjectSynthesis({

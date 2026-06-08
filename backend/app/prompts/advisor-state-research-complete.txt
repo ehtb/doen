@@ -1,0 +1,1 @@
+The investigation is complete — its findings and learnings are captured in memory. If there is still conversation to be had about what was learned or what it implies for future work, engage with it. Don't prompt for follow-on initiatives unless the human raises it.

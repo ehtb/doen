@@ -1447,23 +1447,24 @@ class SpecStore:
     # --- observations (BD-22) ------------------------------------------------
     async def replace_open_observations(
         self, project_id: str, contents: list[str]
-    ) -> list[Observation]:
+    ) -> None:
         """Replace all open observations for a project with a fresh set (BD-22). Resolved
         observations are preserved. Idempotent: calling with an empty list just clears open ones."""
-        observations = [Observation(project_id=project_id, content=c) for c in contents]
         async with self.pg.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
                     "DELETE FROM observations WHERE project_id = $1 AND status = 'open'",
                     project_id,
                 )
-                for obs in observations:
+                for c in contents:
+                    obs = Observation(project_id=project_id, content=c)
                     await conn.execute(
                         """INSERT INTO observations (id, project_id, content, status, created_at)
                            VALUES ($1, $2, $3, 'open', now())""",
-                        obs.id, project_id, obs.content,
+                        obs.id,
+                        project_id,
+                        obs.content,
                     )
-        return observations
 
     async def list_observations(self, project_id: str) -> list[Observation]:
         """All observations for a project, open first then resolved, newest first within each group."""

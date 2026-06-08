@@ -1,0 +1,10 @@
+[
+  {
+    "role": "system",
+    "content": "file://../../../backend/app/prompts/advisor-synthesis.txt"
+  },
+  {
+    "role": "user",
+    "content": "{{input}}"
+  }
+]
