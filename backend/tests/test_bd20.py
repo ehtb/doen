@@ -23,7 +23,7 @@ class FakeLLM:
             "proposed_initiative_type": None
         }
         self.synthesis_payload = synthesis_payload or {
-            "advisor_observations": "Looks good.",
+            "advisor_observations": ["Looks good."],
             "what_we_know": {
                 "patterns": "p",
                 "assumptions": "a",
@@ -106,14 +106,14 @@ def test_synthesize_project_no_completed_initiatives(track_projects: list[str]):
         return inner()
 
     res = _store_run(go)
-    assert res.advisor_observations is None
+    assert res.observations == []
     assert res.what_we_know is None
     assert res.completed_count == 0
 
 
 def test_synthesize_project_with_completed_initiatives(track_projects: list[str]):
     fake = FakeLLM(synthesis_payload={
-        "advisor_observations": "Found some patterns.",
+        "advisor_observations": ["Found some patterns."],
         "what_we_know": {
             "patterns": "Pattern A",
             "assumptions": "Assumption B",
@@ -125,19 +125,21 @@ def test_synthesize_project_with_completed_initiatives(track_projects: list[str]
         async def inner():
             proj = await store.create_project("Synthesis Test 5", "Intent")
             track_projects.append(proj.id)
-            
+
             # Create 5 completed initiatives
             for i in range(5):
                 init = await store.create_initiative(f"Init {i}", proj.id)
                 await store.pg.execute(
                     "UPDATE initiatives SET state = 'complete' WHERE id = $1", init.id
                 )
-            
+
             return await synthesize_project(store, proj.id, llm=fake)
         return inner()
 
     res = _store_run(go)
-    assert res.advisor_observations == "Found some patterns."
+    assert len(res.observations) == 1
+    assert res.observations[0].content == "Found some patterns."
+    assert res.observations[0].status == "open"
     assert res.what_we_know.patterns == "Pattern A"
     assert res.completed_count == 5
     assert "Generate advisor_observations" in fake.calls[0]["user"]

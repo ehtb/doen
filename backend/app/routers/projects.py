@@ -13,7 +13,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends
 
 from app.database import get_store
 from app.exceptions import NotFoundError, ValidationError
-from app.models import Initiative, Message, Project, short_id, short_slug
+from app.models import Initiative, Message, Observation, Project, short_id, short_slug
 from app.onboarding_config import SETUP_PROMPT
 from app.schemas import (
     AdvisorReply,
@@ -23,6 +23,7 @@ from app.schemas import (
     OnboardingStatus,
     ProjectDashboard,
     ProjectSynthesisResponse,
+    ResolveObservationRequest,
     ShapeWithAI,
     UpdateProject,
 )
@@ -226,9 +227,29 @@ async def project_advisor(project_id: str, body: AdvisorRequest, store: _Store) 
 
 @router.get("/projects/{project_id}/synthesis")
 async def project_synthesis(project_id: str, store: _Store) -> ProjectSynthesisResponse:
-    """Project-level synthesis: proactive advisor observations and 'what we know' from completed
-    initiative memory (BD-20). Observations require ≥1 completed initiative; 'what we know'
+    """Project-level synthesis: advisor observations (persisted, BD-22) and 'what we know' from
+    completed initiative memory. Observations require ≥1 completed initiative; 'what we know'
     requires ≥5. An LLMError -> 502; a missing project -> 404."""
     if await store.get_project(project_id) is None:
         raise NotFoundError(f"no project {project_id}")
     return await advisor_service.synthesize_project(store, project_id)
+
+
+# --- observations (BD-22) ----------------------------------------------------------------
+@router.get("/projects/{project_id}/observations")
+async def list_observations(project_id: str, store: _Store) -> list[Observation]:
+    """Persisted advisor observations for the project (BD-22). Open first, then resolved.
+    Does not trigger a new LLM synthesis — use GET /synthesis to refresh observations."""
+    if await store.get_project(project_id) is None:
+        raise NotFoundError(f"no project {project_id}")
+    return await store.list_observations(project_id)
+
+
+@router.post("/observations/{observation_id}/resolve", status_code=200)
+async def resolve_observation(
+    observation_id: str, body: ResolveObservationRequest, store: _Store
+) -> Observation:
+    """Mark an observation as resolved and link it to the created initiative (BD-22).
+    Called by the frontend after the 'Resolve into an initiative' flow completes.
+    A missing observation -> 404."""
+    return await store.resolve_observation(observation_id, body.initiative_id)

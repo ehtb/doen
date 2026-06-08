@@ -206,11 +206,20 @@ export interface WhatWeKnow {
   intent_alignment: string;
 }
 
-// BD-20: proactive advisor observations + 'what we know' synthesis for the project page.
-// advisor_observations is null when no completed initiatives exist.
+// BD-22: a persisted advisor observation for a project.
+export interface Observation {
+  id: string;
+  project_id: string;
+  content: string;
+  status: "open" | "resolved";
+  resolved_initiative_id: string | null;
+  created_at: string;
+}
+
+// BD-22: synthesis response now includes persisted observations (not a plain string).
 // what_we_know is null when fewer than 5 completed initiatives exist.
 export interface ProjectSynthesisResponse {
-  advisor_observations: string | null;
+  observations: Observation[];
   what_we_know: WhatWeKnow | null;
   completed_count: number;
 }

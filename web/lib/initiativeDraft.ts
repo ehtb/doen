@@ -19,17 +19,24 @@ export const PREFILL_EVENT = "doen:prefill-initiative";
 export interface InitiativeDraft {
   description: string;
   initiative_type?: InitiativeType;
+  // BD-22: when set, the initiative was created from this observation — resolve it after creation.
+  observation_id?: string;
 }
 
 const keyFor = (projectId: string) => `doen:initiative-draft:${projectId}`;
 
-/** Stash a synthesised description (and optional type) for `projectId`'s creation form and signal it to pre-fill. */
+/** Stash a synthesised description (and optional type/observation) for `projectId`'s creation form and signal it to pre-fill. */
 export function stashInitiativeDraft(
   projectId: string,
   description: string,
   initiative_type?: InitiativeType,
+  observation_id?: string,
 ): void {
-  const draft: InitiativeDraft = { description, ...(initiative_type ? { initiative_type } : {}) };
+  const draft: InitiativeDraft = {
+    description,
+    ...(initiative_type ? { initiative_type } : {}),
+    ...(observation_id ? { observation_id } : {}),
+  };
   try {
     sessionStorage.setItem(keyFor(projectId), JSON.stringify(draft));
   } catch {
@@ -42,6 +49,7 @@ export function stashInitiativeDraft(
         projectId,
         description,
         ...(initiative_type ? { initiative_type } : {}),
+        ...(observation_id ? { observation_id } : {}),
       },
     }),
   );

@@ -44,6 +44,7 @@ from app.models import (
     InitiativeAttention,
     InitiativeType,
     Memory,
+    Observation,
     Project,
     ProjectContext,
     SiblingSummary,
@@ -157,6 +158,17 @@ def _heuristic_from_row(row: asyncpg.Record) -> Heuristic:
         tags=list(row["tags"] or []),
         superseded_by=row["superseded_by"],
         replaces=row["replaces"],
+        created_at=row["created_at"].isoformat(),
+    )
+
+
+def _observation_from_row(row: asyncpg.Record) -> Observation:
+    return Observation(
+        id=row["id"],
+        project_id=row["project_id"],
+        content=row["content"],
+        status=row["status"],
+        resolved_initiative_id=row["resolved_initiative_id"],
         created_at=row["created_at"].isoformat(),
     )
 
@@ -1431,4 +1443,52 @@ class SpecStore:
         await self.save_spec(spec)
         await self._recompute_state(initiative_id)  # building → learning when all verified
         return await self.get_spec(initiative_id) or spec
+
+    # --- observations (BD-22) ------------------------------------------------
+    async def replace_open_observations(
+        self, project_id: str, contents: list[str]
+    ) -> list[Observation]:
+        """Replace all open observations for a project with a fresh set (BD-22). Resolved
+        observations are preserved. Idempotent: calling with an empty list just clears open ones."""
+        observations = [Observation(project_id=project_id, content=c) for c in contents]
+        async with self.pg.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM observations WHERE project_id = $1 AND status = 'open'",
+                    project_id,
+                )
+                for obs in observations:
+                    await conn.execute(
+                        """INSERT INTO observations (id, project_id, content, status, created_at)
+                           VALUES ($1, $2, $3, 'open', now())""",
+                        obs.id, project_id, obs.content,
+                    )
+        return observations
+
+    async def list_observations(self, project_id: str) -> list[Observation]:
+        """All observations for a project, open first then resolved, newest first within each group."""
+        rows = await self.pg.fetch(
+            """SELECT id, project_id, content, status, resolved_initiative_id, created_at
+               FROM observations
+               WHERE project_id = $1
+               ORDER BY (status = 'open') DESC, created_at DESC""",
+            project_id,
+        )
+        return [_observation_from_row(r) for r in rows]
+
+    async def resolve_observation(
+        self, observation_id: str, initiative_id: str
+    ) -> Observation:
+        """Mark an observation as resolved and link it to the created initiative (BD-22).
+        Idempotent: resolving an already-resolved observation updates the initiative link."""
+        row = await self.pg.fetchrow(
+            """UPDATE observations
+               SET status = 'resolved', resolved_initiative_id = $2
+               WHERE id = $1
+               RETURNING id, project_id, content, status, resolved_initiative_id, created_at""",
+            observation_id, initiative_id,
+        )
+        if row is None:
+            raise NotFoundError(f"no observation {observation_id}")
+        return _observation_from_row(row)
 

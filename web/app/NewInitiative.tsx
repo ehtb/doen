@@ -18,6 +18,8 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
   const [initiativeType, setInitiativeType] = useState<InitiativeType>("engineering");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // BD-22: observation_id stashed alongside the draft — resolve after creation.
+  const pendingObservationId = useRef<string | undefined>(undefined);
   const router = useRouter();
   // The Textarea doesn't forward a ref, so we scroll via a wrapper and focus by id.
   const formRef = useRef<HTMLFormElement>(null);
@@ -26,10 +28,12 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
   // BD-1 u3: the project rail's "Create initiative from this" hands a synthesised description here.
   // Pre-fill it, bring the form into view, and focus — the deliberate act stays the human's.
   // BD-20: also accepts an optional initiative type from the discovery conversation.
+  // BD-22: also accepts an optional observation_id to resolve after creation.
   const prefill = useCallback(
     (draft: InitiativeDraft) => {
       setDescription(draft.description);
       if (draft.initiative_type) setInitiativeType(draft.initiative_type);
+      pendingObservationId.current = draft.observation_id;
       requestAnimationFrame(() => {
         formRef.current?.scrollIntoView({
           behavior: "smooth",
@@ -59,16 +63,17 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
     // same-page hand-off: the rail dispatches this when the form is already mounted beside it.
     const onPrefill = (e: Event) => {
       const detail = (
-        e as CustomEvent<{ projectId: string; description?: string; initiative_type?: string }>
+        e as CustomEvent<{ projectId: string; description?: string; initiative_type?: string; observation_id?: string }>
       ).detail;
       if (detail?.projectId !== projectId) return;
-      // consumeInitiativeDraft first (includes type from sessionStorage); fall back to event detail.
+      // consumeInitiativeDraft first (includes type + observation_id from sessionStorage); fall back to event detail.
       const draft =
         consumeInitiativeDraft(projectId) ??
         (detail.description
           ? {
               description: detail.description,
               initiative_type: detail.initiative_type as InitiativeDraft["initiative_type"],
+              observation_id: detail.observation_id,
             }
           : null);
       if (draft) prefill(draft);
@@ -90,6 +95,26 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
       });
       if (!res.ok) throw new Error(`couldn't shape that (${res.status})`);
       const init = await res.json();
+      // BD-22: if this initiative was created from an observation, resolve that observation now.
+      const obsId = pendingObservationId.current;
+      if (obsId) {
+        pendingObservationId.current = undefined;
+        fetch(`/api/observations/${obsId}/resolve`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ initiative_id: init.id }),
+        }).catch(() => {});
+        // Invalidate the synthesis session cache so the resolved state is visible on return.
+        try {
+          for (let i = 0; i < sessionStorage.length; i++) {
+            const k = sessionStorage.key(i);
+            if (k?.startsWith(`doen:synthesis:v2:${projectId}:`)) {
+              sessionStorage.removeItem(k);
+              break;
+            }
+          }
+        } catch {}
+      }
       // land in the freshly-shaped spec to review and confirm the proposals
       router.push(`/${projectId}/${init.id}`);
     } catch (e) {

@@ -20,6 +20,7 @@ from app.models import (
     Memory,
     Message,
     MessageRole,
+    Observation,
     Project,
     Section,
     Verify,
@@ -200,13 +201,18 @@ class WhatWeKnow(BaseModel):
 
 
 class ProjectSynthesisResponse(BaseModel):
-    """BD-20: proactive advisor observations and cross-initiative 'what we know' synthesis.
-    `advisor_observations` is null when no completed initiatives exist in the project.
+    """BD-22: observations are now persisted records with resolve-to-initiative flow.
+    `observations` is the current list (open first, then resolved) for the project.
     `what_we_know` is null when fewer than 5 completed initiatives exist."""
 
-    advisor_observations: str | None
+    observations: list[Observation]
     what_we_know: WhatWeKnow | None
     completed_count: int
+
+
+class ResolveObservationRequest(BaseModel):
+    """BD-22: mark an observation as resolved and link it to the created initiative."""
+    initiative_id: str
 
 
 # --- learn stage ---------------------------------------------------------------------

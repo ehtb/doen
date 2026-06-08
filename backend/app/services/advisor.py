@@ -312,35 +312,32 @@ DISCOVERY_ADVISOR_SCHEMA: dict[str, Any] = {
     "required": ["reply"],
 }
 
-# --- BD-20: project synthesis (proactive observations + what we know) -------------------
-SYNTHESIS_PROMPT = """You are the Doen Advisor generating a project-level synthesis from completed \
-initiative memory. Produce two outputs from the context below:
+# --- BD-22 (replaces BD-20 synthesis prompt): project synthesis with structured observations ------
+SYNTHESIS_PROMPT = """You are the Doen Advisor generating a project synthesis from completed initiative memory.
 
-ADVISOR OBSERVATIONS — a short, pointed set of observations the team should know as they plan next \
-work. What patterns, risks, or themes emerge from what has already been built? Cite specific \
-initiative IDs (e.g. BD-3, BD-7). Two to four sentences. If no meaningful patterns can be drawn \
-from the provided memory, return null.
+OBSERVATIONS — 1 to 3 specific, actionable signals the team should address next. \
+Each observation: one sentence naming the pattern, risk, or gap; one sentence on why it matters now. \
+Cite initiative IDs. Return null if memory is too thin to draw meaningful conclusions.
 
-WHAT WE KNOW (only when ≥5 completed initiatives are present) — a structured cross-initiative \
-synthesis in three parts:
-  patterns: recurring themes, shared constraints, or repeated approaches across initiatives (cite IDs)
-  assumptions: what was validated (it worked) and what was invalidated (it didn't), with specifics
-  intent_alignment: how the body of completed work relates to the project's stated intent — are we \
-making progress toward it, where has scope drifted?
+WHAT WE KNOW (only when ≥5 completed initiatives are present):
+  patterns: recurring themes across initiatives (cite IDs)
+  assumptions: what was validated and what was invalidated, with specifics
+  intent_alignment: how completed work maps to the project's stated intent
 
-RULES:
-- Synthesise ONLY from the provided context — do not fabricate patterns, invent initiative IDs, or \
-cite learnings not present in the memory below.
-- Be specific: "BD-3 and BD-7 both hit the same Redis eviction issue" beats "reliability is a theme."
-- If the memory is sparse, be brief and honest rather than padding with generic observations.
-- If fewer than 5 completed initiatives are in the context, return what_we_know as null."""
+Rules:
+- Synthesise only from the provided context. Never fabricate initiative IDs or learnings.
+- Specific beats general: "BD-3 and BD-7 both hit Redis eviction" beats "reliability is a theme."
+- Sparse memory: be brief and honest, not padded.
+- Fewer than 5 completed initiatives: return what_we_know as null."""
 
 SYNTHESIS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "advisor_observations": {
-            "type": ["string", "null"],
-            "description": "Specific, non-generic observations from completed work. Cite initiative IDs. Null if memory is too thin.",
+            "type": ["array", "null"],
+            "description": "1–3 observations. Each: one sentence naming the issue + one sentence on why it matters. Cite IDs. Null if memory is too thin.",
+            "items": {"type": "string"},
+            "maxItems": 3,
         },
         "what_we_know": {
             "type": ["object", "null"],
@@ -818,14 +815,15 @@ async def synthesize_project(
     *,
     llm: StructuredLLM | None = None,
 ) -> ProjectSynthesisResponse:
-    """Generate proactive advisor observations and 'what we know' synthesis from project memory
-    (BD-20). Observations require ≥1 completed initiative; 'what we know' requires ≥5."""
+    """Generate advisor observations and 'what we know' synthesis from project memory (BD-22).
+    Observations are persisted to Postgres (replacing open ones) so each can be resolved into
+    an initiative. 'what we know' requires ≥5 completed initiatives."""
     all_initiatives = await store.list_project_initiatives(project_id)
     completed_count = sum(1 for i in all_initiatives if i.state == "complete")
 
     if completed_count == 0:
         return ProjectSynthesisResponse(
-            advisor_observations=None,
+            observations=[],
             what_we_know=None,
             completed_count=0,
         )
@@ -846,7 +844,13 @@ async def synthesize_project(
     )
 
     obs_raw = raw.get("advisor_observations")
-    observations = obs_raw.strip() if isinstance(obs_raw, str) and obs_raw.strip() else None
+    obs_contents: list[str] = []
+    if isinstance(obs_raw, list):
+        obs_contents = [s.strip() for s in obs_raw if isinstance(s, str) and s.strip()]
+
+    await store.replace_open_observations(project_id, obs_contents)
+    # return ALL observations (open + resolved) so the UI shows the full picture
+    observations = await store.list_observations(project_id)
 
     what_we_know = None
     if completed_count >= 5:
@@ -862,7 +866,7 @@ async def synthesize_project(
                 what_we_know = None
 
     return ProjectSynthesisResponse(
-        advisor_observations=observations,
+        observations=observations,
         what_we_know=what_we_know,
         completed_count=completed_count,
     )
