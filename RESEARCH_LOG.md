@@ -4,9 +4,14 @@ This document tracks the strategic intent and research foundations behind the ar
 
 ---
 
-## [Current Phase] Shifting to Oversight (BD-12 to BD-25)
+## [Current Phase] Shifting to Oversight (BD-12 to BD-26)
 
 **Focus:** Minimizing the "Operator" tax and scaling human judgment.
+
+### BD-26: Auto-Approve Verification Evidence
+
+- **Intent:** Minimizing the review bottleneck during the verification stage.
+- **Research Thinking:** During verification, the Advisor previously presented every piece of submitted evidence to the human for individual review — the same bottleneck that BD-14 resolved for shaping. BD-26 establishes a verification flow that mirrors this pattern: the Advisor evaluates all submitted evidence, auto-approves criteria that are a clear pass, and only escalates flagged or borderline criteria to the human for explicit judgment. The human's role shifts from reviewing every criterion individually to correcting the Advisor's synthesis where it falls short.
 
 ### UI Refinement: Unifying the Governance Display (Agent Latitude)
 
