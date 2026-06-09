@@ -126,8 +126,8 @@ def test_synthesize_project_with_completed_initiatives(track_projects: list[str]
             proj = await store.create_project("Synthesis Test 5", "Intent")
             track_projects.append(proj.id)
 
-            # Create 5 completed initiatives
-            for i in range(5):
+            # Create 6 completed initiatives
+            for i in range(6):
                 init = await store.create_initiative(f"Init {i}", proj.id)
                 await store.pg.execute(
                     "UPDATE initiatives SET state = 'complete' WHERE id = $1", init.id
@@ -141,6 +141,6 @@ def test_synthesize_project_with_completed_initiatives(track_projects: list[str]
     assert res.observations[0].content == "Found some patterns."
     assert res.observations[0].status == "open"
     assert res.what_we_know.patterns == "Pattern A"
-    assert res.completed_count == 5
+    assert res.completed_count == 6
     assert "Generate advisor_observations" in fake.calls[0]["user"]
     assert "include — ≥5 completed" in fake.calls[0]["user"]

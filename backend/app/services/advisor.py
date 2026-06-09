@@ -634,9 +634,10 @@ async def synthesize_project(
     *,
     llm: StructuredLLM | None = None,
 ) -> ProjectSynthesisResponse:
-    """Generate advisor observations and 'what we know' synthesis from project memory (BD-22).
-    Observations are persisted to Postgres (replacing open ones) so each can be resolved into
-    an initiative. 'what we know' requires ≥5 completed initiatives."""
+    """Generate one advisor observation every 3 completed initiatives (BD-22).
+    LLM is only called at milestones (n % 3 == 0) and only when the milestone
+    initiative has no prior observation. Rejected observations persist so the
+    UI can show the full history. 'what we know' requires ≥5 completed initiatives."""
     all_initiatives = await store.list_project_initiatives(project_id)
     completed_count = sum(1 for i in all_initiatives if i.state == "complete")
 
@@ -647,12 +648,28 @@ async def synthesize_project(
             completed_count=0,
         )
 
-    # BD-24: only the most recently completed initiative (highest seq) may receive a new
-    # observation. If it already has one (any status), skip generation to honour the
-    # one-per-initiative lifetime cap.
+    # Only generate at milestones (every 3 completed initiatives).
+    if completed_count % 3 != 0:
+        observations = await store.list_observations(project_id)
+        return ProjectSynthesisResponse(
+            observations=observations,
+            what_we_know=None,
+            completed_count=completed_count,
+        )
+
+    # BD-24: the most recently completed initiative (highest seq) is the milestone anchor.
+    # If it already has an observation (any status), this milestone is done — no LLM call.
     completed = [i for i in all_initiatives if i.state == "complete"]
     source_initiative = max(completed, key=lambda i: i.seq)
     existing = await store.get_observation_for_initiative(source_initiative.id)
+
+    if existing is not None:
+        observations = await store.list_observations(project_id)
+        return ProjectSynthesisResponse(
+            observations=observations,
+            what_we_know=None,
+            completed_count=completed_count,
+        )
 
     project = await store.get_project_context(project_id, sibling_limit=50)
     if project is None:
@@ -669,13 +686,12 @@ async def synthesize_project(
         schema_name="project_synthesis",
     )
 
-    if existing is None:
-        obs_raw = raw.get("advisor_observations")
-        obs_contents: list[str] = []
-        if isinstance(obs_raw, list):
-            obs_contents = [s.strip() for s in obs_raw if isinstance(s, str) and s.strip()]
-        if obs_contents:
-            await store.create_scoped_observation(project_id, source_initiative.id, obs_contents[0])
+    obs_raw = raw.get("advisor_observations")
+    obs_contents: list[str] = []
+    if isinstance(obs_raw, list):
+        obs_contents = [s.strip() for s in obs_raw if isinstance(s, str) and s.strip()]
+    if obs_contents:
+        await store.create_scoped_observation(project_id, source_initiative.id, obs_contents[0])
 
     # return ALL observations (open + resolved + rejected) so the UI shows the full picture
     observations = await store.list_observations(project_id)

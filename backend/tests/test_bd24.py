@@ -91,25 +91,28 @@ def test_scoping_only_most_recent_gets_observation(track_projects: list[str]):
 
             init_a = await store.create_initiative("Init A", proj.id)
             init_b = await store.create_initiative("Init B", proj.id)
+            init_c = await store.create_initiative("Init C", proj.id)
 
-            # init_b has higher seq (created later)
-            assert init_b.seq > init_a.seq
+            # init_c has higher seq (created later)
+            assert init_c.seq > init_b.seq > init_a.seq
 
             async with store.pg.acquire() as conn:
                 await _force_complete(conn, init_a.id)
                 await _force_complete(conn, init_b.id)
+                await _force_complete(conn, init_c.id)
 
             result = await synthesize_project(store, proj.id, llm=fake)
-            return result, init_a.id, init_b.id
+            return result, init_a.id, init_b.id, init_c.id
 
         return inner()
 
-    result, init_a_id, init_b_id = _store_run(go)
+    result, init_a_id, init_b_id, init_c_id = _store_run(go)
 
     assert len(result.observations) == 1
     obs = result.observations[0]
-    assert obs.source_initiative_id == init_b_id
+    assert obs.source_initiative_id == init_c_id
     assert obs.source_initiative_id != init_a_id
+    assert obs.source_initiative_id != init_b_id
 
 
 # ---------------------------------------------------------------------------
@@ -145,9 +148,13 @@ def test_second_observation_blocked_via_synthesis(track_projects: list[str]):
         async def inner():
             proj = await store.create_project("BD24 Synthesis Dedup", "Intent")
             track_projects.append(proj.id)
-            init = await store.create_initiative("Init X", proj.id)
+            init_x = await store.create_initiative("Init X", proj.id)
+            init_y = await store.create_initiative("Init Y", proj.id)
+            init_z = await store.create_initiative("Init Z", proj.id)
             async with store.pg.acquire() as conn:
-                await _force_complete(conn, init.id)
+                await _force_complete(conn, init_x.id)
+                await _force_complete(conn, init_y.id)
+                await _force_complete(conn, init_z.id)
 
             await synthesize_project(store, proj.id, llm=fake)
 
