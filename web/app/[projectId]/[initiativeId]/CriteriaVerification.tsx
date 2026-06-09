@@ -59,8 +59,11 @@ function CriterionVerificationCard({ criterion }: { criterion: AcceptanceCriteri
   const { spec, mutate, busy } = useSpec();
   const [feedback, setFeedback] = useState("");
   const [showActions, setShowActions] = useState(false);
+  const [showOverride, setShowOverride] = useState(false);
+  const [overrideFeedback, setOverrideFeedback] = useState("");
   const status = criterion.verification_status ?? "pending";
   const cfg = STATUS_CONFIG[status];
+  const isAutoApproved = status === "verified" && criterion.approved_by === "advisor";
 
   async function recordVerdict(verdict: "approved" | "changes_requested") {
     if (verdict === "changes_requested" && !feedback.trim()) return;
@@ -71,6 +74,17 @@ function CriterionVerificationCard({ criterion }: { criterion: AcceptanceCriteri
     );
     setFeedback("");
     setShowActions(false);
+  }
+
+  async function submitOverride() {
+    if (!overrideFeedback.trim()) return;
+    await mutate(
+      `/api/specs/${spec.initiative_id}/criteria/${criterion.id}/verdict`,
+      "POST",
+      { verdict: "changes_requested", feedback: overrideFeedback.trim() },
+    );
+    setOverrideFeedback("");
+    setShowOverride(false);
   }
 
   return (
@@ -193,10 +207,59 @@ function CriterionVerificationCard({ criterion }: { criterion: AcceptanceCriteri
 
       {/* Verified state */}
       {status === "verified" && (
-        <p className="mt-2 flex items-center gap-1.5 text-[12px] text-confirmed-foreground">
-          <Check className="size-3.5" /> approved
-          {criterion.feedback && <span className="text-ink-soft"> — {criterion.feedback}</span>}
-        </p>
+        <div className="mt-2">
+          {isAutoApproved ? (
+            <div className="flex items-start justify-between gap-2">
+              <p className="flex items-center gap-1.5 text-[12px] text-confirmed-foreground">
+                <Sparkles className="size-3.5" /> auto-approved · advisor
+              </p>
+              {!showOverride && (
+                <button
+                  type="button"
+                  onClick={() => setShowOverride(true)}
+                  className="font-mono text-[10px] tracking-wide text-ink-faint underline-offset-4 hover:text-proposed-foreground hover:underline"
+                >
+                  Override
+                </button>
+              )}
+            </div>
+          ) : (
+            <p className="flex items-center gap-1.5 text-[12px] text-confirmed-foreground">
+              <Check className="size-3.5" /> approved
+              {criterion.feedback && <span className="text-ink-soft"> — {criterion.feedback}</span>}
+            </p>
+          )}
+          {showOverride && (
+            <div className="mt-2.5 space-y-2">
+              <Textarea
+                rows={2}
+                placeholder="Why the auto-approval is wrong (required)"
+                value={overrideFeedback}
+                onChange={(e) => setOverrideFeedback(e.target.value)}
+                className="text-[13px]"
+              />
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy || !overrideFeedback.trim()}
+                  title={!overrideFeedback.trim() ? "Add feedback first" : ""}
+                  onClick={submitOverride}
+                >
+                  <RotateCcw /> Request changes
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-ink-faint"
+                  onClick={() => { setShowOverride(false); setOverrideFeedback(""); }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </li>
   );

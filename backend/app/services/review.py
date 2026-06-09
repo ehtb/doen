@@ -87,7 +87,7 @@ def _build_verification_synthesis(
     # Status header — quick scan of what needs attention
     parts: list[str] = []
     if passed:
-        parts.append(f"{len(passed)} ready to approve")
+        parts.append(f"{len(passed)} auto-approved")
     if needs_eye:
         parts.append(f"{len(needs_eye)} need{'s' if len(needs_eye) == 1 else ''} your eye")
     if borderline:
@@ -172,6 +172,10 @@ async def generate_verification_synthesis(
         c.advisor_preliminary_verdict = verdict
         c.advisor_preliminary_notes = notes
         if verdict == "pass":
+            # BD-26: auto-approve clear-pass criteria — no human prompt needed.
+            c.verdict = "approved"
+            c.verification_status = "verified"
+            c.approved_by = "advisor"
             passed.append(c)
         elif verdict == "borderline":
             borderline.append((c, notes))
@@ -180,3 +184,5 @@ async def generate_verification_synthesis(
 
     spec.verification_synthesis = _build_verification_synthesis(passed, needs_eye, borderline)
     await store.save_spec(spec)
+    # BD-26: auto-approvals may push all criteria to verified → trigger building→learning.
+    await store._recompute_state(initiative_id)

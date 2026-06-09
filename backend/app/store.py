@@ -1418,6 +1418,7 @@ class SpecStore:
                 "evidence": c.evidence,
                 "verdict": c.verdict,
                 "feedback": c.feedback,
+                "approved_by": c.approved_by,
             }
             for c in spec.acceptance
         ]
@@ -1441,6 +1442,7 @@ class SpecStore:
         c.verdict = verdict  # type: ignore[assignment]
         c.feedback = feedback or None
         c.verification_status = "verified" if verdict == "approved" else "changes_requested"
+        c.approved_by = "human"  # BD-26: explicit human verdict — overrides any prior auto-approval
         await self.save_spec(spec)
         await self._recompute_state(initiative_id)  # building → learning when all verified
         return await self.get_spec(initiative_id) or spec

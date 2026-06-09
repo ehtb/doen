@@ -106,6 +106,7 @@ class Verify(BaseModel):
 
 VerificationStatus = Literal["pending", "evidence_submitted", "verified", "changes_requested"]
 CriterionVerdict = Literal["approved", "changes_requested"]
+ApprovedBy = Literal["human", "advisor"]
 
 
 class AcceptanceCriterion(SpecItem):
@@ -118,6 +119,8 @@ class AcceptanceCriterion(SpecItem):
     # BD-14: Advisor preliminary verification verdict — set after evidence submission.
     advisor_preliminary_verdict: AdvisorVerdict | None = None
     advisor_preliminary_notes: str | None = None
+    # BD-26: who issued the approval — "advisor" for auto-approvals, "human" for explicit verdicts.
+    approved_by: ApprovedBy | None = None
 
 
 class Reference(BaseModel):

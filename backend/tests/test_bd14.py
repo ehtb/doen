@@ -99,6 +99,9 @@ class FakeStore:
         self._spec = spec
         return spec
 
+    async def _recompute_state(self, initiative_id: str) -> None:
+        pass
+
 
 # ---- Helpers -----------------------------------------------------------------------
 

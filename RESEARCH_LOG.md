@@ -8,6 +8,11 @@ This document tracks the strategic intent and research foundations behind the ar
 
 **Focus:** Minimizing the "Operator" tax and scaling human judgment.
 
+### UI Refinement: Unifying the Governance Display (Agent Latitude)
+
+- **Intent:** Reducing visual hierarchy fragmentation during spec review.
+- **Research Thinking:** The "Agent latitude" (discretion) section was previously isolated from the primary "Intent -> Constraints -> Acceptance criteria" progressive disclosure flow. By unifying its rendering with the other governing sections, the review arc becomes a single, continuous loop. Discretion items now benefit from the same auto-collapse behavior upon approval, ensuring the UI remains calm and focused solely on pending decisions, while preserving their distinct semantic role (the executor's calls, not the human's).
+
 ### BD-25: Auto-Approve Learnings & Structured Review
 
 - **Intent:** Minimizing review friction for routine project knowledge.

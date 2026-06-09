@@ -24,6 +24,8 @@ export interface AcceptanceCriterion extends SpecItem {
   // BD-14: Advisor preliminary verification verdict — set after evidence submission.
   advisor_preliminary_verdict?: "pass" | "needs_your_eye" | "borderline" | null;
   advisor_preliminary_notes?: string | null;
+  // BD-26: who approved — "advisor" for auto-approvals, "human" for explicit human verdicts.
+  approved_by?: "human" | "advisor" | null;
 }
 
 export interface Spec {
