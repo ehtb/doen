@@ -171,6 +171,8 @@ doen/
   and `get_context` are project-aware with fallback to global.
 - **The Advisor is a single voice.** Both rails (initiative-level and project-level) reach
   one Advisor service that knows the spec, the memory, and the conversation.
+- **Prompts are externalized.** System prompts for Advisor or specialized evaluator calls
+  must live in `backend/app/prompts/*.txt`. Do not hardcode long prompt strings in services.
 
 ## References
 

@@ -15,19 +15,22 @@ from typing import Any
 from app.exceptions import NotFoundError, ValidationError
 from app.models import Heuristic
 from app.providers.llm import StructuredLLM, get_advisor_llm
-from app.schemas import ConfirmHeuristics, HeuristicDraftResult, HeuristicProposal, LearnReview, OutcomeDraft, RationaleClaim
+from app.schemas import ConfirmHeuristics, HeuristicDraftResult, HeuristicProposal, LearnReview, LearningItem, OutcomeDraft, RationaleClaim
 from app.store import SpecStore
-
-from pathlib import Path
 
 _PROMPTS = Path(__file__).resolve().parent.parent / "prompts"
 LEARN_DRAFT_SYSTEM_PROMPT = (_PROMPTS / "learn-draft.txt").read_text().strip()
+LEARNING_EVAL_SYSTEM_PROMPT = (_PROMPTS / "learn-evaluation.txt").read_text().strip()
 
 LEARN_DRAFT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "summary": {"type": "string", "description": "What was intended vs. what happened."},
-        "learnings": {"type": "string", "description": "Durable, transferable lessons."},
+        "learnings": {
+            "type": "array",
+            "description": "Durable, transferable lessons as bullet-point items.",
+            "items": {"type": "string"},
+        },
         "rationale_claims": {
             "type": "array",
             "description": "Cause-effect claims each traceable to a specific decision or criterion id in the record.",
@@ -109,11 +112,146 @@ def _parse_rationale_claims(raw_claims: list[Any], valid_ids: set[str]) -> list[
     return result
 
 
+LEARNING_EVAL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "evaluations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "index": {
+                        "type": "integer",
+                        "description": "0-based index of the learning in the input list.",
+                    },
+                    "auto_approved": {
+                        "type": "boolean",
+                        "description": (
+                            "True ONLY when HIGH CONFIDENCE the learning maps directly to a "
+                            "discretion item or criterion. False for anything ambiguous."
+                        ),
+                    },
+                    "matched_item_id": {
+                        "type": ["string", "null"],
+                        "description": "The id of the matching item. Null when auto_approved is false.",
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "One sentence explaining your confidence assessment.",
+                    },
+                },
+                "required": ["index", "auto_approved", "reasoning"],
+            },
+        }
+    },
+    "required": ["evaluations"],
+}
+
+
+def _render_spec_items_for_eval(
+    discretion_items: list[Any],
+    acceptance_criteria: list[Any],
+) -> str:
+    parts: list[str] = []
+    confirmed_disc = [i for i in discretion_items if i.status == "confirmed"]
+    confirmed_acc = [i for i in acceptance_criteria if i.status == "confirmed"]
+    if confirmed_disc:
+        parts.append("Confirmed DISCRETION items (id → text):")
+        parts += [f"  {i.id}: {i.text}" for i in confirmed_disc]
+    if confirmed_acc:
+        parts.append("\nConfirmed ACCEPTANCE CRITERIA (id → text · verification outcome):")
+        parts += [
+            f"  {c.id}: {c.text}"
+            + (f" [verification: {c.verification_status}]" if c.verification_status else "")
+            for c in confirmed_acc
+        ]
+    if not parts:
+        return "No confirmed spec items available."
+    return "\n".join(parts)
+
+
+async def evaluate_learnings(
+    learnings: list[str],
+    discretion_items: list[Any],
+    acceptance_criteria: list[Any],
+    *,
+    llm: StructuredLLM | None = None,
+) -> list[LearningItem]:
+    """BD-25: classify each learning as auto_approved or needs_review, reusing the
+    Discretion Auditor's high-confidence gate pattern (constraint item_d48cf8171aac).
+    On any LLMError, all learnings fall back to needs_review — no silent loss.
+    With no spec items to match against, all learnings need human review."""
+    from app.providers.llm import LLMError
+
+    if not learnings:
+        return []
+
+    confirmed_disc = [i for i in discretion_items if i.status == "confirmed"]
+    confirmed_acc = [i for i in acceptance_criteria if i.status == "confirmed"]
+    if not confirmed_disc and not confirmed_acc:
+        return [
+            LearningItem(
+                text=t,
+                auto_approved=False,
+                reasoning="No confirmed spec items — cannot gate auto-approval.",
+            )
+            for t in learnings
+        ]
+
+    llm = llm or get_advisor_llm()
+    user_msg = "\n".join(f"{i}: {t}" for i, t in enumerate(learnings))
+    user_msg += "\n\n" + _render_spec_items_for_eval(discretion_items, acceptance_criteria)
+
+    try:
+        raw = await llm.complete_structured(
+            system=LEARNING_EVAL_SYSTEM_PROMPT,
+            user=user_msg,
+            schema=LEARNING_EVAL_SCHEMA,
+            schema_name="learning_evaluation",
+        )
+    except LLMError:
+        return [
+            LearningItem(
+                text=t,
+                auto_approved=False,
+                reasoning="Evaluator LLM unavailable — surfaced to human as a safe fallback.",
+            )
+            for t in learnings
+        ]
+
+    evals: dict[int, dict] = {}
+    for ev in (raw.get("evaluations") or []):
+        idx = ev.get("index")
+        if isinstance(idx, int) and 0 <= idx < len(learnings):
+            evals[idx] = ev
+
+    valid_item_ids = {i.id for i in confirmed_disc} | {c.id for c in confirmed_acc}
+    result: list[LearningItem] = []
+    for i, text in enumerate(learnings):
+        ev = evals.get(i)
+        if ev is None:
+            result.append(LearningItem(text=text, auto_approved=False, reasoning="No evaluation returned."))
+            continue
+        within = bool(ev.get("auto_approved", False))
+        item_id = ev.get("matched_item_id") if within else None
+        # Reject hallucinated IDs — same guard as discretion_auditor.
+        if item_id and item_id not in valid_item_ids:
+            within = False
+            item_id = None
+        result.append(LearningItem(
+            text=text,
+            auto_approved=within,
+            matched_item_id=item_id,
+            reasoning=str(ev.get("reasoning", "")),
+        ))
+    return result
+
+
 async def draft_outcome(
     store: SpecStore, initiative_id: str, *, llm: StructuredLLM | None = None
 ) -> OutcomeDraft:
-    """BD-13 enriched draft: outcome + structured rationale claims with record-traceable IDs.
-    The human corrects and confirms via submit_learn — nothing is written to memory here."""
+    """BD-13 enriched / BD-25 structured draft: outcome + bullet-point learnings evaluated
+    for auto-approval + rationale claims. Nothing is written to memory here."""
     review = await learn_review(store, initiative_id)  # raises NotFoundError if absent
     spec = await store.get_spec(initiative_id)
     llm = llm or get_advisor_llm()
@@ -124,16 +262,32 @@ async def draft_outcome(
         schema_name="outcome",
     )
 
+    # Parse learnings — LLM returns an array; guard against old string format.
+    raw_learnings = raw.get("learnings") or []
+    if isinstance(raw_learnings, str):
+        # Graceful fallback if model returns a string: split on newlines.
+        raw_learnings = [l.strip().lstrip("- ").strip() for l in raw_learnings.split("\n") if l.strip()]
+    learning_texts = [str(l).strip().lstrip("- ").strip() for l in raw_learnings if str(l).strip()]
+
+    # BD-25: evaluate each learning against discretion + criteria using the Auditor pattern.
+    discretion_items = list(spec.discretion) if spec else []
+    acceptance_criteria = list(spec.acceptance) if spec else []
+    evaluated = await evaluate_learnings(
+        learning_texts, discretion_items, acceptance_criteria, llm=llm
+    )
+    auto_approved = [item for item in evaluated if item.auto_approved]
+    needs_review = [item for item in evaluated if not item.auto_approved]
+
     # Build the set of valid record IDs the LLM is allowed to cite.
     decision_ids = {d.id for d in review.decisions}
     criterion_ids = {c.id for c in (spec.acceptance if spec else [])}
     valid_ids = decision_ids | criterion_ids
-
     claims = _parse_rationale_claims(raw.get("rationale_claims") or [], valid_ids)
 
     return OutcomeDraft(
         summary=str(raw.get("summary", "")).strip(),
-        learnings=str(raw.get("learnings", "")).strip(),
+        auto_approved_learnings=auto_approved,
+        needs_review_learnings=needs_review,
         rationale_claims=claims,
     )
 
@@ -143,8 +297,10 @@ async def submit_learn(
     initiative_id: str,
     *,
     summary: str,
-    learnings: str | None,
-    outcome: dict | None,
+    auto_approved_learnings: list[str] | None = None,
+    human_approved_learnings: list[str] | None = None,
+    learnings: str | None = None,  # legacy compat
+    outcome: dict | None = None,
     rationale_claims: list[RationaleClaim] | None = None,
 ) -> LearnReview:
     init = await store.get_initiative(initiative_id)
@@ -152,13 +308,36 @@ async def submit_learn(
         raise NotFoundError(f"no initiative {initiative_id}")
     if not summary.strip():
         raise ValidationError("capturing the outcome needs a human-written summary")
-    # BD-13: merge human-confirmed rationale claims into the outcome dict so they are
-    # stored with the memory record and retrievable for future initiatives.
+
+    # BD-25: build structured learning approvals and format bullet-point learnings string.
+    all_approved_texts: list[str] = []
+    learning_approvals: list[dict] = []
+
+    auto_list = auto_approved_learnings or []
+    human_list = human_approved_learnings or []
+
+    for text in auto_list:
+        if text.strip():
+            all_approved_texts.append(f"- {text.strip().lstrip('- ')}")
+            learning_approvals.append({"text": text.strip(), "approved_by": "auto"})
+    for text in human_list:
+        if text.strip():
+            all_approved_texts.append(f"- {text.strip().lstrip('- ')}")
+            learning_approvals.append({"text": text.strip(), "approved_by": "human"})
+
+    # Legacy: if no structured learnings were provided, fall back to the plain string.
+    structured_learnings_str: str | None = "\n".join(all_approved_texts) if all_approved_texts else learnings
+
+    # BD-13: merge human-confirmed rationale claims into the outcome dict.
     if rationale_claims:
         outcome = {**(outcome or {}), "rationale_claims": [c.model_dump() for c in rationale_claims]}
+    # BD-25: store approval metadata in outcome so the UI can render visual distinction.
+    if learning_approvals:
+        outcome = {**(outcome or {}), "learning_approvals": learning_approvals}
+
     # BD-15: carry the initiative type into memory so context hits expose the source type.
     await store.create_memory(
-        initiative_id, summary.strip(), learnings, outcome,
+        initiative_id, summary.strip(), structured_learnings_str, outcome,
         initiative_type=init.initiative_type,
     )
     return await learn_review(store, initiative_id)

@@ -34,6 +34,8 @@ async def submit_learn(initiative_id: str, body: SubmitLearn, store: _Store) -> 
     return await learn_service.submit_learn(
         store, initiative_id,
         summary=body.summary,
+        auto_approved_learnings=body.auto_approved_learnings or None,
+        human_approved_learnings=body.human_approved_learnings or None,
         learnings=body.learnings,
         outcome=body.outcome,
         rationale_claims=body.rationale_claims or None,

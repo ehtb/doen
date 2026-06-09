@@ -225,6 +225,11 @@ class LearnReview(BaseModel):
 
 class SubmitLearn(BaseModel):
     summary: str
+    # BD-25: structured learning items — auto-approved carried from the evaluator,
+    # human-approved confirmed by the human from the needs_review list.
+    auto_approved_learnings: list[str] = []   # texts of evaluator-approved learnings
+    human_approved_learnings: list[str] = []  # texts the human explicitly confirmed
+    # Legacy field kept for backward compat with tests that POST without learnings fields.
     learnings: str | None = None
     outcome: dict | None = None
     rationale_claims: list["RationaleClaim"] = []  # BD-13: human-confirmed cause-effect claims
@@ -240,14 +245,28 @@ class RationaleClaim(BaseModel):
     source_type: Literal["decision", "criterion"]
 
 
+class LearningItem(BaseModel):
+    """BD-25: a single bullet-point learning evaluated by the Advisor.
+    `auto_approved` is True only when the evaluator had high confidence the learning
+    maps to a spec discretion item or criterion — reusing the BD-13 auditor pattern."""
+
+    text: str
+    auto_approved: bool = False
+    confidence: float = 0.0
+    matched_item_id: str | None = None
+    reasoning: str = ""
+
+
 class OutcomeDraft(BaseModel):
-    """BD-13 enriched learn-stage draft (0009 a8). Returned for the human to correct and
-    confirm — submitting via SubmitLearn is what writes to memory. `rationale_claims` carries
-    cause-effect claims each traceable to a specific decision or criterion record; the human
-    must confirm these before they enter long-term memory (constraint item_b3048b678ce4)."""
+    """BD-13 enriched / BD-25 structured learn-stage draft. Returned for the human to
+    review — submitting via SubmitLearn is what writes to memory. `auto_approved_learnings`
+    are high-confidence items the Advisor pre-approved; `needs_review_learnings` are items
+    the human must explicitly confirm before they enter memory. `rationale_claims` carries
+    cause-effect claims each traceable to a specific decision or criterion record."""
 
     summary: str
-    learnings: str
+    auto_approved_learnings: list[LearningItem] = []
+    needs_review_learnings: list[LearningItem] = []
     rationale_claims: list[RationaleClaim] = []
 
 

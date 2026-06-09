@@ -241,6 +241,15 @@ export interface Decision {
   resolved_at?: string | null;
 }
 
+// BD-25: a single evaluated learning item from the Advisor's draft.
+export interface LearningItem {
+  text: string;
+  auto_approved: boolean;
+  confidence: number;
+  matched_item_id?: string | null;
+  reasoning: string;
+}
+
 // BD-13: a cause-effect rationale claim cited to a specific decision or criterion record.
 export interface RationaleClaim {
   claim: string;
@@ -248,9 +257,10 @@ export interface RationaleClaim {
   source_type: "decision" | "criterion";
 }
 
-// BD-13: the Advisor's draft outcome including structured rationale claims.
+// BD-13 enriched / BD-25 structured learn-stage draft.
 export interface OutcomeDraft {
   summary: string;
-  learnings: string;
+  auto_approved_learnings: LearningItem[];
+  needs_review_learnings: LearningItem[];
   rationale_claims: RationaleClaim[];
 }

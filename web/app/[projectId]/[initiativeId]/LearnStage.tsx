@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { BookOpen, Bot, Brain, Check, GitBranch, Loader2, Sparkles, Tag, Trash2, User, X } from "lucide-react";
 
-import type { AcceptanceCriterion, Decision, Heuristic, HeuristicDraftResult, HeuristicProposal, LearnReview, OutcomeDraft, RationaleClaim } from "@/lib/types";
+import type { AcceptanceCriterion, Decision, Heuristic, HeuristicDraftResult, HeuristicProposal, LearnReview, LearningItem, OutcomeDraft, RationaleClaim } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -306,6 +306,84 @@ function HeuristicEntry({ h }: { h: Heuristic }) {
 }
 
 
+// BD-25: auto-approved learnings — passive summary, not a review queue.
+function AutoApprovedLearnings({ items }: { items: LearningItem[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="mt-3 rounded-lg border border-border bg-card/30 p-3.5">
+      <p className="flex items-center gap-1.5 font-mono text-[10px] tracking-widest text-ink-faint uppercase">
+        <Bot className="size-3" /> auto-approved learnings
+        <span className="ml-1.5 normal-case font-normal tracking-normal text-ink-faint">
+          · high-confidence match to spec — writing to memory without review
+        </span>
+      </p>
+      <ul className="mt-2 space-y-1">
+        {items.map((item, i) => (
+          <li key={i} className="flex items-start gap-2 text-[12.5px] text-ink-soft">
+            <span className="mt-0.5 shrink-0 font-mono text-ink-faint">–</span>
+            <span>{item.text}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// BD-25: needs-review learnings — human confirms which ones to write to memory.
+function NeedsReviewLearnings({
+  items,
+  approved,
+  onChange,
+}: {
+  items: LearningItem[];
+  approved: Set<number>;
+  onChange: (approved: Set<number>) => void;
+}) {
+  if (items.length === 0) return null;
+
+  function toggle(i: number) {
+    const next = new Set(approved);
+    if (next.has(i)) next.delete(i);
+    else next.add(i);
+    onChange(next);
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-border bg-card/40 p-3.5">
+      <p className="flex items-center gap-1.5 font-mono text-[10px] tracking-widest text-ink-faint uppercase">
+        <BookOpen className="size-3" /> learnings to review
+        <span className="ml-1.5 normal-case font-normal tracking-normal text-ink-faint">
+          · uncheck any you don&apos;t want written to memory
+        </span>
+      </p>
+      <ul className="mt-2 space-y-1.5">
+        {items.map((item, i) => (
+          <li key={i} className="flex items-start gap-2">
+            <button
+              type="button"
+              onClick={() => toggle(i)}
+              className={`mt-0.5 shrink-0 rounded p-0.5 transition-colors ${
+                approved.has(i)
+                  ? "text-confirmed-foreground hover:text-ink-soft"
+                  : "text-ink-faint hover:text-foreground"
+              }`}
+            >
+              {approved.has(i) ? <Check className="size-3.5" /> : <X className="size-3.5" />}
+            </button>
+            <span className={`text-[12.5px] leading-snug ${approved.has(i) ? "text-foreground" : "text-ink-faint line-through"}`}>
+              {item.text}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 font-mono text-[10px] tracking-wide text-ink-faint">
+        {[...approved].length} of {items.length} selected
+      </p>
+    </div>
+  );
+}
+
+
 export default function LearnStage({
   initiativeId,
   intent,
@@ -321,6 +399,10 @@ export default function LearnStage({
   const [drafting, setDrafting] = useState(false);
   // BD-13: rationale claims from the AI draft — human must confirm/remove before submit.
   const [rationaleClaims, setRationaleClaims] = useState<RationaleClaim[]>([]);
+  // BD-25: structured learnings from the AI draft.
+  const [autoApprovedLearnings, setAutoApprovedLearnings] = useState<LearningItem[]>([]);
+  const [needsReviewLearnings, setNeedsReviewLearnings] = useState<LearningItem[]>([]);
+  const [approvedReviewIndices, setApprovedReviewIndices] = useState<Set<number>>(new Set());
   // BD-17: heuristics written for this session (post-confirm).
   const [sessionHeuristics, setSessionHeuristics] = useState<Heuristic[]>([]);
   const [showHeuristicPanel, setShowHeuristicPanel] = useState(false);
@@ -357,9 +439,13 @@ export default function LearnStage({
       const res = await fetch(`/api/initiatives/${initiativeId}/learn/draft`, { method: "POST" });
       if (!res.ok) throw new Error(`couldn't draft the outcome (${res.status})`);
       const draft: OutcomeDraft = await res.json();
-      // fold any draft "learnings" into the summary so the human corrects one body, not two
-      const tail = draft.learnings ? `\n\nLearnings:\n${draft.learnings}` : "";
-      setSummary((draft.summary ?? "") + tail);
+      setSummary(draft.summary ?? "");
+      // BD-25: populate structured learnings — auto-approved shown passively, needs-review as checklist.
+      setAutoApprovedLearnings(draft.auto_approved_learnings ?? []);
+      const reviewItems = draft.needs_review_learnings ?? [];
+      setNeedsReviewLearnings(reviewItems);
+      // Default: all needs-review items are pre-approved (human unchecks to remove).
+      setApprovedReviewIndices(new Set(reviewItems.map((_, i) => i)));
       // BD-13: populate rationale claims from the draft — human reviews before submit.
       setRationaleClaims(draft.rationale_claims ?? []);
     } catch (e) {
@@ -373,11 +459,19 @@ export default function LearnStage({
     if (busy || !summary.trim()) return;
     setBusy(true);
     try {
+      // BD-25: build human-approved learnings from the checked needs-review items.
+      const humanApproved = needsReviewLearnings
+        .filter((_, i) => approvedReviewIndices.has(i))
+        .map((item) => item.text);
       const res = await fetch(`/api/initiatives/${initiativeId}/learn`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        // BD-13: include human-confirmed rationale claims in the submit body.
-        body: JSON.stringify({ summary, learnings: null, rationale_claims: rationaleClaims }),
+        body: JSON.stringify({
+          summary,
+          auto_approved_learnings: autoApprovedLearnings.map((item) => item.text),
+          human_approved_learnings: humanApproved,
+          rationale_claims: rationaleClaims,
+        }),
       });
       if (!res.ok) throw new Error(`couldn't save the outcome (${res.status})`);
       await refreshReview(await res.json(), { revalidate: false });
@@ -385,6 +479,9 @@ export default function LearnStage({
       // field so a stray re-open isn't pre-populated with the prior reflection.
       setSummary("");
       setRationaleClaims([]);
+      setAutoApprovedLearnings([]);
+      setNeedsReviewLearnings([]);
+      setApprovedReviewIndices(new Set());
       setShowForm(false);
       // BD-17: after the outcome is captured, offer heuristic extraction.
       setShowHeuristicPanel(true);
@@ -463,13 +560,35 @@ export default function LearnStage({
                 <Check className="size-3" /> remembered
               </p>
               <p className="mt-1.5 text-[13px] leading-relaxed whitespace-pre-wrap">{m.summary}</p>
-              {m.learnings && (
+              {m.learnings && !(m.outcome as any)?.learning_approvals && (
                 <p className="mt-2 text-[12.5px] leading-relaxed text-ink-soft">
                   <span className="font-mono text-[10px] tracking-wide text-ink-faint uppercase">
                     learnings ·{" "}
                   </span>
                   {m.learnings}
                 </p>
+              )}
+              {(m.outcome as any)?.learning_approvals && (
+                <div className="mt-2">
+                  <p className="font-mono text-[10px] tracking-wide text-ink-faint uppercase">learnings</p>
+                  <ul className="mt-1 space-y-1">
+                    {((m.outcome as any).learning_approvals as Array<{ text: string; approved_by: string }>).map((la, i) => (
+                      <li key={i} className="flex items-start gap-2 text-[12.5px]">
+                        <span className="mt-0.5 font-mono text-ink-faint shrink-0">–</span>
+                        <span className="flex-1 text-ink-soft">{la.text}</span>
+                        {la.approved_by === "auto" ? (
+                          <span className="shrink-0 inline-flex items-center gap-0.5 rounded bg-card border border-border px-1 py-0.5 font-mono text-[9px] text-ink-faint">
+                            <Bot className="size-2.5" /> auto
+                          </span>
+                        ) : (
+                          <span className="shrink-0 inline-flex items-center gap-0.5 rounded bg-confirmed/10 border border-confirmed/20 px-1 py-0.5 font-mono text-[9px] text-confirmed-foreground">
+                            <User className="size-2.5" /> human
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
             </div>
           ))}
@@ -506,6 +625,15 @@ export default function LearnStage({
             className="mt-2 bg-card text-[13px]"
           />
 
+          {/* BD-25: auto-approved learnings — passive summary */}
+          <AutoApprovedLearnings items={autoApprovedLearnings} />
+          {/* BD-25: needs-review learnings — human checklist */}
+          <NeedsReviewLearnings
+            items={needsReviewLearnings}
+            approved={approvedReviewIndices}
+            onChange={setApprovedReviewIndices}
+          />
+
           {/* BD-13: rationale claims — only shown after AI draft, human must confirm */}
           <RationaleClaims claims={rationaleClaims} onChange={setRationaleClaims} />
 
@@ -524,6 +652,9 @@ export default function LearnStage({
                 onClick={() => {
                   setSummary("");
                   setRationaleClaims([]);
+                  setAutoApprovedLearnings([]);
+                  setNeedsReviewLearnings([]);
+                  setApprovedReviewIndices(new Set());
                   setShowForm(false);
                 }}
               >
@@ -551,6 +682,9 @@ export default function LearnStage({
             onClick={() => {
               setSummary("");
               setRationaleClaims([]);
+              setAutoApprovedLearnings([]);
+              setNeedsReviewLearnings([]);
+              setApprovedReviewIndices(new Set());
               setShowForm(true);
             }}
           >
