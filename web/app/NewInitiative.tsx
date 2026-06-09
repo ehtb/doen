@@ -6,7 +6,11 @@ import { Loader2, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { consumeInitiativeDraft, PREFILL_EVENT, type InitiativeDraft } from "@/lib/initiativeDraft";
+import {
+  consumeInitiativeDraft,
+  PREFILL_EVENT,
+  type InitiativeDraft,
+} from "@/lib/initiativeDraft";
 import type { InitiativeType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { SYNTHESIS_CACHE_PREFIX } from "./[projectId]/ProjectSynthesis";
@@ -16,7 +20,8 @@ import { SYNTHESIS_CACHE_PREFIX } from "./[projectId]/ProjectSynthesis";
 // proposals you confirm item by item. No title-first step, no project picker (the screen fixes it).
 export default function NewInitiative({ projectId }: { projectId: string }) {
   const [description, setDescription] = useState("");
-  const [initiativeType, setInitiativeType] = useState<InitiativeType>("engineering");
+  const [initiativeType, setInitiativeType] =
+    useState<InitiativeType>("engineering");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // BD-22: observation_id stashed alongside the draft — resolve after creation.
@@ -64,7 +69,12 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
     // same-page hand-off: the rail dispatches this when the form is already mounted beside it.
     const onPrefill = (e: Event) => {
       const detail = (
-        e as CustomEvent<{ projectId: string; description?: string; initiative_type?: string; observation_id?: string }>
+        e as CustomEvent<{
+          projectId: string;
+          description?: string;
+          initiative_type?: string;
+          observation_id?: string;
+        }>
       ).detail;
       if (detail?.projectId !== projectId) return;
       // consumeInitiativeDraft first (includes type + observation_id from sessionStorage); fall back to event detail.
@@ -73,7 +83,8 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
         (detail.description
           ? {
               description: detail.description,
-              initiative_type: detail.initiative_type as InitiativeDraft["initiative_type"],
+              initiative_type:
+                detail.initiative_type as InitiativeDraft["initiative_type"],
               observation_id: detail.observation_id,
             }
           : null);
@@ -92,7 +103,10 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
       const res = await fetch(`/api/projects/${projectId}/initiatives/shape`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ description: d, initiative_type: initiativeType }),
+        body: JSON.stringify({
+          description: d,
+          initiative_type: initiativeType,
+        }),
       });
       if (!res.ok) throw new Error(`couldn't shape that (${res.status})`);
       const init = await res.json();
@@ -116,6 +130,7 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
           }
         } catch {}
       }
+      setBusy(false);
       // land in the freshly-shaped spec to review and confirm the proposals
       router.push(`/${projectId}/${init.id}`);
     } catch (e) {
