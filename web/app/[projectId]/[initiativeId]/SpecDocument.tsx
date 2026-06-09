@@ -34,10 +34,9 @@ import { cn } from "@/lib/utils";
 
 type Section = "constraints" | "discretion" | "acceptance";
 
-// 0012 a2: the guided review arc is Intent -> Constraints -> Acceptance criteria (-> Work Units,
-// which render below this component). Intent leads, always open; these two governing sections
-// disclose progressively and auto-advance. Discretion is NOT here — it lives under "Agent
-// latitude" (a3), de-emphasised and outside the auto-expand chain.
+// 0012 a2: the guided review arc is Intent -> Constraints -> Acceptance criteria -> Agent latitude
+// (-> Work Units, which render below this component). Intent leads, always open; these sections
+// disclose progressively and auto-advance.
 const GOVERNING_BASE: {
   key: Section;
   title: string;
@@ -57,6 +56,12 @@ const GOVERNING_BASE: {
     researchTitle: "Success criteria", // BD-15: research initiatives use this label
     note: "how the work gets judged",
     icon: CircleCheck,
+  },
+  {
+    key: "discretion",
+    title: "Agent latitude",
+    note: "discretion — the executor's calls, not yours",
+    icon: Compass,
   },
 ];
 
@@ -193,7 +198,10 @@ export default function SpecDocument() {
   const [batchOfferDismissed, setBatchOfferDismissed] = useState(false);
   const prevShapingStatus = useRef(spec.shaping_status);
   useEffect(() => {
-    if (prevShapingStatus.current === "pending" && spec.shaping_status !== "pending") {
+    if (
+      prevShapingStatus.current === "pending" &&
+      spec.shaping_status !== "pending"
+    ) {
       setBatchOfferDismissed(false);
     }
     prevShapingStatus.current = spec.shaping_status;
@@ -207,8 +215,7 @@ export default function SpecDocument() {
 
   // Progressive disclosure (a1/a2): governing sections collapse by default; the guided flow keeps
   // exactly one open — the first with items still awaiting review — and advances to the next when
-  // that one is cleared. "View all" escapes the flow and opens everything; "Agent latitude" (a3)
-  // is a separate, de-emphasised disclosure outside this chain.
+  // that one is cleared. "View all" escapes the flow and opens everything.
   const pendingIn = (key: Section) =>
     (spec[key] as SpecItem[]).filter((i) => i.status === "proposed").length;
   const guidedActive = GOVERNING.find((s) => pendingIn(s.key) > 0)?.key ?? null;
@@ -240,7 +247,6 @@ export default function SpecDocument() {
   const [openKey, setOpenKey] = useState<Section | null>(
     isShapingPending ? "constraints" : guidedActive,
   );
-  const [latitudeOpen, setLatitudeOpen] = useState(spec.state === "draft");
 
   // When a section is fully reviewed the guided step advances; follow it (a2) without clobbering a
   // manual toggle between advances — we only force-open on the *transition*.
@@ -540,7 +546,8 @@ export default function SpecDocument() {
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-md border border-confirmed/30 bg-confirmed/[0.05] px-4 py-3">
           <p className="font-mono text-[12px] text-foreground">
             {confidentProposed.length}{" "}
-            {confidentProposed.length === 1 ? "item looks" : "items look"} solid — approve as a batch?
+            {confidentProposed.length === 1 ? "item looks" : "items look"} solid
+            — approve as a batch?
           </p>
           <div className="flex shrink-0 items-center gap-2">
             <Button
@@ -576,8 +583,8 @@ export default function SpecDocument() {
             <section className="rounded-xl border border-border/40 bg-muted/30 px-5 py-4">
               <p className="flex items-center gap-2 font-mono text-[11.5px] tracking-wide text-ink-soft">
                 <Loader2 className="size-3.5 animate-spin" />
-                The Advisor is drafting the spec — constraints, acceptance criteria, and agent
-                latitude will appear here shortly.
+                The Advisor is drafting the spec — constraints, acceptance
+                criteria, and agent latitude will appear here shortly.
               </p>
             </section>
           ) : (
@@ -659,6 +666,17 @@ export default function SpecDocument() {
             </button>
             {open && (
               <div className="mt-2">
+                {key === "discretion" && pending > 0 && isDraft && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => confirmSection("discretion")}
+                    className="mb-2.5 h-7 px-2.5 font-mono text-[11px] tracking-wide text-ink-soft"
+                  >
+                    <Check /> Confirm all latitude ({pending})
+                  </Button>
+                )}
                 <ul className="space-y-2">
                   {items.map((it) => renderItem(it, key === "acceptance"))}
                 </ul>
@@ -679,66 +697,6 @@ export default function SpecDocument() {
           </section>
         );
       })}
-
-      {/* a3: discretion is the executor's latitude, not a governing decision — collapsed under
-          "Agent latitude," de-emphasised, and outside the guided auto-expand chain. D2 -> c:
-          bulk "confirm all" is offered here (and only here). */}
-      {(() => {
-        const items = spec.discretion;
-        const pending = pendingIn("discretion");
-        const open = viewAll || latitudeOpen;
-        return (
-          <section className="mt-9 rounded-lg border border-border/60 bg-muted/30 px-3.5 py-2.5">
-            <button
-              type="button"
-              onClick={() => setLatitudeOpen((o) => !o)}
-              className="flex w-full items-center justify-between gap-3 text-left transition-colors hover:text-accent-deep"
-            >
-              <h2 className="flex items-center gap-2 font-mono text-[10.5px] font-medium tracking-[0.13em] text-ink-faint uppercase">
-                {open ? (
-                  <ChevronDown className="size-3.5" />
-                ) : (
-                  <ChevronRight className="size-3.5" />
-                )}
-                <Compass className="size-3.5" /> Agent latitude
-                <span className="font-normal tracking-normal normal-case">
-                  · discretion — the executor's calls, not yours
-                </span>
-              </h2>
-              {pending > 0 && (
-                <span className="rounded-full bg-ink-faint/15 px-2 py-0.5 font-mono text-[10px] font-medium tracking-wide text-ink-faint tabular-nums">
-                  {pending}
-                </span>
-              )}
-            </button>
-            {open && (
-              <div className="mt-3">
-                {pending > 0 && isDraft && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() => confirmSection("discretion")}
-                    className="mb-2.5 h-7 px-2.5 font-mono text-[11px] tracking-wide text-ink-soft"
-                  >
-                    <Check /> Confirm all latitude ({pending})
-                  </Button>
-                )}
-                <ul className="space-y-2">
-                  {items.map((it) => renderItem(it, false))}
-                </ul>
-                {isShapingPending && (
-                  <div className="mt-3 flex items-center gap-2 font-mono text-[11px] text-ink-faint">
-                    <Loader2 className="size-3.5 animate-spin" />
-                    Advisor is drafting…
-                  </div>
-                )}
-                {renderAdd("discretion")}
-              </div>
-            )}
-          </section>
-        );
-      })()}
     </div>
   );
 }
