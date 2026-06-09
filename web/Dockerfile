@@ -2,10 +2,10 @@
 # No devDependencies survive into the runtime layer.
 FROM node:22-alpine AS build
 WORKDIR /app
-COPY web/package.json web/package-lock.json ./
-RUN npm ci
+COPY web/package.json web/yarn.lock ./
+RUN yarn install --frozen-lockfile
 COPY web/ ./
-RUN npm run build
+RUN yarn build
 
 # Runtime stage — standalone Next.js output only.
 # Contains only the minimal node_modules required at runtime (no devDependencies).
