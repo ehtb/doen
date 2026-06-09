@@ -153,6 +153,23 @@ criteria differently for each. The type is first-class, not a tag, because the v
 model differs: engineering criteria have clear pass/fail signals; research criteria typically
 require `human_judgment`.
 
+## Heuristic memory and the Compound Knowledge Flywheel (BD-17)
+
+Alongside narrative memory summaries, Doen extracts **heuristics** from completed initiatives:
+append-only actionable rules ("never do X when Y") that survive across initiatives as
+first-class retrievable facts. They are a distinct row type — never folded into `memory`
+records — so they can be cited precisely and superseded cleanly.
+
+Supersession is how heuristics evolve: a new initiative can declare a heuristic obsolete by
+setting `superseded_by`. The old row stays readable (history is preserved); a non-null
+`superseded_by` disqualifies that heuristic from `confident` classification in shaping review.
+The bi-directional chain (`replaces` ↔ `superseded_by`) lets the flywheel reason about what
+was believed and what replaced it.
+
+In `get_context`, heuristic hits carry `heuristic_id` — the stable ID to cite in a confident
+classification reason. Confident classification without a citation is not permitted when an
+applicable heuristic is available; the citation is what makes the confidence auditable.
+
 ## Prompt quality and evaluation
 
 A promptfoo harness (BD-16) covers the prompts that govern agentic and verification decisions

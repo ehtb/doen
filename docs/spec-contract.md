@@ -77,6 +77,8 @@ interface Spec {
   initiative_type: "engineering" | "research";  // BD-15: set at creation, mirrored from initiative
   shaping_review_synthesis?: string;            // BD-14: Advisor self-review output after shaping
   verification_synthesis?: string;              // BD-14: Advisor synthesis after evidence submission
+  shaping_status: "pending" | "complete" | "error";  // "pending" while background shaping runs; don't act until "complete"
+  original_description?: string | null;         // the human's creation description — retained for retry-shaping
 }
 ```
 
@@ -210,6 +212,7 @@ get_criteria_status(initiative_id): {
 }
 // Current verification state for all acceptance criteria. Use after submit_evidence to see
 // the human's verdict, or to ground yourself before building.
+```
 
 ### Setup & Verification (BD-9, BD-12)
 
@@ -231,12 +234,14 @@ list_memory_for_audit(project_id, staleness_window_days?): {
 
 interface ContextHit {
   initiative_id: string;
-  type: "decision" | "memory";
+  type: "decision" | "memory" | "heuristic";  // BD-17: heuristic hits added
   text: string;
   score: number;
   scope: "project" | "global" | null;
   has_pending_drift: boolean; // BD-12: Warns if the memory is already being audited
   initiative_type?: string;   // BD-15: "engineering" | "research" for memory hits; null for decision hits
+  heuristic_id?: string | null;  // BD-17: stable ID to cite in confident classification; only on heuristic hits
+  superseded_by?: string | null; // BD-17: non-null means this heuristic is obsolete — disqualifies "confident"
 }
 ```
 
@@ -265,6 +270,8 @@ On `complete` (every criterion verified + learn record written), Doen embeds the
 | _(conversation history)_ | NOT a Postgres table — browser-local in IndexedDB since spec uvama; the backend is stateless about messages | — |
 | `projects` | id, name, prefix, intent | — |
 | `memory` | completed-initiative summaries + outcomes; `initiative_type` column (BD-15) tracks source initiative type | embedding for cross-initiative retrieval |
+| `heuristics` | append-only actionable rules extracted from completed initiatives (BD-17); `superseded_by` records evolution chain without deletion | embedding for cross-initiative retrieval |
+| `observations` | advisor-generated observations per project (BD-22); `resolved_initiative_id` set when resolved into an initiative | — |
 
 Spec items (constraints, discretion, acceptance) live inside the `specs` JSONB document — they are *not* a separate table. The spec is read whole. Drift detection runs by embedding confirmed constraints and scoring new scope against them; the same mechanism is reused for the Advisor's contextual briefings.
 

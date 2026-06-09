@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-06-04 sync-docs audit -->
+<!-- last-reviewed: 2026-06-09 sync-docs audit -->
 # Doen — Project Context for Claude Code
 
 > Read this first, every session. It is the constitution. A spec governs the work;
@@ -101,6 +101,7 @@ or the learn record change. Two human-facing escape hatches exist (`start-buildi
 
 ### MCP tool surface (11 tools in `backend/app/mcp_server.py`)
 - **Ground yourself:** `get_spec`, `get_conversation_summary`, `get_context`
+  - `get_context` hits include `type: "heuristic"` (BD-17) in addition to `"decision"` and `"memory"`. Heuristic hits carry `heuristic_id` (cite when classifying `confident`) and `superseded_by` (non-null means this rule is obsolete — do not use for `confident` classification).
 - **Track criteria:** `submit_evidence`, `get_criteria_status`
 - **Escalate:** `raise_decision`, `resolve_decision`, `wait_for_decision`
 - **Project setup:** `setup_project`
@@ -152,6 +153,8 @@ doen/
   discards.
 - `projects` — one row per project (id, name, prefix, intent).
 - `memory` — embedded snippets the Advisor surfaces across initiatives.
+- `heuristics` — append-only actionable rules extracted from completed initiatives (BD-17). Distinct from memory summaries; supersession records an evolution chain without erasure.
+- `observations` — advisor-generated observations for a project (BD-22). Each can be resolved into an initiative; `resolved_initiative_id` is set on resolution.
 
 ### Active conventions
 - **Layered backend.** Request flow: router → service → repository. Routers are thin (no
