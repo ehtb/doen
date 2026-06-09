@@ -4,9 +4,19 @@ This document tracks the strategic intent and research foundations behind the ar
 
 ---
 
-## [Current Phase] Shifting to Oversight (BD-12 to BD-20)
+## [Current Phase] Shifting to Oversight (BD-12 to BD-25)
 
 **Focus:** Minimizing the "Operator" tax and scaling human judgment.
+
+### BD-25: Auto-Approve Learnings & Structured Review
+
+- **Intent:** Minimizing review friction for routine project knowledge.
+- **Research Thinking:** The Learning stage is often the highest friction point in the oversight loop. Many learnings are straightforward restatements of work done within granted discretion. BD-25 applies the **Auditor Pattern** to the learning draft: it evaluates proposed learning bullets against the initiative's discretion items and criteria. Items that clearly align with established boundaries are marked `auto_approved` and presented passively, while novel or high-entropy insights are flagged for human review. This ensures human attention is reserved for knowledge that actually expands the project's strategic horizons.
+
+### BD-22: Persisted Advisor Observations
+
+- **Intent:** Closing the loop between synthesis and action.
+- **Research Thinking:** While BD-20 introduced proactive synthesis, the resulting "observations" were transient UI elements. BD-22 formalizes these as **Persistent Observations**—first-class database entities that survive session reloads. It introduces a "Resolve to Initiative" flow, allowing humans to promote a specific advisor-generated insight directly into a shaped initiative. This transforms the synthesis engine from a "reporting" tool into a "generative" one, proactively populating the project backlog with data-driven suggestions.
 
 ### BD-20: Guided Discovery & Proactive Synthesis
 
@@ -14,7 +24,7 @@ This document tracks the strategic intent and research foundations behind the ar
 - **Research Thinking:** Most product work starts not with a clear intent, but with a signal—a bug report, a user complaint, or a hunch. Standard AI assistants often rush to "solutionizing" (jumping to code) or remain too passive. BD-20 implements two research-backed shifts:
 
   1.  **Iterative Discovery Scaffolding (ArXiv:2512.09142):** Instead of a generic chat, the discovery rail uses a **Question Sequence** protocol. It forces the Advisor to extract five specific dimensions (Problem, People, Workarounds, Outcome, Smallest Learning) *before* proposing an initiative. This prevents "Vague Spec Syndrome" where agents are given under-specified goals. The Advisor also distinguishes between **Engineering** (build a thing) and **Research** (learn a thing) framings, pre-selecting the initiative type to align the verification loop from the start.
-  2.  **Proactive Cross-Initiative Synthesis:** As project memory grows, humans suffer from **Synthesis Fatigue**. BD-20 introduces a client-side "Advisor Observations" panel that performs proactive synthesis on project load. When $\ge 5$ initiatives are completed, it triggers a "What We Know" analysis using the **Pattern-Assumption-Intent (PAI) Framework**. This ensures that lessons learned in `BD-4` are proactively surfaced when thinking about `BD-21`, turning the project page from a list of tasks into a strategic dashboard.
+  2.  **Proactive Cross-Initiative Synthesis Engine:** As project memory grows, humans suffer from **Synthesis Fatigue**. BD-20 introduces the synthesis engine that performs proactive analysis on project load. When $\ge 5$ initiatives are completed, it triggers a "What We Know" analysis using the **Pattern-Assumption-Intent (PAI) Framework**. This ensures that lessons learned in `BD-4` are proactively surfaced when thinking about new work, turning the project page from a list of tasks into a strategic dashboard.
 
 **Key References:**
 - **Iterative Discovery Scaffolding (ArXiv:2512.09142)** — structured extraction of intent from ambiguous signals.
