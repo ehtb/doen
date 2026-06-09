@@ -154,9 +154,9 @@ SYNTHESIS_SCHEMA: dict[str, Any] = {
     "properties": {
         "advisor_observations": {
             "type": ["array", "null"],
-            "description": "1–3 observations. Each: one sentence naming the issue + one sentence on why it matters. Cite IDs. Null if memory is too thin.",
+            "description": "Exactly 1 observation: one sentence naming the issue + one sentence on why it matters. Cite IDs. Null if memory is too thin.",
             "items": {"type": "string"},
-            "maxItems": 3,
+            "maxItems": 1,
         },
         "what_we_know": {
             "type": ["object", "null"],
