@@ -647,6 +647,13 @@ async def synthesize_project(
             completed_count=0,
         )
 
+    # BD-24: only the most recently completed initiative (highest seq) may receive a new
+    # observation. If it already has one (any status), skip generation to honour the
+    # one-per-initiative lifetime cap.
+    completed = [i for i in all_initiatives if i.state == "complete"]
+    source_initiative = max(completed, key=lambda i: i.seq)
+    existing = await store.get_observation_for_initiative(source_initiative.id)
+
     project = await store.get_project_context(project_id, sibling_limit=50)
     if project is None:
         raise NotFoundError(f"no project {project_id}")
@@ -662,14 +669,15 @@ async def synthesize_project(
         schema_name="project_synthesis",
     )
 
-    obs_raw = raw.get("advisor_observations")
-    obs_contents: list[str] = []
-    if isinstance(obs_raw, list):
-        obs_contents = [s.strip() for s in obs_raw if isinstance(s, str) and s.strip()]
+    if existing is None:
+        obs_raw = raw.get("advisor_observations")
+        obs_contents: list[str] = []
+        if isinstance(obs_raw, list):
+            obs_contents = [s.strip() for s in obs_raw if isinstance(s, str) and s.strip()]
+        if obs_contents:
+            await store.create_scoped_observation(project_id, source_initiative.id, obs_contents[0])
 
-    if obs_contents:
-        await store.replace_open_observations(project_id, obs_contents)
-    # return ALL observations (open + resolved) so the UI shows the full picture
+    # return ALL observations (open + resolved + rejected) so the UI shows the full picture
     observations = await store.list_observations(project_id)
 
     what_we_know = None

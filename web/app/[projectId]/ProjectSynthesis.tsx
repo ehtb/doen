@@ -5,7 +5,7 @@
 // observations blob with individually-actionable, persisted records.
 
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, ChevronDown, ChevronUp, GitBranch, Sparkles } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronUp, GitBranch, Sparkles, X } from "lucide-react";
 import type { Observation, ProjectSynthesisResponse, WhatWeKnow } from "@/lib/types";
 import { stashInitiativeDraft } from "@/lib/initiativeDraft";
 import { cn } from "@/lib/utils";
@@ -73,7 +73,7 @@ export default function ProjectSynthesis({
   }
 
   const open = observations.filter((o) => o.status === "open");
-  const resolved = observations.filter((o) => o.status === "resolved");
+  const resolved = observations.filter((o) => o.status === "resolved" || o.status === "rejected");
 
   if (open.length === 0 && resolved.length === 0 && !whatWeKnow) return null;
 
@@ -89,6 +89,11 @@ export default function ProjectSynthesis({
               prev.map((o) => (o.id === id ? { ...o, status: "resolved" } : o)),
             )
           }
+          onOptimisticReject={(id) =>
+            setObservations((prev) =>
+              prev.map((o) => (o.id === id ? { ...o, status: "rejected" } : o)),
+            )
+          }
         />
       ))}
 
@@ -101,7 +106,7 @@ export default function ProjectSynthesis({
           >
             <span className="flex items-center gap-1.5">
               <CheckCircle2 className="size-3" />
-              {resolved.length} resolved observation{resolved.length === 1 ? "" : "s"}
+              {resolved.length} past observation{resolved.length === 1 ? "" : "s"}
             </span>
             {resolvedOpen ? (
               <ChevronUp className="size-3" />
@@ -153,23 +158,31 @@ function ObservationCard({
   observation,
   projectId,
   onOptimisticResolve,
+  onOptimisticReject,
 }: {
   observation: Observation;
   projectId: string;
   onOptimisticResolve: (id: string) => void;
+  onOptimisticReject: (id: string) => void;
 }) {
+  const [confirmingReject, setConfirmingReject] = useState(false);
+
   const handleResolve = useCallback(() => {
-    // Optimistically show as resolved in the UI immediately.
     onOptimisticResolve(observation.id);
-    // Stash description + observation_id so NewInitiative can resolve the link after creation.
     stashInitiativeDraft(projectId, observation.content, undefined, observation.id);
-    // Scroll to the creation form.
     const formEl = document.getElementById(`new-initiative-${projectId}`);
     if (formEl) {
       formEl.scrollIntoView({ behavior: "smooth", block: "center" });
       formEl.focus();
     }
   }, [observation, projectId, onOptimisticResolve]);
+
+  const handleRejectConfirm = useCallback(async () => {
+    onOptimisticReject(observation.id);
+    try {
+      await fetch(`/api/observations/${observation.id}/reject`, { method: "POST", cache: "no-store" });
+    } catch {}
+  }, [observation.id, onOptimisticReject]);
 
   return (
     <div className="rounded-lg border border-border bg-card/40 px-4 py-3.5">
@@ -178,7 +191,7 @@ function ObservationCard({
         Advisor observation
       </div>
       <p className="text-sm leading-relaxed text-foreground/80">{observation.content}</p>
-      <div className="mt-3">
+      <div className="mt-3 flex items-center gap-2">
         <button
           type="button"
           onClick={handleResolve}
@@ -191,22 +204,62 @@ function ObservationCard({
           <GitBranch className="size-3" />
           Resolve into an initiative
         </button>
+        {confirmingReject ? (
+          <span className="inline-flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleRejectConfirm}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-md border border-destructive/40 bg-destructive/8",
+                "px-2.5 py-1 font-mono text-[10.5px] text-destructive/80 tracking-wide",
+                "transition-colors hover:bg-destructive/15",
+              )}
+            >
+              Confirm dismiss
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmingReject(false)}
+              className="font-mono text-[10px] text-ink-faint hover:text-ink-soft"
+            >
+              Cancel
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirmingReject(true)}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md border border-border",
+              "px-2.5 py-1 font-mono text-[10.5px] text-ink-faint tracking-wide",
+              "transition-colors hover:text-ink-soft hover:border-border/80",
+            )}
+          >
+            <X className="size-3" />
+            Dismiss
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
 function ResolvedObservation({ observation }: { observation: Observation }) {
+  const isRejected = observation.status === "rejected";
   return (
     <div className="space-y-0.5">
-      <p className="text-[12.5px] leading-relaxed text-foreground/50 line-through decoration-foreground/20">
+      <p className="text-[12.5px] leading-relaxed text-foreground/40 line-through decoration-foreground/20">
         {observation.content}
       </p>
-      {observation.resolved_initiative_id && (
-        <p className="font-mono text-[10px] text-ink-faint">
-          → resolved as{" "}
-          <span className="text-ink-soft">{observation.resolved_initiative_id}</span>
-        </p>
+      {isRejected ? (
+        <p className="font-mono text-[10px] text-ink-faint">dismissed</p>
+      ) : (
+        observation.resolved_initiative_id && (
+          <p className="font-mono text-[10px] text-ink-faint">
+            → resolved as{" "}
+            <span className="text-ink-soft">{observation.resolved_initiative_id}</span>
+          </p>
+        )
       )}
     </div>
   );

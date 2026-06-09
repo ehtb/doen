@@ -13,6 +13,11 @@ This document tracks the strategic intent and research foundations behind the ar
 - **Intent:** Minimizing review friction for routine project knowledge.
 - **Research Thinking:** The Learning stage is often the highest friction point in the oversight loop. Many learnings are straightforward restatements of work done within granted discretion. BD-25 applies the **Auditor Pattern** to the learning draft: it evaluates proposed learning bullets against the initiative's discretion items and criteria. Items that clearly align with established boundaries are marked `auto_approved` and presented passively, while novel or high-entropy insights are flagged for human review. This ensures human attention is reserved for knowledge that actually expands the project's strategic horizons.
 
+### BD-24: Scoped Observations & The "Reject" Signal
+
+- **Intent:** Increasing observation precision and managing synthesis noise.
+- **Research Thinking:** As a project's history deepens, advisor observations can become repetitive or irrelevant if not strictly bounded. BD-24 introduces **Temporal Scoping** for synthesis: observations are now explicitly linked to the specific initiative that triggered the discovery. This implements a "one-observation-per-initiative" lifecycle cap, preventing the advisor from re-surfacing the same insight across multiple synthesis cycles. Crucially, it also introduces the **Negative Signal (Reject)** flow. By allowing humans to dismiss an observation without acting, we capture an explicit signal of "not relevant" or "already known but unaddressed." This negative signal is as important as the positive "Resolve" signal for refining the advisor's future synthesis heuristics, ensuring that the discovery rail remains high-signal as the project scales.
+
 ### BD-22: Persisted Advisor Observations
 
 - **Intent:** Closing the loop between synthesis and action.

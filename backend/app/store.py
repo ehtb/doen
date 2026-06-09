@@ -168,6 +168,7 @@ def _observation_from_row(row: asyncpg.Record) -> Observation:
         project_id=row["project_id"],
         content=row["content"],
         status=row["status"],
+        source_initiative_id=row["source_initiative_id"],
         resolved_initiative_id=row["resolved_initiative_id"],
         created_at=row["created_at"].isoformat(),
     )
@@ -1444,7 +1445,7 @@ class SpecStore:
         await self._recompute_state(initiative_id)  # building → learning when all verified
         return await self.get_spec(initiative_id) or spec
 
-    # --- observations (BD-22) ------------------------------------------------
+    # --- observations (BD-22, BD-24) ------------------------------------------------
     async def replace_open_observations(
         self, project_id: str, contents: list[str]
     ) -> None:
@@ -1459,17 +1460,55 @@ class SpecStore:
                 for c in contents:
                     obs = Observation(project_id=project_id, content=c)
                     await conn.execute(
-                        """INSERT INTO observations (id, project_id, content, status, created_at)
+                        """INSERT INTO observations
+                               (id, project_id, content, status, created_at)
                            VALUES ($1, $2, $3, 'open', now())""",
                         obs.id,
                         project_id,
                         obs.content,
                     )
 
+    async def get_observation_for_initiative(
+        self, initiative_id: str
+    ) -> Observation | None:
+        """Return the observation linked to a specific initiative, or None (BD-24)."""
+        row = await self.pg.fetchrow(
+            """SELECT id, project_id, content, status, source_initiative_id,
+                      resolved_initiative_id, created_at
+               FROM observations
+               WHERE source_initiative_id = $1
+               LIMIT 1""",
+            initiative_id,
+        )
+        return _observation_from_row(row) if row else None
+
+    async def create_scoped_observation(
+        self, project_id: str, source_initiative_id: str, content: str
+    ) -> None:
+        """Insert one observation scoped to a specific initiative (BD-24). No-op if an
+        observation already exists for that initiative (the unique index enforces this)."""
+        obs = Observation(
+            project_id=project_id,
+            content=content,
+            source_initiative_id=source_initiative_id,
+        )
+        await self.pg.execute(
+            """INSERT INTO observations
+                   (id, project_id, content, status, source_initiative_id, created_at)
+               VALUES ($1, $2, $3, 'open', $4, now())
+               ON CONFLICT (source_initiative_id) WHERE source_initiative_id IS NOT NULL
+               DO NOTHING""",
+            obs.id,
+            project_id,
+            obs.content,
+            source_initiative_id,
+        )
+
     async def list_observations(self, project_id: str) -> list[Observation]:
-        """All observations for a project, open first then resolved, newest first within each group."""
+        """All observations for a project, open first then resolved/rejected, newest first within each group."""
         rows = await self.pg.fetch(
-            """SELECT id, project_id, content, status, resolved_initiative_id, created_at
+            """SELECT id, project_id, content, status, source_initiative_id,
+                      resolved_initiative_id, created_at
                FROM observations
                WHERE project_id = $1
                ORDER BY (status = 'open') DESC, created_at DESC""",
@@ -1486,10 +1525,26 @@ class SpecStore:
             """UPDATE observations
                SET status = 'resolved', resolved_initiative_id = $2
                WHERE id = $1
-               RETURNING id, project_id, content, status, resolved_initiative_id, created_at""",
+               RETURNING id, project_id, content, status, source_initiative_id,
+                         resolved_initiative_id, created_at""",
             observation_id, initiative_id,
         )
         if row is None:
             raise NotFoundError(f"no observation {observation_id}")
+        return _observation_from_row(row)
+
+    async def reject_observation(self, observation_id: str) -> Observation:
+        """Dismiss an observation without creating an initiative (BD-24). Sets status to
+        'rejected'; no navigation, no spec change, no initiative created."""
+        row = await self.pg.fetchrow(
+            """UPDATE observations
+               SET status = 'rejected'
+               WHERE id = $1 AND status = 'open'
+               RETURNING id, project_id, content, status, source_initiative_id,
+                         resolved_initiative_id, created_at""",
+            observation_id,
+        )
+        if row is None:
+            raise NotFoundError(f"no open observation {observation_id}")
         return _observation_from_row(row)
 

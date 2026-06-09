@@ -207,11 +207,14 @@ export interface WhatWeKnow {
 }
 
 // BD-22: a persisted advisor observation for a project.
+// BD-24: source_initiative_id scopes the observation to the initiative it was generated for;
+// "rejected" status lets a human dismiss without acting.
 export interface Observation {
   id: string;
   project_id: string;
   content: string;
-  status: "open" | "resolved";
+  status: "open" | "resolved" | "rejected";
+  source_initiative_id: string | null;
   resolved_initiative_id: string | null;
   created_at: string;
 }

@@ -253,3 +253,11 @@ async def resolve_observation(
     Called by the frontend after the 'Resolve into an initiative' flow completes.
     A missing observation -> 404."""
     return await store.resolve_observation(observation_id, body.initiative_id)
+
+
+@router.post("/observations/{observation_id}/reject", status_code=200)
+async def reject_observation(observation_id: str, store: _Store) -> Observation:
+    """Dismiss an advisor observation without creating an initiative (BD-24).
+    Sets status to rejected; no navigation, no spec change, no initiative created.
+    Only open observations may be rejected — a missing or non-open observation -> 404."""
+    return await store.reject_observation(observation_id)
