@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowDown, Check, Copy, Hammer } from "lucide-react";
+import { ArrowDown, Check, ClipboardCheck, Copy, Hammer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSpec } from "./spec-context";
 
@@ -85,6 +85,38 @@ export default function NextStepHint() {
   const isResearch = spec.initiative_type === "research";
 
   if (spec.state === "building") {
+    // BD-23: evidence submitted — the human's next step is review, not sending more prompts.
+    const hasEvidenceSubmitted = spec.acceptance.some(
+      (c) => c.verification_status === "evidence_submitted",
+    );
+    if (hasEvidenceSubmitted) {
+      return (
+        <div className="animate-rise mt-5 flex flex-wrap items-center gap-4 rounded-xl border border-primary/30 bg-primary/4 px-4 py-3.5">
+          <div className="min-w-0 flex-1">
+            <p className="font-mono text-[10.5px] font-semibold tracking-widest text-accent-deep uppercase">
+              Evidence awaiting review
+            </p>
+            <p className="text-[13.5px] leading-relaxed text-foreground">
+              The executor submitted evidence against a criterion. Review it
+              below and approve or request changes before the next build step.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="shadow-sm"
+            onClick={() =>
+              document
+                .getElementById("criteria-verification")
+                ?.scrollIntoView({ behavior: "smooth" })
+            }
+          >
+            <ClipboardCheck className="size-3.5" /> Review evidence
+          </Button>
+        </div>
+      );
+    }
+
     // BD-15: research initiatives don't need an MCP agent — hide the prompt section,
     // show a rail-focused hint instead.
     if (isResearch) {
