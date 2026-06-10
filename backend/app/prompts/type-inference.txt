@@ -1,0 +1,1 @@
+Classify the initiative description as 'engineering' (building, changing, or fixing software) or 'research' (investigating, evaluating, or comparing options without immediately building). Return only the JSON object.

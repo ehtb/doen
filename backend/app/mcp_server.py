@@ -28,12 +28,14 @@ from redis import asyncio as aioredis
 
 from app.config import DATABASE_URL, MCP_ALLOWED_HOSTS, MCP_TRANSPORT, REDIS_URL
 from app.exceptions import DecisionTimeout, NotFoundError, ValidationError
-from app.models import Decision
+from app.models import Decision, InitiativeType
 from app.onboarding_config import DOCUMENTS
+from app.providers.llm import LLMError
 from app.services.conversation import spec_enrichment, summarize_conversation
 from app.services.discretion_auditor import audit_decision
 from app.services.evaluation import DRIFT_EVIDENCE_RUBRIC, evaluate
 from app.services.review import generate_verification_synthesis
+from app.services.shaping import create_from_description, infer_initiative_type
 from app.store import SpecStore
 
 
@@ -418,6 +420,57 @@ async def list_memory_for_audit(
             }
             for m in entries
         ],
+    }
+
+
+# --- BD-28: create a new initiative + spec from a plain-language description ----------
+@mcp.tool()
+async def create_spec(
+    project_id: str,
+    prompt: str,
+    ctx: Context,
+    initiative_type: str | None = None,
+) -> dict:
+    """Create a new initiative and draft its spec from a plain-language description (BD-28).
+
+    Runs the same spec-drafting pipeline as the web UI: infers initiative type (engineering
+    or research), then drafts intent, constraints, discretion, and acceptance criteria from
+    the prompt using the Advisor. The initiative is persisted immediately and is retrievable
+    via get_spec using the returned `initiative_id`.
+
+    `project_id`: the project this initiative belongs to — must be an existing project id.
+    `prompt`: plain-language description of the initiative; must not be empty.
+    `initiative_type`: 'engineering' (building/changing software) or 'research'
+      (investigating/evaluating options). Inferred from the prompt automatically if omitted.
+
+    Returns a descriptive error and writes no data if the prompt is empty or the project
+    does not exist."""
+    try:
+        inferred_type: InitiativeType = (
+            initiative_type  # type: ignore[assignment]
+            if initiative_type in ("engineering", "research")
+            else await infer_initiative_type(prompt)
+        )
+        init = await create_from_description(
+            _store(ctx), project_id, prompt, initiative_type=inferred_type
+        )
+    except (NotFoundError, ValidationError, LLMError) as e:
+        raise ValueError(str(e))
+
+    store = _store(ctx)
+    spec = await store.get_spec(init.id)
+    assert spec is not None
+
+    return {
+        "initiative_id": init.id,
+        "initiative_type": init.initiative_type,
+        "title": init.title,
+        "spec": {
+            "intent": spec.intent,
+            "constraints": [item.model_dump() for item in spec.constraints],
+            "discretion": [item.model_dump() for item in spec.discretion],
+            "acceptance": [item.model_dump() for item in spec.acceptance],
+        },
     }
 
 

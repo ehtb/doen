@@ -35,6 +35,7 @@ from pathlib import Path
 _PROMPTS = Path(__file__).resolve().parent.parent / "prompts"
 SHAPING_SYSTEM_PROMPT = (_PROMPTS / "shaping.txt").read_text().strip()
 SHAPING_SYSTEM_PROMPT_RESEARCH = (_PROMPTS / "shaping-research.txt").read_text().strip()
+TYPE_INFERENCE_SYSTEM_PROMPT = (_PROMPTS / "type-inference.txt").read_text().strip()
 
 SPEC_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -590,3 +591,37 @@ async def create_from_description(
     )
     await store.save_spec(spec)
     return init
+
+
+# --- BD-28: initiative type inference for create_spec MCP tool -----------------------
+
+_TYPE_INFERENCE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "initiative_type": {
+            "type": "string",
+            "enum": ["engineering", "research"],
+        }
+    },
+    "required": ["initiative_type"],
+}
+
+
+async def infer_initiative_type(
+    description: str,
+    llm: StructuredLLM | None = None,
+) -> InitiativeType:
+    """Classify a description as 'engineering' (building/changing software) or 'research'
+    (investigating/evaluating options). Falls back to 'engineering' on any LLM failure."""
+    llm = llm or get_shaping_llm()
+    try:
+        result = await llm.complete_structured(
+            system=TYPE_INFERENCE_SYSTEM_PROMPT,
+            user=description,
+            schema=_TYPE_INFERENCE_SCHEMA,
+            schema_name="initiative_type_classification",
+        )
+        t = result.get("initiative_type", "engineering")
+        return "research" if t == "research" else "engineering"
+    except LLMError:
+        return "engineering"
