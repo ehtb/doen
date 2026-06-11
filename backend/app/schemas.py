@@ -134,8 +134,8 @@ class SubmitCriterionEvidence(BaseModel):
 # --- AI-assisted shaping -------------------------------------------------------------
 class ShapeWithAI(BaseModel):
     description: str
-    # BD-15: user-selected type sent with the creation request.
-    initiative_type: Literal["engineering", "research"] = "engineering"
+    # BD-15: type is inferred server-side when omitted.
+    initiative_type: Literal["engineering", "research"] | None = None
 
 
 # --- conversation rail ---------------------------------------------------------------

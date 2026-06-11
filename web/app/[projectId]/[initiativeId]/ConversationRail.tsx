@@ -160,6 +160,25 @@ export default function ConversationRail({
     load();
   }, [load]);
 
+  // Listen for external reset events (from ResetConversationLink).
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<ConversationScope>).detail;
+      const matches =
+        ("initiativeId" in detail && "initiativeId" in convo && detail.initiativeId === convo.initiativeId) ||
+        ("projectId" in detail && "projectId" in convo && detail.projectId === convo.projectId);
+      if (matches) {
+        setMessages([]);
+        setCards({});
+        setSynthesis({});
+        setSynthesisTypes({});
+        setConfirmingReset(false);
+      }
+    };
+    window.addEventListener("doen:conversation-reset", handler);
+    return () => window.removeEventListener("doen:conversation-reset", handler);
+  }, [convo]);
+
   useEffect(() => {
     threadEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, sending]);
@@ -365,8 +384,8 @@ export default function ConversationRail({
       : intro;
 
   return (
-    <aside className="animate-rise flex flex-col overflow-hidden rounded-2xl border border-rail-border bg-rail text-rail-foreground shadow-sm">
-      <div className="border-b border-rail-border px-5 py-4">
+    <aside className="animate-rise flex flex-col overflow-hidden rounded-xl border border-border bg-card text-rail-foreground">
+      <div className="border-b border-border px-5 py-4">
         <div className="flex items-baseline justify-between">
           <span className="font-serif text-[15px] font-semibold">
             Conversation
@@ -511,7 +530,7 @@ export default function ConversationRail({
         <div ref={threadEnd} />
       </div>
 
-      <div className="border-t border-rail-border p-3">
+      <div className="border-t border-border p-3">
         <Textarea
           rows={2}
           value={input}
@@ -524,7 +543,7 @@ export default function ConversationRail({
               send();
             }
           }}
-          className="resize-none border-rail-border bg-rail-card text-rail-foreground placeholder:text-rail-muted"
+          className="resize-none border-border bg-rail-card text-rail-foreground placeholder:text-rail-muted"
         />
         <div className="mt-2 flex items-center justify-between">
           <span className="font-mono text-[10px] tracking-wide text-rail-muted">

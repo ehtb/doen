@@ -7,8 +7,8 @@ import NewInitiative from "../NewInitiative";
 import CopySyncDocsPrompt from "./CopySyncDocsPrompt";
 import OnboardingHint from "./OnboardingHint";
 import ProjectIntent from "./ProjectIntent";
-import ProjectSynthesis from "./ProjectSynthesis";
-import ConversationRail from "@/app/[projectId]/[initiativeId]/ConversationRail";
+import ObservationsModal from "./ObservationsModal";
+import WhatWeKnowModal from "./WhatWeKnowModal";
 import { DashboardContent } from "./DashboardContent";
 import ProjectActions from "./ProjectActions";
 
@@ -90,14 +90,16 @@ export default async function ProjectDashboardPage({
             </span>
           )}
           {/* BD-14 u4: trigger a drift audit of core documentation from any project. */}
-          <span className="ml-auto">
+          <span className="ml-auto flex items-center gap-4">
+            <ObservationsModal projectId={project.id} completedCount={completedCount} />
+            <WhatWeKnowModal projectId={project.id} completedCount={completedCount} />
             <CopySyncDocsPrompt />
           </span>
         </div>
       </header>
 
-      <div className="mt-9 flex flex-wrap items-start gap-7">
-        <section className="min-w-80 flex-[1_1_520px]">
+      <div className="mt-9 grid grid-cols-1 gap-7 items-start md:grid-cols-[1fr_380px]">
+        <section>
           {/* BD-9: onboarding hint — shown until dismissed, renders above initiatives so it
               does not affect the attention-priority sort order (constraint item_4c53a4c83230) */}
           <OnboardingHint
@@ -105,20 +107,6 @@ export default async function ProjectDashboardPage({
             prompt={onboarding_prompt}
             initialDismissed={project.onboarding_dismissed}
           />
-
-          {/* BD-20: proactive advisor observations + 'what we know' synthesis. Non-intrusive
-              and dismissible; loaded client-side so the page renders without waiting on the LLM. */}
-          <ProjectSynthesis
-            projectId={project.id}
-            completedCount={completedCount}
-          />
-
-          <h2 className="flex items-center gap-2 font-mono text-[11.5px] font-semibold tracking-[0.13em] text-ink-soft uppercase">
-            Initiatives
-            <span className="font-normal tracking-normal text-ink-faint normal-case">
-              · {initiatives.length}
-            </span>
-          </h2>
 
           {/* BD-7: client-side SWR poll inside DashboardContent — no router.refresh() needed */}
           <DashboardContent projectId={projectId} initialData={data} />
@@ -130,23 +118,18 @@ export default async function ProjectDashboardPage({
           />
         </section>
 
-        {/* right column: shape form above, Advisor below */}
-        <div className="sticky top-6 min-w-80 flex-[1_1_360px] self-start flex flex-col gap-5">
-          <div className="rounded-lg border border-border bg-card/60 p-4">
-            <p className="mb-3 font-mono text-[11px] font-semibold tracking-[0.13em] text-ink-soft uppercase">
-              New initiative
-            </p>
-            <NewInitiative projectId={project.id} />
+        {/* right column: shape form above, synthesis below */}
+        <div className="flex flex-col gap-5 md:sticky md:top-6 md:self-start">
+          <div className="overflow-hidden rounded-xl border border-border bg-card">
+            <div className="flex items-center gap-2 border-b border-border px-[18px] py-3.5">
+              <span className="text-[13px] text-primary">✦</span>
+              <span className="font-mono text-[10px] font-bold tracking-[0.1em] text-primary uppercase">New Initiative</span>
+            </div>
+            <div className="p-[18px]">
+              <NewInitiative projectId={project.id} />
+            </div>
           </div>
 
-          <ConversationRail
-            scope={{ projectId: project.id }}
-            advisorUrl={`/api/projects/${project.id}/advisor`}
-            mode="reasoning across the project"
-            subtitle="the whole project — your strategic thinking partner"
-            intro="Ask the Advisor about the project as a whole — how it's going, what to build next, or whether anything contradicts across initiatives."
-            discoverable
-          />
         </div>
       </div>
     </main>

@@ -6,8 +6,6 @@ import {
   Search,
   CheckCircle2,
   ArrowRight,
-  ChevronDown,
-  ChevronUp,
 } from "lucide-react";
 import useSWR from "swr";
 
@@ -164,6 +162,24 @@ export function DashboardContent({
 
   return (
     <>
+      {/* Header: Initiatives (serif) + search */}
+      <div className="mt-4 flex items-center justify-between gap-4">
+        <div className="flex items-baseline gap-2">
+          <h2 className="font-serif text-[18px] font-normal text-foreground">Initiatives</h2>
+          <span className="font-mono text-[13px] text-ink-faint">{initiatives.length}</span>
+        </div>
+        <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5" style={{ width: 220 }}>
+          <Search className="size-3.5 shrink-0 text-ink-faint" />
+          <input
+            type="search"
+            placeholder="Find by title or ID…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full border-none bg-transparent font-mono text-[12.5px] text-foreground placeholder:text-ink-faint outline-none"
+          />
+        </div>
+      </div>
+
       {/* BD-12: Drift reports panel — shown when there are pending reports, above the initiative list */}
       {driftReports && driftReports.length > 0 && (
         <DriftReportsPanel
@@ -172,18 +188,6 @@ export function DashboardContent({
           onResolved={() => mutateDrift()}
         />
       )}
-
-      {/* Search */}
-      <div className="relative mt-4">
-        <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-ink-faint" />
-        <input
-          type="search"
-          placeholder="Find by title or ID…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full rounded-md border border-border bg-background py-2 pl-8 pr-3 font-mono text-[12px] placeholder:text-ink-faint focus:border-accent-deep focus:outline-none focus:ring-0"
-        />
-      </div>
 
       {/* Nothing waiting banner */}
       {nothingWaiting && (
@@ -200,18 +204,25 @@ export function DashboardContent({
 
       {/* Active initiatives */}
       {filteredActive.length > 0 ? (
-        <ul className="mt-5 space-y-2.5">
-          {filteredActive.map((i) => (
-            <li key={i.id}>
-              <InitiativeCard
-                initiative={i}
-                attention={attention[i.id]}
-                shortId={sId(i)}
-                href={href(i)}
-              />
-            </li>
-          ))}
-        </ul>
+        <div className="mt-5">
+          {!query && (
+            <p className="mb-2 px-1 font-mono text-[9.5px] font-semibold tracking-[0.1em] text-ink-faint uppercase">
+              Active · {filteredActive.length}
+            </p>
+          )}
+          <ul className="space-y-1.5">
+            {filteredActive.map((i) => (
+              <li key={i.id}>
+                <InitiativeCard
+                  initiative={i}
+                  attention={attention[i.id]}
+                  shortId={sId(i)}
+                  href={href(i)}
+                />
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : active.length === 0 && !query ? (
         <p className="mt-5 text-sm text-muted-foreground">
           No active initiatives — describe one and the Advisor shapes it.
@@ -223,14 +234,15 @@ export function DashboardContent({
         <div className="mt-7">
           <button
             onClick={() => setShowCompleted((v) => !v)}
-            className="flex items-center gap-2 font-mono text-[11px] text-ink-faint transition-colors hover:text-ink-soft"
+            className="flex items-center gap-1.5 px-1 font-mono text-[9.5px] font-semibold tracking-[0.1em] text-ink-faint uppercase transition-colors hover:text-ink-soft"
           >
-            {showCompleted ? (
-              <ChevronUp className="size-3.5" />
-            ) : (
-              <ChevronDown className="size-3.5" />
-            )}
-            {showCompleted ? "Hide" : "Show"} {completed.length} completed
+            <span
+              className="inline-block text-[9px] transition-transform duration-150"
+              style={{ transform: showCompleted ? "rotate(90deg)" : "rotate(0deg)" }}
+            >
+              ▸
+            </span>
+            Done · {completed.length}
           </button>
 
           {showCompleted && (

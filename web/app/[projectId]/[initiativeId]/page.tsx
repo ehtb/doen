@@ -1,11 +1,14 @@
+import React from "react";
 import { getProject, getSpec } from "@/lib/api";
 import { cn, stateMode } from "@/lib/utils";
 import { SetBreadcrumb } from "@/app/_shell/breadcrumb";
+import { Wrench, FlaskConical } from "lucide-react";
 import ConversationRail from "./ConversationRail";
 import CriteriaVerification from "./CriteriaVerification";
 import GuidedReview from "./GuidedReview";
+import InitiativeStatus from "./InitiativeStatus";
 import LearnStage from "./LearnStage";
-import NextStepHint from "./NextStepHint";
+import ResetConversationLink from "./ResetConversationLink";
 import SpecActions from "./SpecActions";
 import SpecDocument from "./SpecDocument";
 import { SpecProvider } from "./spec-context";
@@ -67,35 +70,41 @@ function stateLabel(s: string, initiativeType: InitiativeType): string {
 function StateStepper({ state, initiativeType }: { state: string; initiativeType: InitiativeType }) {
   const current = Math.max(0, STATES.indexOf(state));
   return (
-    <nav
-      aria-label="lifecycle"
-      className="flex flex-wrap items-center gap-x-1 gap-y-2"
-    >
+    <nav aria-label="lifecycle" className="flex items-center gap-0">
       {STATES.map((s, i) => {
         const done = i < current;
         const active = i === current;
         return (
-          <div
-            key={s}
-            className={cn(
-              "flex items-center gap-2 px-3 py-0.5 font-mono text-[11px] tracking-wide capitalize",
-              done && "text-ink-soft",
-              active && "font-semibold text-accent-deep",
-              !done && !active && "text-ink-faint",
+          <React.Fragment key={s}>
+            {i > 0 && (
+              <div className={cn("mx-2 h-px w-8 shrink-0", done ? "bg-confirmed" : "bg-border")} />
             )}
-          >
-            <span
-              className={cn(
-                "size-2 rounded-full border",
-                done && "border-ink-soft bg-ink-soft",
-                active && "border-primary bg-primary ring-3 ring-primary/15",
-                !done && !active && "border-border",
-              )}
-            />
-            {stateLabel(s, initiativeType)}
-          </div>
+            <div className="flex items-center gap-1.5">
+              <span
+                className={cn(
+                  "size-2 shrink-0 rounded-full",
+                  done && "bg-confirmed",
+                  active && "bg-primary ring-2 ring-primary/20",
+                  !done && !active && "border border-border bg-transparent",
+                )}
+              />
+              <span
+                className={cn(
+                  "text-[13px]",
+                  done && "text-confirmed-foreground",
+                  active && "font-semibold text-primary",
+                  !done && !active && "text-ink-faint",
+                )}
+              >
+                {stateLabel(s, initiativeType)}
+              </span>
+            </div>
+          </React.Fragment>
         );
       })}
+      <span className="ml-auto font-mono text-[11px] italic text-ink-faint">
+        state follows the work
+      </span>
     </nav>
   );
 }
@@ -137,10 +146,21 @@ export default async function SpecPage({
           provisional fallback title updates without waiting for the full RSC refresh. */}
       <SpecProvider initialSpec={spec}>
         <header className="animate-rise">
-          <div className="flex items-baseline justify-between gap-4">
-            <span className="font-mono text-[11px] font-semibold tracking-[0.18em] text-accent-deep uppercase">
-              Initiative
-            </span>
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[11px] font-semibold tracking-[0.18em] text-accent-deep uppercase">
+                Initiative
+              </span>
+              {itype === "engineering" ? (
+                <span className="flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-widest uppercase bg-primary/10 text-accent-deep">
+                  <Wrench className="size-2.5" /> Eng
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-widest uppercase bg-confirmed/15 text-confirmed-foreground">
+                  <FlaskConical className="size-2.5" /> Research
+                </span>
+              )}
+            </div>
             <span className="flex items-center gap-2 font-mono text-[11px]">
               <span className="size-[7px] rounded-full bg-confirmed animate-live" />
               {spec.short_id && (
@@ -154,13 +174,13 @@ export default async function SpecPage({
           <h1 className="mt-2 max-w-[20ch] font-serif text-[clamp(1.9rem,3.4vw,2.6rem)] leading-[1.08] font-medium tracking-tight">
             <SpecTitle fallback={spec.title} />
           </h1>
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3.5">
+          <div className="mt-4 border-t border-border pt-3.5">
             <StateStepper state={spec.state} initiativeType={itype} />
           </div>
         </header>
-        <NextStepHint />
-        <div className="mt-7 flex flex-wrap items-start gap-7">
-          <section className="min-w-80 flex-[1_1_560px]">
+        <InitiativeStatus />
+        <div className="mt-7 grid grid-cols-1 items-start gap-7 md:grid-cols-[1fr_380px]">
+          <section>
             <SpecDocument />
             {(spec.state === "building" ||
               spec.state === "learning" ||
@@ -176,7 +196,7 @@ export default async function SpecPage({
             )}
             <SpecActions projectId={projectId} />
           </section>
-          <div className="sticky top-6 flex min-w-80 flex-[1_1_380px] flex-col gap-6 self-start">
+          <div className="sticky top-6 flex flex-col gap-6 self-start">
             <ConversationRail
               scope={{ initiativeId: spec.initiative_id }}
               advisorUrl={`/api/initiatives/${spec.initiative_id}/advisor`}
@@ -187,6 +207,7 @@ export default async function SpecPage({
               review={<GuidedReview />}
             />
             <SteeringRail initiativeId={spec.initiative_id} initiativeType={itype} />
+            <ResetConversationLink scope={{ initiativeId: spec.initiative_id }} />
           </div>
         </div>
       </SpecProvider>

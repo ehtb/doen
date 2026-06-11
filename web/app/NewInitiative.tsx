@@ -11,17 +11,12 @@ import {
   PREFILL_EVENT,
   type InitiativeDraft,
 } from "@/lib/initiativeDraft";
-import type { InitiativeType } from "@/lib/types";
-import { cn } from "@/lib/utils";
-import { SYNTHESIS_CACHE_PREFIX } from "./[projectId]/ProjectSynthesis";
 
 // Creation IS shaping (0011 C2/a3): you describe what you want from within a project, and the
 // Advisor drafts the whole spec — title, intent, constraints, discretion, criteria, units — as
 // proposals you confirm item by item. No title-first step, no project picker (the screen fixes it).
 export default function NewInitiative({ projectId }: { projectId: string }) {
   const [description, setDescription] = useState("");
-  const [initiativeType, setInitiativeType] =
-    useState<InitiativeType>("engineering");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // BD-22: observation_id stashed alongside the draft — resolve after creation.
@@ -38,7 +33,6 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
   const prefill = useCallback(
     (draft: InitiativeDraft) => {
       setDescription(draft.description);
-      if (draft.initiative_type) setInitiativeType(draft.initiative_type);
       pendingObservationId.current = draft.observation_id;
       requestAnimationFrame(() => {
         formRef.current?.scrollIntoView({
@@ -103,10 +97,7 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
       const res = await fetch(`/api/projects/${projectId}/initiatives/shape`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          description: d,
-          initiative_type: initiativeType,
-        }),
+        body: JSON.stringify({ description: d }),
       });
       if (!res.ok) throw new Error(`couldn't shape that (${res.status})`);
       const init = await res.json();
@@ -119,16 +110,6 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ initiative_id: init.id }),
         }).catch(() => {});
-        // Invalidate the synthesis session cache so the resolved state is visible on return.
-        try {
-          for (let i = 0; i < sessionStorage.length; i++) {
-            const k = sessionStorage.key(i);
-            if (k?.startsWith(`${SYNTHESIS_CACHE_PREFIX}:${projectId}:`)) {
-              sessionStorage.removeItem(k);
-              break;
-            }
-          }
-        } catch {}
       }
       setBusy(false);
       // land in the freshly-shaped spec to review and confirm the proposals
@@ -165,51 +146,24 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
         className="resize-none border-rail-border bg-rail-card text-rail-foreground placeholder:text-rail-muted"
       />
 
-      {/* BD-15: type selector — pre-filled by inference, overridable. */}
-      <div className="flex items-center gap-3">
-        {(["engineering", "research"] as InitiativeType[]).map((t) => (
-          <label
-            key={t}
-            className={cn(
-              "flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 font-mono text-[10.5px] tracking-wide capitalize transition-colors",
-              initiativeType === t
-                ? "border-primary/40 bg-primary/8 text-accent-deep"
-                : "border-border text-ink-faint hover:border-border/80 hover:text-ink-soft",
-              busy && "pointer-events-none opacity-50",
-            )}
-          >
-            <input
-              type="radio"
-              name={`initiative-type-${projectId}`}
-              value={t}
-              checked={initiativeType === t}
-              disabled={busy}
-              onChange={() => setInitiativeType(t)}
-              className="sr-only"
-            />
-            {t}
-          </label>
-        ))}
-      </div>
-
-      <div className="flex items-center gap-3">
-        <Button
-          type="submit"
-          disabled={busy || description.trim().length === 0}
-        >
-          {busy ? <Loader2 className="animate-spin" /> : <Sparkles />}
-          {busy ? "Shaping…" : "Shape a new initiative"}
-        </Button>
+      <div className="mt-2 flex items-center justify-between">
         {error ? (
           <span className="font-mono text-xs text-proposed-foreground">
             {error}
           </span>
         ) : (
-          <span className="font-mono text-[10.5px] text-ink-faint">
-            the Advisor sizes the spec to the work — a fix stays light, a
-            feature gets the full structure
+          <span className="font-mono text-[10px] tracking-wide text-rail-muted">
+            ⌘↵ to send
           </span>
         )}
+        <Button
+          type="submit"
+          size="sm"
+          disabled={busy || description.trim().length === 0}
+        >
+          {busy ? <Loader2 className="animate-spin" /> : <Sparkles />}
+          {busy ? "Shaping…" : "Shape"}
+        </Button>
       </div>
     </form>
   );

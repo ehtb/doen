@@ -35,11 +35,11 @@ Hard rules: preserve append-only sections; respect doc size constraints; no doc 
 
   return (
     <Button
-      size="sm"
+      size="xs"
       variant="outline"
+      shadow="none"
       onClick={copy}
       title="Copy a prompt that audits core documentation against the codebase"
-      className="h-7 px-2.5 font-mono text-[11px] tracking-wide"
     >
       {copied ? <Check /> : <Copy />}{" "}
       {copied ? "Copied" : "Copy /sync-docs prompt"}

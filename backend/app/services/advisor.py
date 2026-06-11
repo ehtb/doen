@@ -637,7 +637,8 @@ async def synthesize_project(
     """Generate one advisor observation every 3 completed initiatives (BD-22).
     LLM is only called at milestones (n % 3 == 0) and only when the milestone
     initiative has no prior observation. Rejected observations persist so the
-    UI can show the full history. 'what we know' requires ≥5 completed initiatives."""
+    UI can show the full history. 'what we know' requires ≥5 completed initiatives
+    and is persisted on the project row (0023) so it survives between milestone calls."""
     all_initiatives = await store.list_project_initiatives(project_id)
     completed_count = sum(1 for i in all_initiatives if i.state == "complete")
 
@@ -648,12 +649,25 @@ async def synthesize_project(
             completed_count=0,
         )
 
+    async def _persisted_what_we_know() -> WhatWeKnow | None:
+        raw = await store.get_project_synthesis(project_id)
+        if not raw:
+            return None
+        try:
+            return WhatWeKnow(
+                patterns=str(raw.get("patterns", "")).strip(),
+                assumptions=str(raw.get("assumptions", "")).strip(),
+                intent_alignment=str(raw.get("intent_alignment", "")).strip(),
+            )
+        except Exception:
+            return None
+
     # Only generate at milestones (every 3 completed initiatives).
     if completed_count % 3 != 0:
         observations = await store.list_observations(project_id)
         return ProjectSynthesisResponse(
             observations=observations,
-            what_we_know=None,
+            what_we_know=await _persisted_what_we_know(),
             completed_count=completed_count,
         )
 
@@ -667,7 +681,7 @@ async def synthesize_project(
         observations = await store.list_observations(project_id)
         return ProjectSynthesisResponse(
             observations=observations,
-            what_we_know=None,
+            what_we_know=await _persisted_what_we_know(),
             completed_count=completed_count,
         )
 
@@ -706,6 +720,8 @@ async def synthesize_project(
                     assumptions=str(wk_raw.get("assumptions", "")).strip(),
                     intent_alignment=str(wk_raw.get("intent_alignment", "")).strip(),
                 )
+                # Persist so future non-milestone calls can return it.
+                await store.save_project_synthesis(project_id, wk_raw)
             except Exception:
                 what_we_know = None
 

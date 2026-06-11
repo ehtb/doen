@@ -155,13 +155,16 @@ async def create_initiative_from_description(
     BD-15: `initiative_type` in the body sets engineering vs. research framing."""
     if not body.description.strip():
         raise ValidationError("a description is required to start an initiative")
+    initiative_type = body.initiative_type or await shaping_service.infer_initiative_type(
+        body.description
+    )
     init = await shaping_service.create_initiative_bare(
-        store, project_id, body.description, initiative_type=body.initiative_type
+        store, project_id, body.description, initiative_type=initiative_type
     )
     background_tasks.add_task(
         shaping_service.fill_spec_from_description,
         store, init.id, body.description,
-        project_id=project_id, initiative_type=body.initiative_type,
+        project_id=project_id, initiative_type=initiative_type,
     )
     return init
 

@@ -522,6 +522,28 @@ class SpecStore:
         )
         return _project_from_row(row) if row else None
 
+    async def save_project_synthesis(self, project_id: str, what_we_know: dict) -> None:
+        """Persist the latest 'what we know' synthesis on the project row (0023)."""
+        import json as _json
+        await self.pg.execute(
+            "UPDATE projects SET latest_what_we_know = $2 WHERE id = $1",
+            project_id,
+            _json.dumps(what_we_know),
+        )
+
+    async def get_project_synthesis(self, project_id: str) -> dict | None:
+        """Return the latest persisted 'what we know' synthesis, or None (0023)."""
+        import json as _json
+        row = await self.pg.fetchrow(
+            "SELECT latest_what_we_know FROM projects WHERE id = $1",
+            project_id,
+        )
+        if row is None or row["latest_what_we_know"] is None:
+            return None
+        val = row["latest_what_we_know"]
+        # asyncpg returns JSONB as a string
+        return _json.loads(val) if isinstance(val, str) else dict(val)
+
     async def list_projects(self) -> list[Project]:
         """Every project, newest first — the level above the dashboard (0010 a2)."""
         rows = await self.pg.fetch(

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Check, GitBranch, ClipboardCheck, AlertTriangle, FlaskConical, Loader2, Wrench } from "lucide-react";
+import { ArrowRight, Loader2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { Initiative, InitiativeAttention } from "@/lib/types";
@@ -28,33 +28,44 @@ export function StateBadge({ state }: { state: string }) {
   );
 }
 
-// A small "needs you" chip — only shown when its count is non-zero (0011 a8).
-function AttentionChip({
-  icon: Icon,
-  n,
-  label,
-  urgent,
-}: {
-  icon: typeof Check;
-  n: number;
-  label: string;
-  urgent?: boolean;
-}) {
-  if (n <= 0) return null;
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[10px] tracking-wide",
-        urgent
-          ? "bg-primary/15 text-accent-deep"
-          : "bg-proposed/15 text-proposed-foreground",
-      )}
-      title={`${n} ${label}`}
-    >
-      <Icon className="size-3" />
-      {n} {label}
-    </span>
-  );
+// Single most-urgent attention line — prototype style: emoji + plain text, colored by urgency.
+function AttentionLine({ attention, isResearch }: { attention: InitiativeAttention; isResearch: boolean }) {
+  if (attention.is_shaping) {
+    return (
+      <span className="font-mono text-[11.5px] text-ink-faint">
+        drafting spec…
+      </span>
+    );
+  }
+  if (attention.open_decisions > 0) {
+    return (
+      <span className="font-mono text-[12px] text-primary">
+        ⚡ {attention.open_decisions} decision{attention.open_decisions === 1 ? "" : "s"} waiting
+      </span>
+    );
+  }
+  if ((attention.criteria_to_verify ?? 0) > 0) {
+    return (
+      <span className="font-mono text-[12px] text-confirmed-foreground">
+        ✓ {attention.criteria_to_verify} {isResearch ? "findings to review" : "to verify"}
+      </span>
+    );
+  }
+  if ((attention.drift_reports ?? 0) > 0) {
+    return (
+      <span className="font-mono text-[12px] text-primary">
+        ⚡ {attention.drift_reports} drift flagged
+      </span>
+    );
+  }
+  if (attention.proposed_items > 0) {
+    return (
+      <span className="font-mono text-[12px] text-confirmed-foreground">
+        ✓ {attention.proposed_items} to confirm
+      </span>
+    );
+  }
+  return null;
 }
 
 // One initiative on a feed — the home dashboard and the project dashboard render the same
@@ -74,81 +85,51 @@ export function InitiativeCard({
   shortId?: string;
   href?: string;
 }) {
-  const total = attention
-    ? attention.proposed_items +
-      attention.open_decisions +
-      (attention.criteria_to_verify ?? 0) +
-      (attention.drift_reports ?? 0)
-    : 0;
+  const isResearch = initiative.initiative_type === "research";
+  const hasAttention = attention
+    ? attention.proposed_items + attention.open_decisions + (attention.criteria_to_verify ?? 0) + (attention.drift_reports ?? 0) > 0 || attention.is_shaping
+    : false;
+
   return (
     <Link
       href={href ?? `/${initiative.project_id}/${initiative.id}`}
-      className="group block rounded-lg border border-border bg-card/60 px-5 py-4 transition-colors hover:bg-card"
+      className="group block rounded-lg border border-border bg-card px-4 py-3 transition-colors hover:border-border/60 hover:bg-card/80"
     >
-      <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <h3 className="truncate font-serif text-[19px] leading-snug">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[14.5px] font-medium leading-snug text-foreground">
             {initiative.title ?? initiative.id}
-          </h3>
-          <div className="mt-1 flex items-center gap-2">
-            <p className="font-mono text-[11px] text-ink-faint">
-              {shortId ? (
-                <span className="font-semibold tracking-wide text-accent-deep">{shortId}</span>
-              ) : (
-                initiative.id
-              )}
-            </p>
-            {/* BD-15: type indicator — distinguishable at a glance */}
-            {initiative.initiative_type === "research" ? (
-              <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9px] tracking-widest uppercase bg-violet-50 text-violet-600 dark:bg-violet-950/40 dark:text-violet-400">
-                <FlaskConical className="size-2.5" /> research
+          </p>
+          <div className="mt-1.5 flex items-center gap-2">
+            <span className="font-mono text-[10.5px] font-semibold tracking-wide text-primary">
+              {shortId ?? initiative.id}
+            </span>
+            {/* BD-15: warm type tags matching prototype palette */}
+            {isResearch ? (
+              <span className="rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-widest uppercase bg-confirmed/15 text-confirmed-foreground">
+                ◉ RES
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9px] tracking-widest uppercase bg-sky-50 text-sky-600 dark:bg-sky-950/40 dark:text-sky-400">
-                <Wrench className="size-2.5" /> engineering
+              <span className="rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-widest uppercase bg-primary/10 text-accent-deep">
+                ⚙ ENG
               </span>
             )}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2.5 pt-0.5">
           <StateBadge state={initiative.state} />
-          <ArrowRight className="size-4 text-ink-faint transition-transform group-hover:translate-x-0.5" />
+          <ArrowRight className="size-3.5 text-ink-faint transition-transform group-hover:translate-x-0.5" />
         </div>
       </div>
 
-      {attention && (
-        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+      {attention && hasAttention && (
+        <div className="mt-2">
           {attention.is_shaping ? (
-            <span className="inline-flex items-center gap-1 font-mono text-[10px] tracking-wide text-ink-faint">
+            <span className="inline-flex items-center gap-1.5 font-mono text-[11.5px] text-ink-faint">
               <Loader2 className="size-3 animate-spin" /> drafting spec…
             </span>
-          ) : total === 0 ? (
-            <span className="inline-flex items-center gap-1 font-mono text-[10px] tracking-wide text-ink-faint">
-              <Check className="size-3" /> nothing waiting
-            </span>
           ) : (
-            <>
-              <AttentionChip
-                icon={GitBranch}
-                n={attention.open_decisions}
-                label="to decide"
-                urgent
-              />
-              <AttentionChip
-                icon={ClipboardCheck}
-                n={attention.criteria_to_verify ?? 0}
-                // BD-15: adapt label per type
-                label={initiative.initiative_type === "research" ? "findings to review" : "to verify"}
-                urgent
-              />
-              <AttentionChip
-                icon={AlertTriangle}
-                n={attention.drift_reports ?? 0}
-                label="drift flagged"
-                urgent
-              />
-              <AttentionChip icon={Check} n={attention.proposed_items} label="to confirm" />
-            </>
+            <AttentionLine attention={attention} isResearch={isResearch} />
           )}
         </div>
       )}
