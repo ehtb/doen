@@ -9,7 +9,8 @@ from fastapi import APIRouter, Depends
 from app.database import get_store
 from app.exceptions import ValidationError
 from app.models import Initiative
-from app.schemas import ArchiveInitiative, CreateInitiative
+from app.models import Spec
+from app.schemas import ArchiveInitiative, CreateInitiative, UpdateInitiativeType
 from app.store import SpecStore
 
 router = APIRouter(tags=["initiatives"])
@@ -78,3 +79,13 @@ async def archive_initiative(
     reason = (body.reason or "").strip() or "archived"
     await store.archive_initiative(initiative_id, reason)
     return {"id": initiative_id, "archived": True, "reason": reason}
+
+
+@router.patch("/initiatives/{initiative_id}/type", status_code=200)
+async def update_initiative_type(
+    initiative_id: str,
+    body: UpdateInitiativeType,
+    store: Annotated[SpecStore, Depends(get_store)],
+) -> Spec:
+    """Change the initiative type (engineering / research). Only allowed in draft state."""
+    return await store.update_initiative_type(initiative_id, body.initiative_type)

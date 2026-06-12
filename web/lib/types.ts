@@ -223,10 +223,12 @@ export interface Observation {
 
 // BD-22: synthesis response now includes persisted observations (not a plain string).
 // what_we_know is null when fewer than 5 completed initiatives exist.
+// synthesized_at is the created_at of the most recent observation — when the Advisor last ran.
 export interface ProjectSynthesisResponse {
   observations: Observation[];
   what_we_know: WhatWeKnow | null;
   completed_count: number;
+  synthesized_at?: string | null;
 }
 
 // An escalation on the steering rail. Mirrors backend Decision (store.py).
@@ -265,6 +267,7 @@ export interface RationaleClaim {
 // BD-13 enriched / BD-25 structured learn-stage draft.
 export interface OutcomeDraft {
   summary: string;
+  conclusion?: string;    // research only: synthesized answer to the research question
   auto_approved_learnings: LearningItem[];
   needs_review_learnings: LearningItem[];
   rationale_claims: RationaleClaim[];

@@ -26,6 +26,10 @@ LEARN_DRAFT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "summary": {"type": "string", "description": "What was intended vs. what happened."},
+        "conclusion": {
+            "type": "string",
+            "description": "Research initiatives only: a direct, synthesized answer to the research question. One to three paragraphs. Omit for engineering initiatives.",
+        },
         "learnings": {
             "type": "array",
             "description": "Durable, transferable lessons as bullet-point items.",
@@ -284,8 +288,12 @@ async def draft_outcome(
     valid_ids = decision_ids | criterion_ids
     claims = _parse_rationale_claims(raw.get("rationale_claims") or [], valid_ids)
 
+    raw_conclusion = raw.get("conclusion") or None
+    is_research = review.initiative.initiative_type == "research"
+
     return OutcomeDraft(
         summary=str(raw.get("summary", "")).strip(),
+        conclusion=str(raw_conclusion).strip() if raw_conclusion and is_research else None,
         auto_approved_learnings=auto_approved,
         needs_review_learnings=needs_review,
         rationale_claims=claims,
@@ -297,6 +305,7 @@ async def submit_learn(
     initiative_id: str,
     *,
     summary: str,
+    conclusion: str | None = None,
     auto_approved_learnings: list[str] | None = None,
     human_approved_learnings: list[str] | None = None,
     learnings: str | None = None,  # legacy compat
@@ -334,6 +343,9 @@ async def submit_learn(
     # BD-25: store approval metadata in outcome so the UI can render visual distinction.
     if learning_approvals:
         outcome = {**(outcome or {}), "learning_approvals": learning_approvals}
+    # Research conclusion: store in outcome so context hits can surface the direct answer.
+    if conclusion and conclusion.strip():
+        outcome = {**(outcome or {}), "conclusion": conclusion.strip()}
 
     # BD-15: carry the initiative type into memory so context hits expose the source type.
     await store.create_memory(

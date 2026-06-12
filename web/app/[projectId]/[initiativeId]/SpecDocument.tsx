@@ -42,12 +42,14 @@ const GOVERNING_BASE: {
   title: string;
   researchTitle?: string;
   note: string;
+  researchNote?: string;
   icon: LucideIcon;
 }[] = [
   {
     key: "constraints",
     title: "Constraints",
     note: "locked — I won't cross these",
+    researchNote: "scope fences — what to cover vs ignore",
     icon: Lock,
   },
   {
@@ -55,12 +57,15 @@ const GOVERNING_BASE: {
     title: "Acceptance criteria",
     researchTitle: "Success criteria", // BD-15: research initiatives use this label
     note: "how the work gets judged",
+    researchNote: "how a satisfactory answer is recognized",
     icon: CircleCheck,
   },
   {
     key: "discretion",
     title: "Agent latitude",
+    researchTitle: "Investigator latitude",
     note: "discretion — the executor's calls, not yours",
+    researchNote: "discretion — the investigator's calls, not yours",
     icon: Compass,
   },
 ];
@@ -174,12 +179,13 @@ export default function SpecDocument() {
   const GOVERNING = GOVERNING_BASE.map((g) => ({
     ...g,
     title: isResearch && g.researchTitle ? g.researchTitle : g.title,
+    note: isResearch && g.researchNote ? g.researchNote : g.note,
   }));
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [adding, setAdding] = useState<Section | null>(null);
   const [addText, setAddText] = useState("");
-  const [verifyKind, setVerifyKind] = useState("behavior");
+  const [verifyKind, setVerifyKind] = useState(isResearch ? "human_judgment" : "behavior");
   const [verifyDetail, setVerifyDetail] = useState("");
 
   const iid = spec.initiative_id;
@@ -459,7 +465,7 @@ export default function SpecDocument() {
             setAddText("");
           }}
         >
-          <Plus /> add {section === "acceptance" ? "criterion" : "item"}
+          <Plus /> add {section === "acceptance" ? (isResearch ? "success criterion" : "criterion") : "item"}
         </Button>
       ) : null;
     return (
@@ -479,16 +485,29 @@ export default function SpecDocument() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="font-mono text-xs">
-                <SelectItem value="test">test</SelectItem>
-                <SelectItem value="behavior">behavior</SelectItem>
-                <SelectItem value="metric">metric</SelectItem>
-                <SelectItem value="human_judgment">human_judgment</SelectItem>
+                {isResearch ? (
+                  <>
+                    <SelectItem value="human_judgment">human judgment</SelectItem>
+                    <SelectItem value="literature">literature review</SelectItem>
+                    <SelectItem value="interview">interview / survey</SelectItem>
+                    <SelectItem value="experiment">experiment</SelectItem>
+                    <SelectItem value="desk_research">desk research</SelectItem>
+                    <SelectItem value="data_analysis">data analysis</SelectItem>
+                  </>
+                ) : (
+                  <>
+                    <SelectItem value="behavior">behavior</SelectItem>
+                    <SelectItem value="test">test</SelectItem>
+                    <SelectItem value="metric">metric</SelectItem>
+                    <SelectItem value="human_judgment">human judgment</SelectItem>
+                  </>
+                )}
               </SelectContent>
             </Select>
             <Input
               value={verifyDetail}
               onChange={(e) => setVerifyDetail(e.target.value)}
-              placeholder="how it's verified"
+              placeholder={isResearch ? "how you'd recognize a satisfactory answer" : "how it's verified"}
               className="flex-1"
             />
           </div>
@@ -583,8 +602,7 @@ export default function SpecDocument() {
             <section className="rounded-xl border border-border/40 bg-muted/30 px-5 py-4">
               <p className="flex items-center gap-2 font-mono text-[11.5px] tracking-wide text-ink-soft">
                 <Loader2 className="size-3.5 animate-spin" />
-                The Advisor is drafting the spec — constraints, acceptance
-                criteria, and agent latitude will appear here shortly.
+                The Advisor is drafting the spec — {isResearch ? "scope fences, success criteria, and investigator latitude" : "constraints, acceptance criteria, and agent latitude"} will appear here shortly.
               </p>
             </section>
           ) : (
@@ -601,8 +619,7 @@ export default function SpecDocument() {
 
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <p className="font-mono text-[11px] tracking-wide text-ink-faint">
-          the living spec · v{spec.version} — only confirmed items bind
-          executors
+          the living spec · v{spec.version} — only confirmed items {isResearch ? "guide the investigation" : "bind executors"}
         </p>
         <button
           type="button"

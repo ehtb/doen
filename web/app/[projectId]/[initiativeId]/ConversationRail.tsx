@@ -126,6 +126,8 @@ export default function ConversationRail({
   const [evidenceBusy, setEvidenceBusy] = useState<string | null>(null);
   const threadEnd = useRef<HTMLDivElement>(null);
 
+  const isResearch = specCtx?.spec.initiative_type === "research";
+
   // BD-20: when switching modes, clear transient synthesis/reset state — the new mode's conversation
   // loads fresh and prior-mode synthesis isn't relevant.
   useEffect(() => {
@@ -434,7 +436,7 @@ export default function ConversationRail({
                   : "border-rail-border text-rail-muted hover:border-rail-border/80 hover:text-rail-foreground",
               )}
             >
-              Discover what to build
+              {isResearch ? "Discover what to investigate" : "Discover what to build"}
             </button>
           </div>
         )}
@@ -518,6 +520,7 @@ export default function ConversationRail({
               setEvidenceOpen((cur) => (cur === m.id ? null : m.id))
             }
             onSubmitEvidence={submitEvidence}
+            isResearch={isResearch}
           />
         ))}
 
@@ -576,6 +579,7 @@ function MessageRow({
   evidenceBusy,
   onToggleEvidence,
   onSubmitEvidence,
+  isResearch,
 }: {
   message: Message;
   canAccept: boolean;
@@ -591,6 +595,7 @@ function MessageRow({
   evidenceBusy?: string | null;
   onToggleEvidence?: () => void;
   onSubmitEvidence?: (criterionId: string, content: string) => void;
+  isResearch?: boolean;
 }) {
   const [selectedCriterion, setSelectedCriterion] = useState<string>("");
   const isHuman = message.role === "human";
@@ -630,7 +635,7 @@ function MessageRow({
             )}
             title="Submit as evidence"
           >
-            <ClipboardList className="size-2.5" /> evidence
+            <ClipboardList className="size-2.5" /> {isResearch ? "finding" : "evidence"}
           </button>
         )}
       </div>
@@ -648,7 +653,7 @@ function MessageRow({
         <div className="mt-2.5 rounded-xl border border-primary/30 bg-rail-card p-3">
           <div className="mb-2 flex items-center justify-between gap-2">
             <span className="font-mono text-[9.5px] tracking-[0.1em] text-primary uppercase">
-              submit as evidence
+              {isResearch ? "submit as finding" : "submit as evidence"}
             </span>
             <button
               type="button"
@@ -697,6 +702,7 @@ function MessageRow({
               busy={cardBusy === `${message.id}#${idx}`}
               onAccept={() => onAccept(message.id, idx, p)}
               onDismiss={() => onDismiss(message.id, idx)}
+              isResearch={isResearch ?? false}
             />
           ))}
         </div>
@@ -736,12 +742,14 @@ function ProposalCard({
   busy,
   onAccept,
   onDismiss,
+  isResearch,
 }: {
   proposal: Proposal;
   verdict?: CardVerdict;
   busy: boolean;
   onAccept: () => void;
   onDismiss: () => void;
+  isResearch?: boolean;
 }) {
   if (verdict) {
     return (
@@ -757,7 +765,7 @@ function ProposalCard({
     <div className="rounded-xl border border-primary/40 bg-rail-card p-3.5">
       <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[9.5px] tracking-[0.1em] text-primary uppercase">
         <Sparkles className="size-3" /> proposed{" "}
-        {SECTION_NOTE[proposal.section]}
+        {proposal.section === "acceptance" && isResearch ? "success criterion" : SECTION_NOTE[proposal.section]}
       </div>
       <p className="text-[13px] leading-snug text-rail-foreground">
         {proposal.text}

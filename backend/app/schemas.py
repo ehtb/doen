@@ -8,6 +8,7 @@ domain model off the wire except where a full Spec round-trips (PUT /specs/{id})
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel
@@ -58,6 +59,10 @@ class ArchiveInitiative(BaseModel):
     # 0013 follow-up: "rejected" from draft, "archived" from building/complete — same mechanism,
     # different label. Free text is allowed so a future UI can carry a richer rationale.
     reason: str = "archived"
+
+
+class UpdateInitiativeType(BaseModel):
+    initiative_type: Literal["engineering", "research"]
 
 
 class ProjectDashboard(BaseModel):
@@ -203,11 +208,14 @@ class WhatWeKnow(BaseModel):
 class ProjectSynthesisResponse(BaseModel):
     """BD-22: observations are now persisted records with resolve-to-initiative flow.
     `observations` is the current list (open first, then resolved) for the project.
-    `what_we_know` is null when fewer than 5 completed initiatives exist."""
+    `what_we_know` is null when fewer than 5 completed initiatives exist.
+    `synthesized_at` is the created_at of the most recent observation — the last time
+    the Advisor ran a synthesis pass."""
 
     observations: list[Observation]
     what_we_know: WhatWeKnow | None
     completed_count: int
+    synthesized_at: datetime | None = None
 
 
 class ResolveObservationRequest(BaseModel):
@@ -225,6 +233,7 @@ class LearnReview(BaseModel):
 
 class SubmitLearn(BaseModel):
     summary: str
+    conclusion: str | None = None  # research only: direct answer to the research question
     # BD-25: structured learning items — auto-approved carried from the evaluator,
     # human-approved confirmed by the human from the needs_review list.
     auto_approved_learnings: list[str] = []   # texts of evaluator-approved learnings
@@ -265,6 +274,7 @@ class OutcomeDraft(BaseModel):
     cause-effect claims each traceable to a specific decision or criterion record."""
 
     summary: str
+    conclusion: str | None = None  # research only: synthesized answer to the research question
     auto_approved_learnings: list[LearningItem] = []
     needs_review_learnings: list[LearningItem] = []
     rationale_claims: list[RationaleClaim] = []

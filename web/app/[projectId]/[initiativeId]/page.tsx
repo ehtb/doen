@@ -2,7 +2,6 @@ import React from "react";
 import { getProject, getSpec } from "@/lib/api";
 import { cn, stateMode } from "@/lib/utils";
 import { SetBreadcrumb } from "@/app/_shell/breadcrumb";
-import { Wrench, FlaskConical } from "lucide-react";
 import ConversationRail from "./ConversationRail";
 import CriteriaVerification from "./CriteriaVerification";
 import GuidedReview from "./GuidedReview";
@@ -14,6 +13,8 @@ import SpecDocument from "./SpecDocument";
 import { SpecProvider } from "./spec-context";
 import SpecTitle from "./SpecTitle";
 import SteeringRail from "./SteeringRail";
+import InitiativeTypeBadge from "./InitiativeTypeBadge";
+import NextStepHint from "./NextStepHint";
 import type { InitiativeType } from "@/lib/types";
 
 const STATES = ["draft", "building", "learning", "complete"];
@@ -151,15 +152,7 @@ export default async function SpecPage({
               <span className="font-mono text-[11px] font-semibold tracking-[0.18em] text-accent-deep uppercase">
                 Initiative
               </span>
-              {itype === "engineering" ? (
-                <span className="flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-widest uppercase bg-primary/10 text-accent-deep">
-                  <Wrench className="size-2.5" /> Eng
-                </span>
-              ) : (
-                <span className="flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-widest uppercase bg-confirmed/15 text-confirmed-foreground">
-                  <FlaskConical className="size-2.5" /> Research
-                </span>
-              )}
+              <InitiativeTypeBadge />
             </div>
             <span className="flex items-center gap-2 font-mono text-[11px]">
               <span className="size-[7px] rounded-full bg-confirmed animate-live" />
@@ -179,6 +172,7 @@ export default async function SpecPage({
           </div>
         </header>
         <InitiativeStatus />
+        <NextStepHint />
         <div className="mt-7 grid grid-cols-1 items-start gap-7 md:grid-cols-[1fr_380px]">
           <section>
             <SpecDocument />
@@ -191,7 +185,7 @@ export default async function SpecPage({
               <LearnStage
                 initiativeId={spec.initiative_id}
                 intent={spec.intent}
-                acceptance={spec.acceptance}
+                initiativeType={spec.initiative_type}
               />
             )}
             <SpecActions projectId={projectId} />

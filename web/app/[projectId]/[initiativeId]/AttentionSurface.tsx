@@ -52,6 +52,12 @@ export default function AttentionSurface({
   );
   const total = decisions.length + proposedItems.length;
 
+  const isResearch = spec.initiative_type === "research";
+  const labelFor = (section: Section) => {
+    if (section === "acceptance") return isResearch ? "success criterion" : "criterion";
+    return ITEM_LABEL[section];
+  };
+
   if (total === 0) {
     return (
       <section className="rounded-xl border border-confirmed/30 bg-confirmed/[0.05] px-5 py-4">
@@ -89,7 +95,7 @@ export default function AttentionSurface({
 
         {/* 2 — awaiting confirmation: proposed spec items, with inline accept/reject */}
         {proposedItems.map(({ section, it }) => (
-          <Row key={it.id} tone="pending" tag={ITEM_LABEL[section]}>
+          <Row key={it.id} tone="pending" tag={labelFor(section)}>
             <p className="font-mono text-[12.5px] leading-snug text-foreground">{it.text}</p>
             <AcceptReject
               busy={busy}

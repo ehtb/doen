@@ -296,6 +296,37 @@ class SpecStore:
             project_id=project_id, seq=seq, org_id=org_id, owner_id=owner_id,
         )
 
+    async def update_initiative_type(
+        self, initiative_id: str, new_type: InitiativeType
+    ) -> "Spec":
+        """Change the initiative_type on a draft initiative. Only allowed while state=draft —
+        once building starts the type is fixed so all submitted evidence/findings stay consistent.
+        Updates both the initiative row and the mirrored field in the spec JSONB doc."""
+        async with self.pg.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT state FROM initiatives WHERE id = $1", initiative_id
+            )
+            if row is None:
+                raise NotFoundError(f"no initiative {initiative_id}")
+            if row["state"] != "draft":
+                raise ValidationError(
+                    "initiative type can only be changed while the initiative is in draft"
+                )
+            await conn.execute(
+                "UPDATE initiatives SET initiative_type = $1, updated_at = now() WHERE id = $2",
+                new_type, initiative_id,
+            )
+            await conn.execute(
+                """UPDATE specs
+                   SET doc = jsonb_set(doc, '{initiative_type}', to_jsonb($1::text)),
+                       updated_at = now()
+                 WHERE initiative_id = $2""",
+                new_type, initiative_id,
+            )
+        spec = await self.get_spec(initiative_id)
+        assert spec is not None  # existence confirmed above
+        return spec
+
     async def update_initiative_title(self, initiative_id: str, title: str) -> None:
         """Update the initiative row's title after background shaping resolves the LLM title."""
         await self.pg.execute(

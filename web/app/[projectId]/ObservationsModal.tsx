@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
   ChevronDown,
@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import type { Observation, ProjectSynthesisResponse } from "@/lib/types";
 import { stashInitiativeDraft } from "@/lib/initiativeDraft";
+import { isRecent, timeago } from "@/lib/timeago";
 import { cn } from "@/lib/utils";
 
 export default function ObservationsModal({
@@ -29,20 +30,36 @@ export default function ObservationsModal({
 }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [observations, setObservations] = useState<Observation[]>([]);
+  const [synthesizedAt, setSynthesizedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [resolvedOpen, setResolvedOpen] = useState(false);
+  const fetched = useRef(false);
+
+  // Fetch on mount so synthesizedAt is available for the button indicator before
+  // the dialog is opened. Re-fetch on dialog open to surface any new observations.
+  async function fetchSynthesis() {
+    if (completedCount === 0) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/synthesis`, { cache: "no-store" });
+      const json: ProjectSynthesisResponse | null = res.ok ? await res.json() : null;
+      setObservations(json?.observations ?? []);
+      setSynthesizedAt(json?.synthesized_at ?? null);
+    } catch {}
+    finally { setLoading(false); }
+  }
 
   useEffect(() => {
-    if (!dialogOpen || completedCount === 0) return;
-    setLoading(true);
-    fetch(`/api/projects/${projectId}/synthesis`, { cache: "no-store" })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json: ProjectSynthesisResponse | null) => {
-        setObservations(json?.observations ?? []);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [dialogOpen, projectId, completedCount]);
+    if (fetched.current) return;
+    fetched.current = true;
+    fetchSynthesis();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (dialogOpen) fetchSynthesis();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dialogOpen]);
 
   const openObs = observations.filter((o) => o.status === "open");
   const resolvedObs = observations.filter(
@@ -53,20 +70,28 @@ export default function ObservationsModal({
 
   return (
     <>
-      <Button
-        size="xs"
-        variant="outline"
-        shadow="none"
-        onClick={() => setDialogOpen(true)}
-      >
-        <Sparkles className="size-3 text-primary/60" />
-        Observations
-        {openObs.length > 0 && (
-          <span className="ml-0.5 rounded-full bg-primary/15 px-1.5 font-mono text-[9px] text-accent-deep">
-            {openObs.length}
-          </span>
+      <span className="relative inline-flex">
+        <Button
+          size="xs"
+          variant="outline"
+          shadow="none"
+          onClick={() => setDialogOpen(true)}
+        >
+          <Sparkles className="size-3 text-primary/60" />
+          Observations
+          {openObs.length > 0 && (
+            <span className="ml-0.5 rounded-full bg-primary/15 px-1.5 font-mono text-[9px] text-accent-deep">
+              {openObs.length}
+            </span>
+          )}
+        </Button>
+        {synthesizedAt && isRecent(synthesizedAt) && (
+          <span
+            className="absolute -right-1 -top-1 size-2 rounded-full bg-confirmed"
+            title={`Updated ${timeago(synthesizedAt)}`}
+          />
         )}
-      </Button>
+      </span>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="w-[640px] max-w-[640px] bg-[#FDFAF5]">
@@ -77,7 +102,24 @@ export default function ObservationsModal({
             </DialogTitle>
           </DialogHeader>
 
-          <div className="max-h-[65vh] space-y-2 overflow-y-auto">
+          <div className="rounded-md border border-border/50 bg-muted/30 px-3.5 py-3">
+            <p className="text-[12.5px] leading-relaxed text-ink-soft">
+              The Advisor reviews completed initiatives every 3 completions and surfaces patterns, risks, or opportunities that haven't been acted on yet. Each observation can be shaped into a new initiative or dismissed.
+            </p>
+            {synthesizedAt && (
+              <p className="mt-1.5 font-mono text-[10.5px] text-ink-faint">
+                Last generated{" "}
+                {new Date(synthesizedAt).toLocaleDateString(undefined, {
+                  year: "numeric",
+                  month: "short",
+                  day: "numeric",
+                })}
+                {" · "}after {completedCount} completed initiative{completedCount === 1 ? "" : "s"}
+              </p>
+            )}
+          </div>
+
+          <div className="max-h-[55vh] space-y-2 overflow-y-auto">
             {loading && (
               <p className="animate-pulse font-mono text-[12px] text-ink-faint">
                 Advisor is reviewing project history…

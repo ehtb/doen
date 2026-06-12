@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, Sparkles } from "lucide-react";
+import { FlaskConical, Loader2, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -17,7 +17,8 @@ import {
 // proposals you confirm item by item. No title-first step, no project picker (the screen fixes it).
 export default function NewInitiative({ projectId }: { projectId: string }) {
   const [description, setDescription] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busyType, setBusyType] = useState<"engineering" | "research" | null>(null);
+  const busy = busyType !== null;
   const [error, setError] = useState<string | null>(null);
   // BD-22: observation_id stashed alongside the draft — resolve after creation.
   const pendingObservationId = useRef<string | undefined>(undefined);
@@ -88,16 +89,16 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
     return () => window.removeEventListener(PREFILL_EVENT, onPrefill);
   }, [projectId, prefill]);
 
-  async function shape() {
+  async function shapeAs(initiative_type: "engineering" | "research") {
     const d = description.trim();
     if (!d || busy) return;
-    setBusy(true);
+    setBusyType(initiative_type);
     setError(null);
     try {
       const res = await fetch(`/api/projects/${projectId}/initiatives/shape`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ description: d }),
+        body: JSON.stringify({ description: d, initiative_type }),
       });
       if (!res.ok) throw new Error(`couldn't shape that (${res.status})`);
       const init = await res.json();
@@ -111,12 +112,12 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
           body: JSON.stringify({ initiative_id: init.id }),
         }).catch(() => {});
       }
-      setBusy(false);
+      setBusyType(null);
       // land in the freshly-shaped spec to review and confirm the proposals
       router.push(`/${projectId}/${init.id}`);
     } catch (e) {
       setError((e as Error).message);
-      setBusy(false);
+      setBusyType(null);
     }
   }
 
@@ -126,7 +127,7 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
       className="space-y-2"
       onSubmit={(e) => {
         e.preventDefault();
-        shape();
+        shapeAs("engineering");
       }}
     >
       <Textarea
@@ -140,7 +141,7 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
         onKeyDown={(e) => {
           if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
             e.preventDefault();
-            shape();
+            shapeAs("engineering");
           }
         }}
         className="resize-none border-rail-border bg-rail-card text-rail-foreground placeholder:text-rail-muted"
@@ -156,14 +157,27 @@ export default function NewInitiative({ projectId }: { projectId: string }) {
             ⌘↵ to send
           </span>
         )}
-        <Button
-          type="submit"
-          size="sm"
-          disabled={busy || description.trim().length === 0}
-        >
-          {busy ? <Loader2 className="animate-spin" /> : <Sparkles />}
-          {busy ? "Shaping…" : "Shape"}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy || description.trim().length === 0}
+            onClick={() => shapeAs("research")}
+            className="border-confirmed/40 text-confirmed-foreground hover:bg-confirmed/10 hover:border-confirmed/60"
+          >
+            {busyType === "research" ? <Loader2 className="animate-spin" /> : <FlaskConical />}
+            {busyType === "research" ? "Shaping…" : "Research"}
+          </Button>
+          <Button
+            type="submit"
+            size="sm"
+            disabled={busy || description.trim().length === 0}
+          >
+            {busyType === "engineering" ? <Loader2 className="animate-spin" /> : <Sparkles />}
+            {busyType === "engineering" ? "Shaping…" : "Shape"}
+          </Button>
+        </div>
       </div>
     </form>
   );

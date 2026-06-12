@@ -64,7 +64,9 @@ export function SpecProvider({
   // State transitions (start-building, revert-to-draft) update doc.state via jsonb_set without
   // incrementing version — so we check for EITHER a newer version OR a state change at same version.
   function isNewer(incoming: Spec, current: Spec) {
-    return incoming.version > current.version || incoming.state !== current.state;
+    return incoming.version > current.version
+      || incoming.state !== current.state
+      || incoming.initiative_type !== current.initiative_type;
   }
 
   // Sync from RSC-delivered prop after router.refresh() — useState ignores prop changes after mount.
@@ -84,7 +86,7 @@ export function SpecProvider({
     const shapingDone =
       specRef.current.shaping_status === "pending" &&
       freshSpec.shaping_status !== "pending";
-    if (freshSpec.state !== specRef.current.state || shapingDone) {
+    if (freshSpec.state !== specRef.current.state || freshSpec.initiative_type !== specRef.current.initiative_type || shapingDone) {
       router.refresh();
     }
   }, [freshSpec, router]);

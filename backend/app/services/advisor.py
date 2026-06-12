@@ -662,6 +662,9 @@ async def synthesize_project(
         except Exception:
             return None
 
+    def _latest_at(obs: list) -> object:
+        return max((o.created_at for o in obs), default=None)
+
     # Only generate at milestones (every 3 completed initiatives).
     if completed_count % 3 != 0:
         observations = await store.list_observations(project_id)
@@ -669,6 +672,7 @@ async def synthesize_project(
             observations=observations,
             what_we_know=await _persisted_what_we_know(),
             completed_count=completed_count,
+            synthesized_at=_latest_at(observations),
         )
 
     # BD-24: the most recently completed initiative (highest seq) is the milestone anchor.
@@ -683,6 +687,7 @@ async def synthesize_project(
             observations=observations,
             what_we_know=await _persisted_what_we_know(),
             completed_count=completed_count,
+            synthesized_at=_latest_at(observations),
         )
 
     project = await store.get_project_context(project_id, sibling_limit=50)
@@ -729,4 +734,5 @@ async def synthesize_project(
         observations=observations,
         what_we_know=what_we_know,
         completed_count=completed_count,
+        synthesized_at=_latest_at(observations),
     )

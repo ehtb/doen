@@ -5,23 +5,9 @@ import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { BookOpen, Bot, Brain, Check, GitBranch, Loader2, Sparkles, Tag, Trash2, User, X } from "lucide-react";
 
-import type { AcceptanceCriterion, Decision, Heuristic, HeuristicDraftResult, HeuristicProposal, LearnReview, LearningItem, OutcomeDraft, RationaleClaim } from "@/lib/types";
+import type { Decision, Heuristic, HeuristicDraftResult, HeuristicProposal, LearnReview, LearningItem, OutcomeDraft, RationaleClaim } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-
-// Pre-populate the outcome as a draft the human corrects (discretion: correction over
-// authoring). Seeded from the intent + acceptance criteria — the human edits it into
-// what actually happened.
-function buildDraft(intent: string, acceptance: AcceptanceCriterion[]): string {
-  const goals = acceptance.map((a) => `- ${a.text}`).join("\n");
-  return [
-    "What we set out to do:",
-    intent.trim(),
-    "",
-    "What actually happened (edit — outcome against each criterion):",
-    goals,
-  ].join("\n");
-}
 
 // BD-13: source type badge for rationale claims.
 function SourceBadge({ sourceType, sourceId }: { sourceType: string; sourceId: string }) {
@@ -387,14 +373,16 @@ function NeedsReviewLearnings({
 export default function LearnStage({
   initiativeId,
   intent,
-  acceptance,
+  initiativeType,
 }: {
   initiativeId: string;
   intent: string;
-  acceptance: AcceptanceCriterion[];
+  initiativeType: "engineering" | "research";
 }) {
+  const isResearch = initiativeType === "research";
   const [error, setError] = useState<string | null>(null);
-  const [summary, setSummary] = useState(() => buildDraft(intent, acceptance));
+  const [summary, setSummary] = useState("");
+  const [conclusion, setConclusion] = useState("");
   const [busy, setBusy] = useState(false);
   const [drafting, setDrafting] = useState(false);
   // BD-13: rationale claims from the AI draft — human must confirm/remove before submit.
@@ -440,6 +428,7 @@ export default function LearnStage({
       if (!res.ok) throw new Error(`couldn't draft the outcome (${res.status})`);
       const draft: OutcomeDraft = await res.json();
       setSummary(draft.summary ?? "");
+      if (draft.conclusion) setConclusion(draft.conclusion);
       // BD-25: populate structured learnings — auto-approved shown passively, needs-review as checklist.
       setAutoApprovedLearnings(draft.auto_approved_learnings ?? []);
       const reviewItems = draft.needs_review_learnings ?? [];
@@ -456,7 +445,7 @@ export default function LearnStage({
   }
 
   async function submit() {
-    if (busy || !summary.trim()) return;
+    if (busy) return;
     setBusy(true);
     try {
       // BD-25: build human-approved learnings from the checked needs-review items.
@@ -468,6 +457,7 @@ export default function LearnStage({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           summary,
+          conclusion: conclusion.trim() || undefined,
           auto_approved_learnings: autoApprovedLearnings.map((item) => item.text),
           human_approved_learnings: humanApproved,
           rationale_claims: rationaleClaims,
@@ -476,8 +466,9 @@ export default function LearnStage({
       if (!res.ok) throw new Error(`couldn't save the outcome (${res.status})`);
       await refreshReview(await res.json(), { revalidate: false });
       // close the form so the captured memory above reads as the resting state, and clear the
-      // field so a stray re-open isn't pre-populated with the prior reflection.
+      // fields so a stray re-open isn't pre-populated with the prior reflection.
       setSummary("");
+      setConclusion("");
       setRationaleClaims([]);
       setAutoApprovedLearnings([]);
       setNeedsReviewLearnings([]);
@@ -495,83 +486,107 @@ export default function LearnStage({
 
   const decisions = review?.decisions ?? [];
   const memory = review?.memory ?? [];
-  const humanDecisions = decisions.filter((d) => d.resolver_type !== "agent");
-  const agentDecisions = decisions.filter((d) => d.resolver_type === "agent");
 
   return (
-    <section id="learn" className="mt-10 animate-rise scroll-mt-6 border-t border-border pt-7 [animation-delay:360ms]">
+    <section id="learn" className="mt-12 animate-rise scroll-mt-6 border-t border-border pt-8 [animation-delay:360ms]">
+
+      {/* Section header */}
       <h2 className="flex items-center gap-2 font-mono text-[11.5px] font-semibold tracking-[0.13em] text-ink-soft uppercase">
-        <BookOpen className="size-3.5" /> Learn
+        <BookOpen className="size-3.5" />
+        {isResearch ? "Reflect" : "Learn"}
         <span className="font-normal tracking-normal text-ink-faint normal-case">
-          · what happened vs. what was intended — then remember it
+          · {isResearch
+            ? "what the investigation found and concluded"
+            : "what happened vs. what was intended — then remember it"}
         </span>
       </h2>
 
       {error && (
-        <p className="mt-3 rounded-md border border-proposed/30 bg-proposed/10 px-3 py-1.5 font-mono text-xs text-proposed-foreground">
+        <p className="mt-4 rounded-md border border-proposed/30 bg-proposed/10 px-3 py-1.5 font-mono text-xs text-proposed-foreground">
           {error}
         </p>
       )}
 
-      {/* --- the review (a4): intent, the calls made, and how each unit landed --- */}
-      <div className="mt-4 rounded-lg border border-border bg-card/50 p-4">
-        <p className="font-mono text-[10px] tracking-widest text-ink-faint uppercase">Intent</p>
-        <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{intent}</p>
+      {/* Context — intent + decisions, open layout (no cramped card) */}
+      <div className="mt-6 space-y-6">
+        <div>
+          <p className="mb-1.5 font-mono text-[10px] tracking-widest text-ink-faint uppercase">
+            {isResearch ? "Research question" : "Intent"}
+          </p>
+          <p className="text-[14px] leading-relaxed text-foreground">{intent}</p>
+        </div>
 
-        {/* BD-13: decisions split into human-resolved and agent-resolved groups */}
-        <p className="mt-4 font-mono text-[10px] tracking-widest text-ink-faint uppercase">
-          Decisions made
-        </p>
-        {decisions.length === 0 ? (
-          <p className="mt-1 text-[13px] text-ink-faint">No decisions were escalated.</p>
-        ) : (
-          <ul className="mt-1.5 space-y-3">
-            {humanDecisions.map((d) => (
-              <DecisionRow key={d.id} d={d} />
-            ))}
-            {agentDecisions.length > 0 && (
-              <>
-                {humanDecisions.length > 0 && (
-                  <li className="border-t border-border/50 pt-2">
-                    <span className="flex items-center gap-1.5 font-mono text-[10px] tracking-widest text-ink-faint uppercase">
-                      <Bot className="size-3" /> auto-resolved by discretion auditor ({agentDecisions.length})
-                    </span>
-                  </li>
-                )}
-                {agentDecisions.map((d) => (
-                  <DecisionRow key={d.id} d={d} />
-                ))}
-              </>
-            )}
-          </ul>
+        {/* Decisions */}
+        {(review?.decisions.length ?? 0) > 0 && (
+          <div>
+            <p className="mb-2 font-mono text-[10px] tracking-widest text-ink-faint uppercase">
+              Decisions made
+            </p>
+            {(() => {
+              const humanDec = (review?.decisions ?? []).filter(d => d.resolver_type !== "agent");
+              const agentDec = (review?.decisions ?? []).filter(d => d.resolver_type === "agent");
+              return (
+                <ul className="space-y-3">
+                  {humanDec.map(d => <DecisionRow key={d.id} d={d} />)}
+                  {agentDec.length > 0 && (
+                    <>
+                      {humanDec.length > 0 && (
+                        <li className="border-t border-border/50 pt-2">
+                          <span className="flex items-center gap-1.5 font-mono text-[10px] tracking-widest text-ink-faint uppercase">
+                            <Bot className="size-3" /> auto-resolved by discretion auditor ({agentDec.length})
+                          </span>
+                        </li>
+                      )}
+                      {agentDec.map(d => <DecisionRow key={d.id} d={d} />)}
+                    </>
+                  )}
+                </ul>
+              );
+            })()}
+          </div>
         )}
-
+        {(review !== undefined) && (review?.decisions.length === 0) && (
+          <p className="text-[13px] text-ink-faint">No decisions were escalated.</p>
+        )}
       </div>
 
-      {/* --- captured memory (after submit / on revisit) --- */}
+      {/* Captured memory */}
       {memory.length > 0 && (
-        <div className="mt-4 space-y-2">
+        <div className="mt-8 space-y-3">
           {memory.map((m) => (
-            <div
-              key={m.id}
-              className="rounded-md border border-l-[3px] border-l-confirmed bg-card/60 px-4 py-3"
-            >
+            <div key={m.id} className="rounded-xl border border-l-[3px] border-l-confirmed bg-card/60 px-5 py-4">
               <p className="flex items-center gap-1.5 font-mono text-[10px] tracking-widest text-confirmed-foreground uppercase">
                 <Check className="size-3" /> remembered
               </p>
-              <p className="mt-1.5 text-[13px] leading-relaxed whitespace-pre-wrap">{m.summary}</p>
+
+              {/* Research: show conclusion prominently if present */}
+              {isResearch && (m.outcome as any)?.conclusion && (
+                <div className="mt-3">
+                  <p className="mb-1 font-mono text-[10px] tracking-widest text-ink-faint uppercase">Conclusion</p>
+                  <p className="text-[14px] leading-relaxed text-foreground whitespace-pre-wrap">
+                    {(m.outcome as any).conclusion}
+                  </p>
+                </div>
+              )}
+
+              <div className={isResearch && (m.outcome as any)?.conclusion ? "mt-4" : "mt-2"}>
+                {isResearch && (m.outcome as any)?.conclusion && (
+                  <p className="mb-1 font-mono text-[10px] tracking-widest text-ink-faint uppercase">Retrospective</p>
+                )}
+                <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-foreground">{m.summary}</p>
+              </div>
+
+              {/* Learnings */}
               {m.learnings && !(m.outcome as any)?.learning_approvals && (
-                <p className="mt-2 text-[12.5px] leading-relaxed text-ink-soft">
-                  <span className="font-mono text-[10px] tracking-wide text-ink-faint uppercase">
-                    learnings ·{" "}
-                  </span>
+                <p className="mt-3 text-[12.5px] leading-relaxed text-ink-soft">
+                  <span className="font-mono text-[10px] tracking-wide text-ink-faint uppercase">learnings · </span>
                   {m.learnings}
                 </p>
               )}
               {(m.outcome as any)?.learning_approvals && (
-                <div className="mt-2">
-                  <p className="font-mono text-[10px] tracking-wide text-ink-faint uppercase">learnings</p>
-                  <ul className="mt-1 space-y-1">
+                <div className="mt-3">
+                  <p className="font-mono text-[10px] tracking-wide text-ink-faint uppercase">Learnings</p>
+                  <ul className="mt-1.5 space-y-1.5">
                     {((m.outcome as any).learning_approvals as Array<{ text: string; approved_by: string }>).map((la, i) => (
                       <li key={i} className="flex items-start gap-2 text-[12.5px]">
                         <span className="mt-0.5 font-mono text-ink-faint shrink-0">–</span>
@@ -595,55 +610,91 @@ export default function LearnStage({
         </div>
       )}
 
-      {/* --- the outcome form (a5) --- shown when actively writing; once captured the form
-          closes and "Add another reflection" reopens it with blank fields. */}
+      {/* Active form */}
       {showForm ? (
-        <div className="mt-4 rounded-lg border border-border bg-background/60 p-4">
+        <div className="mt-8">
           <div className="flex items-center justify-between gap-3">
-            <p className="font-mono text-[10px] tracking-widest text-ink-faint uppercase">
-              {memory.length > 0 ? "Add another reflection" : "Outcome summary"}
+            <p className="font-mono text-[11px] font-semibold tracking-[0.13em] text-ink-soft uppercase">
+              {memory.length > 0
+                ? "Add another reflection"
+                : isResearch ? "Conclusion & retrospective" : "Outcome summary"}
             </p>
             <Button
               size="sm"
               variant="outline"
               disabled={drafting || busy}
               onClick={draftWithAI}
-              className="h-7 px-2.5 font-mono text-[11px] tracking-wide"
+              className="h-7 px-3 font-mono text-[11px] tracking-wide shrink-0"
             >
-              {drafting ? <Loader2 className="animate-spin" /> : <Sparkles />} Draft with AI
+              {drafting ? <Loader2 className="animate-spin" /> : <Sparkles />}
+              {drafting ? "Drafting…" : "Draft with AI"}
             </Button>
           </div>
-          <Textarea
-            rows={7}
-            value={summary}
-            onChange={(e) => setSummary(e.target.value)}
-            placeholder={
-              memory.length > 0
-                ? "A reflection — what surprised you, what you'd carry forward, what you'd do differently."
-                : "What did this initiative actually produce, against its intent?"
-            }
-            className="mt-2 bg-card text-[13px]"
-          />
 
-          {/* BD-25: auto-approved learnings — passive summary */}
+          {/* Research: conclusion field (the primary artifact) */}
+          {isResearch && (
+            <div className="mt-4">
+              <p className="mb-1.5 font-mono text-[10px] tracking-widest text-ink-faint uppercase">
+                Conclusion
+                <span className="ml-1.5 normal-case font-normal tracking-normal">
+                  — direct answer to the research question
+                </span>
+              </p>
+              <Textarea
+                rows={5}
+                value={conclusion}
+                onChange={(e) => setConclusion(e.target.value)}
+                placeholder="What did this investigation conclude? Answer the original question directly."
+                className="bg-card text-[13.5px] leading-relaxed"
+              />
+            </div>
+          )}
+
+          {/* Retrospective / outcome summary */}
+          <div className="mt-4">
+            {isResearch && (
+              <p className="mb-1.5 font-mono text-[10px] tracking-widest text-ink-faint uppercase">
+                Retrospective
+                <span className="ml-1.5 normal-case font-normal tracking-normal">
+                  — how the investigation went
+                </span>
+              </p>
+            )}
+            <Textarea
+              rows={isResearch ? 4 : 7}
+              value={summary}
+              onChange={(e) => setSummary(e.target.value)}
+              placeholder={
+                memory.length > 0
+                  ? "A reflection — what surprised you, what you'd carry forward, what you'd do differently."
+                  : isResearch
+                  ? "How the investigation went — methodology, what you tried, what surprised you."
+                  : "What did this initiative actually produce, against its intent?"
+              }
+              className="bg-card text-[13px]"
+            />
+          </div>
+
+          {/* Structured learnings */}
           <AutoApprovedLearnings items={autoApprovedLearnings} />
-          {/* BD-25: needs-review learnings — human checklist */}
           <NeedsReviewLearnings
             items={needsReviewLearnings}
             approved={approvedReviewIndices}
             onChange={setApprovedReviewIndices}
           />
 
-          {/* BD-13: rationale claims — only shown after AI draft, human must confirm */}
+          {/* Rationale claims */}
           <RationaleClaims claims={rationaleClaims} onChange={setRationaleClaims} />
 
-          <div className="mt-3 flex items-center gap-3">
+          {/* Submit */}
+          <div className="mt-5 flex items-center gap-3">
             <Button
-              disabled={busy || !summary.trim()}
+              disabled={busy || (!summary.trim() && (!isResearch || !conclusion.trim()))}
               onClick={submit}
               className="bg-confirmed text-white shadow-sm hover:bg-confirmed/90"
             >
-              <Sparkles /> {memory.length > 0 ? "Capture & embed" : "Complete & remember"}
+              <Sparkles />
+              {memory.length > 0 ? "Capture & embed" : isResearch ? "Complete & remember" : "Complete & remember"}
             </Button>
             {memory.length > 0 && (
               <Button
@@ -651,6 +702,7 @@ export default function LearnStage({
                 disabled={busy}
                 onClick={() => {
                   setSummary("");
+                  setConclusion("");
                   setRationaleClaims([]);
                   setAutoApprovedLearnings([]);
                   setNeedsReviewLearnings([]);
@@ -667,7 +719,7 @@ export default function LearnStage({
           </div>
         </div>
       ) : memory.length > 0 ? (
-        <div className="mt-4 flex items-center gap-3 rounded-lg border border-confirmed/30 bg-confirmed/5 px-4 py-3">
+        <div className="mt-6 flex items-center gap-3 rounded-xl border border-confirmed/30 bg-confirmed/5 px-4 py-3.5">
           <Sparkles className="size-4 shrink-0 text-confirmed-foreground" />
           <p className="text-[13px] text-foreground">
             {memory.length === 1 ? "Learning captured." : `${memory.length} reflections captured.`}{" "}
@@ -681,6 +733,7 @@ export default function LearnStage({
             className="ml-auto h-8 px-3"
             onClick={() => {
               setSummary("");
+              setConclusion("");
               setRationaleClaims([]);
               setAutoApprovedLearnings([]);
               setNeedsReviewLearnings([]);
@@ -693,7 +746,7 @@ export default function LearnStage({
         </div>
       ) : null}
 
-      {/* BD-17: heuristic extraction panel — shown after outcome is captured. */}
+      {/* Heuristic extraction */}
       {showHeuristicPanel && !showForm && memory.length > 0 && (
         <HeuristicConfirmation
           initiativeId={initiativeId}
@@ -704,21 +757,18 @@ export default function LearnStage({
         />
       )}
 
-      {/* BD-17: show confirmed heuristics (visually distinct from narrative memory). */}
+      {/* Confirmed heuristics */}
       {sessionHeuristics.length > 0 && (
-        <div className="mt-4 space-y-2">
+        <div className="mt-5 space-y-2">
           {sessionHeuristics.map((h) => (
             <HeuristicEntry key={h.id} h={h} />
           ))}
         </div>
       )}
 
-      {/* Escape hatch: complete without learnings. Friction by design — not the primary CTA.
-          The warning text is required by spec constraint: "Skipping reflection — nothing will
-          be written to memory for this initiative." */}
-      {memory.length === 0 && (
-        <SkipReflection initiativeId={initiativeId} />
-      )}
+      {/* Skip */}
+      {memory.length === 0 && <SkipReflection initiativeId={initiativeId} />}
+
     </section>
   );
 }

@@ -107,11 +107,11 @@ export function InitiativeCard({
             {/* BD-15: warm type tags matching prototype palette */}
             {isResearch ? (
               <span className="rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-widest uppercase bg-confirmed/15 text-confirmed-foreground">
-                ◉ RES
+                ◉ Research
               </span>
             ) : (
               <span className="rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-widest uppercase bg-primary/10 text-accent-deep">
-                ⚙ ENG
+                ⚙ Engineering
               </span>
             )}
           </div>
